@@ -17,7 +17,7 @@ docker run -itd \
   --network=host \
   --pid=host \
   --privileged \
-  --name flx_workspace \
+  --name flux_workspace \
   flux:cu129 \
   /bin/bash
 ```
@@ -46,7 +46,7 @@ pip install -e flux-kernel/python/ --no-build-isolation
 Install the flux-scheduler package:
 
 ```bash
-pip install -e tflux-scheduler/python/
+pip install -e flux-scheduler/python/
 ```
 
 ## Launch
@@ -58,6 +58,5 @@ torchrun --nproc-per-node 1 -m fluxserve.cli serve \
   --port 8000 \
   --tp-size 1 \
   --ep-size 4 \
-  --dp-size 1 \
-  --pp-size 1
+  --dp-size 1
 ```

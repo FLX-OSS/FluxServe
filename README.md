@@ -13,32 +13,24 @@ Its core features include:
 ## TO-DO-LISTS
 
 - [ ] Add Batched Inference Results
-  - [ ] Switch Results to H200
   - [ ] Add Diffuflex Baseline
 - [ ] Flux-Engine
   - [ ] Remove Torchrun Dependency
 - [ ] Flux-Scheduler
   - [ ] Add Block-level Scheduling Support
   - [ ] Prefix Cache
-  - [ ] Add Goodput results
+  - [ ] Add Goodput/Throughput results
 - [ ] Final Code Reorg
-
-## Supported Models
-- [LLaDA2.0-mini](https://huggingface.co/inclusionAI/LLaDA2.0-mini)
-- [LLaDA2.0-flash](https://huggingface.co/inclusionAI/LLaDA2.0-flash)
 
 ## [Getting Started](docs/getting_started.md)
 
 ## Performance Results
 
-### Batched Inference (Placeholder)
+### Batched Inference 
 <table align="center">
   <tr>
     <td>
-      <img src="./assets/figures/offline-1.png" style="width: 460px; object-fit: contain;" />
-    </td>
-    <td>
-      <img src="./assets/figures/offline-4.png" style="width: 460px; object-fit: contain;" />
+      <img src="./assets/figures/motivation.png" style="width: 600px; object-fit: contain;" />
     </td>
   </tr>
 </table>
