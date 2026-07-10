@@ -46,7 +46,7 @@ pip install -e flux-kernel/python/ --no-build-isolation
 Install the flux-scheduler package:
 
 ```bash
-pip install -e flux-scheduler/python/
+pip install -e flux-scheduler
 ```
 
 ## Launch
