@@ -1,0 +1,47 @@
+## Functions
+
+### Model Support
+- [x] LLaDA2.0
+  - [x] [LLaDA2.0-mini](https://huggingface.co/inclusionAI/LLaDA2.0-mini)
+  - [x] [LLaDA2.0-flash](https://huggingface.co/inclusionAI/LLaDA2.0-flash)
+  - [ ] [LLaDA2.0-flash-fp8](https://huggingface.co/thnkinbtfly/llada2.0-flash-fp8): Full FP8 Support
+
+### Engine Support
+- [ ] Kernel
+    - [ ] Attention
+        - [ ] Torch-SDPA
+        - [ ] Torch-Flex
+        - [ ] Flashinfer-Ragged
+        - [ ] Flashinfer-Paged
+    - [ ] MoE Fused Kernels
+        - [ ] SGL-Kernel
+    - [ ] Flux-Kernels
+        - [ ] RMSNorm
+- [ ] Distributed Execution
+    - [ ] TP + EP (TP=EP)
+    - [ ] DP + EP (DP=EP)
+- [ ] Flux-Scheduler
+    - [ ] FlashInfer + Paged KV
+
+### Benchmark Support
+- [ ] Offline Benchmark
+- [ ] Online Benchmark
+
+### Env Support
+- [ ] Dockerfile build
+- [ ] UV build
+
+### Debugging Support
+- [ ] CI/CD
+
+
+## Performance Results
+- [ ] Offline Benchmark
+- [ ] Online Benchmark
+
+## Documentation
+- [ ] Getting Started
+- [ ] Env Setup
+- [ ] Benchmark Guide
+- [ ] Bug Report
+- [ ] Contribution Guide
