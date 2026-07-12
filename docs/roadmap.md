@@ -3,8 +3,8 @@
   - [x] [LLaDA2.0-mini](https://huggingface.co/inclusionAI/LLaDA2.0-mini)
   - [x] [LLaDA2.0-flash](https://huggingface.co/inclusionAI/LLaDA2.0-flash)
   - [x] [LLaDA2.0-flash-fp8](https://huggingface.co/thnkinbtfly/llada2.0-flash-fp8)
-  - [ ] [LLaDA2.0-mini](https://huggingface.co/inclusionAI/LLaDA2.0-mini-CAP)
-  - [ ] [LLaDA2.0-flash](https://huggingface.co/inclusionAI/LLaDA2.0-flash-CAP)
+  - [ ] [LLaDA2.0-mini-CAP](https://huggingface.co/inclusionAI/LLaDA2.0-mini-CAP)
+  - [ ] [LLaDA2.0-flash-CAP](https://huggingface.co/inclusionAI/LLaDA2.0-flash-CAP)
 - [ ] LLaDA2.1
   - [ ] [LLaDA2.1-mini](https://huggingface.co/inclusionAI/LLaDA2.1-mini)
   - [ ] [LLaDA2.1-flash](https://huggingface.co/inclusionAI/LLaDA2.1-flash)
@@ -12,7 +12,7 @@
 
 
 ### Engine Support
-- [ ] Observalibility
+- [ ] Observability
 - [ ] Distributed Serving
   - [ ] Pipeline Parallelism
 - [ ] PD Disaggregation
