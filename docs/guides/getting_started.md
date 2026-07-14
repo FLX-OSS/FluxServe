@@ -2,7 +2,7 @@
 
 ### Prerequisites
 
-- NVIDIA GPU host
+- NVIDIA GPUs
 - Docker with GPU support
 
 ### Run Local Docker Environment
@@ -29,15 +29,13 @@ git clone https://github.com/FLX-OSS/FluxServe
 cd FluxServe
 ```
 
-## Install Packages
-
 Install the Python runtime:
 
 ```bash
 pip install -e .
 ```
 
-Install the flux-kernel package.
+Install the flux-kernel package:
 
 ```bash
 pip install -e flux-kernel/python/ --no-build-isolation
@@ -49,14 +47,14 @@ Install the flux-scheduler package:
 pip install -e flux-scheduler
 ```
 
-## Launch
+Launch FluxServe engine:
 
 ```bash
-torchrun --nproc-per-node 1 -m fluxserve.cli serve \
+python -m fluxserve.cli serve \
   --model inclusionAI/LLaDA2.0-mini \
   --host 0.0.0.0 \
   --port 8000 \
   --tp-size 1 \
-  --ep-size 4 \
+  --ep-size 1 \
   --dp-size 1
 ```

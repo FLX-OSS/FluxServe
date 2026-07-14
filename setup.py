@@ -55,7 +55,7 @@ setup(
     name='fluxserve',
     version=VERSION,
     python_requires='>=3.6',
-    description='A Lightweight Inference Serving Library for dLLM-MoE',
+    description='A High-Performance Inference Serving Library for Diffusion Language Model',
     long_description_content_type='text/markdown',
     license='MIT License',
 

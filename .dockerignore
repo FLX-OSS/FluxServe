@@ -1,0 +1,11 @@
+# Skip pre-compiled kernel .so/.o files so they are rebuilt inside the container
+**/*.so
+**/*.o
+
+# Common development artifacts
+**/__pycache__
+*.pyc
+.git
+*.nsys-rep
+*.sqlite
+*.egg-info

@@ -14,7 +14,7 @@
         - [ ] Flashinfer-Ragged
         - [ ] Flashinfer-Paged
     - [ ] MoE Fused Kernels
-        - [ ] SGL-Kernel
+        - [ ] sgl-kernel
     - [ ] Flux-Kernels
         - [ ] RMSNorm
 - [ ] Distributed Execution
@@ -24,8 +24,9 @@
     - [ ] FlashInfer + Paged KV
 
 ### Benchmark Support
-- [ ] Offline Benchmark
-- [ ] Online Benchmark
+- [ ] Offline Benchmark Scripts
+- [ ] Online Benchmark Scripts
+
 
 ### Env Support
 - [ ] Dockerfile build

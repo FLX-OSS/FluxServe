@@ -10,19 +10,21 @@ Its core features include:
 - **Block Mix Attention**: Provides efficient attention runtime with a hybrid attention mechanism for different workloads, including *varlen prefill*, *varlen deocde*, and *varlen prefill/decode mix*.
 - **Dynamic Scheduler**: Provides scheduler with efficient C++ control plane and Python execution plane with fine-grained block-level request management suitable for block diffusion models.
 
-## TO-DO-LISTS
+<!-- ## TO-DO-LISTS
 
 - [ ] Add Batched Inference Results
   - [ ] Add Diffuflex Baseline
 - [ ] Flux-Engine
-  - [ ] Remove Torchrun Dependency
 - [ ] Flux-Scheduler
   - [ ] Add Block-level Scheduling Support
   - [ ] Prefix Cache
   - [ ] Add Goodput/Throughput results
-- [ ] Final Code Reorg
+- [ ] Final Code Reorg -->
 
 ## [Getting Started](docs/getting_started.md)
+
+
+## [Development Roadmap](docs/roadmap.md)
 
 ## Performance Results
 
@@ -30,7 +32,7 @@ Its core features include:
 <table align="center">
   <tr>
     <td>
-      <img src="./assets/figures/motivation.png" style="width: 600px; object-fit: contain;" />
+      <img src="./assets/figures/fig1.png" style="width: 600px; object-fit: contain;" />
     </td>
   </tr>
 </table>
