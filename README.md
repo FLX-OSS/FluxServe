@@ -21,7 +21,7 @@ Its core features include:
   - [ ] Add Goodput/Throughput results
 - [ ] Final Code Reorg -->
 
-## [Getting Started](docs/getting_started.md)
+## [Getting Started](docs/guides/getting_started.md)
 
 
 ## [Development Roadmap](docs/roadmap.md)
