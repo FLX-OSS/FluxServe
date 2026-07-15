@@ -33,4 +33,4 @@ Detailed benchmark guides can be found [here](docs/guides/benchmark.md).
 ### Online Serving
 
 ## Acknowledgments
-We learned the system design and reused code from the following projects: [SGLang](https://github.com/sgl-project/sglang), [TokenSpeed](https://github.com/lightseekorg/tokenspeed), and [dInfer](https://github.com/inclusionAI/dInfer).
+We learned the system design and reused code from the following projects: [vllm](https://github.com/vllm-project/vllm), [SGLang](https://github.com/sgl-project/sglang), [TokenSpeed](https://github.com/lightseekorg/tokenspeed), and [dInfer](https://github.com/inclusionAI/dInfer).

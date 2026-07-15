@@ -41,8 +41,8 @@
 - [ ] Online Benchmark
 
 ## Documentation
-- [ ] Getting Started
-- [ ] Env Setup
-- [ ] Benchmark Guide
+- [x] Getting Started
+- [x] Env Setup (Docker)
+- [x] Benchmark Guide
 - [ ] Bug Report
 - [ ] Contribution Guide
