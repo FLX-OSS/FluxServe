@@ -20,7 +20,7 @@ Its core features include:
 ## [Development Roadmap](docs/roadmap.md)
 
 ## Performance Results
-Detailed benchmark guides can be found [here](docs/guides/benchmark.md.md).
+Detailed benchmark guides can be found [here](docs/guides/benchmark.md).
 ### Batched Inference 
 <table align="center">
   <tr>
