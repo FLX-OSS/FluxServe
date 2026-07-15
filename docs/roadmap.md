@@ -9,7 +9,7 @@
 - [ ] [DiffusionGemma](https://huggingface.co/google/diffusiongemma-26B-A4B-it)
 
 
-### GPU Support
+### Hardware Support
 - [ ] AMD GPU
 
 ### Engine Support
@@ -21,6 +21,7 @@
   - [ ] Prefix Cache
 - [ ] MoE Optimization
   - [ ] DeepEP
+  - [ ] EPLB
 - [ ] Model Gateway
   - [ ] GRPC
 

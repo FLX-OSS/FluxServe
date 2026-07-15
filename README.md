@@ -1,25 +1,16 @@
 <p align="center">
-  <img src="./assets/logo.png" alt="FluxServe" style="width: 720px; object-fit: contain;" />
+  <img src="./assets/logo.png" alt="FluxServe" style="width: 480px; object-fit: contain;" />
 </p>
 
 ## About
 **FluxServe** is a lighweight and high-performance serving engine for diffusion langauge models. 
 It is designed and implemented to deliver low-latency and high-throughput inference for AR diffusion models across different setups, ranging from single GPU batched inference to multi-GPU distributed serving.
+
 Its core features include:
 
-- **Block Mix Attention**: Provides efficient attention runtime with a hybrid attention mechanism for different workloads, including *varlen prefill*, *varlen deocde*, and *varlen prefill/decode mix*.
+- **Block Causal Attention**: Provides efficient attention runtime with a block-casual attention mechanism suitable for block-diffusion LLMs in real-world workloads, including *varlen prefill* and *varlen deocde*.
 - **Dynamic Scheduler**: Provides scheduler with efficient C++ control plane and Python execution plane with fine-grained block-level request management suitable for block diffusion models.
 
-<!-- ## TO-DO-LISTS
-
-- [ ] Add Batched Inference Results
-  - [ ] Add Diffuflex Baseline
-- [ ] Flux-Engine
-- [ ] Flux-Scheduler
-  - [ ] Add Block-level Scheduling Support
-  - [ ] Prefix Cache
-  - [ ] Add Goodput/Throughput results
-- [ ] Final Code Reorg -->
 
 ## [Getting Started](docs/guides/getting_started.md)
 
