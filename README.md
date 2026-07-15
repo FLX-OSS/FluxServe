@@ -2,6 +2,8 @@
   <img src="./assets/logo.png" alt="FluxServe" style="width: 640px; object-fit: contain;" />
 </p>
 
+--------------------------------------------------------------------------------
+
 ## About
 **FluxServe** is a lighweight and high-performance serving engine for diffusion langauge models. 
 It is designed and implemented to deliver low-latency and high-throughput inference for AR diffusion models across different setups, ranging from single GPU batched inference to multi-GPU distributed serving.
