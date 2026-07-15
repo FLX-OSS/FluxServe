@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/logo.png" alt="FluxServe" style="width: 480px; object-fit: contain;" />
+  <img src="./assets/logo.png" alt="FluxServe" style="width: 640px; object-fit: contain;" />
 </p>
 
 ## About
@@ -18,7 +18,7 @@ Its core features include:
 ## [Development Roadmap](docs/roadmap.md)
 
 ## Performance Results
-
+Detailed benchmark guides can be found [here](docs/guides/benchmark.md.md).
 ### Batched Inference 
 <table align="center">
   <tr>
