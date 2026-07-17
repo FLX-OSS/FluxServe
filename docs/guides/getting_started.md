@@ -5,7 +5,7 @@
 - NVIDIA GPUs
 - Docker with GPU support
 
-### Run Docker Environment
+### Run Docker Environment (Recommended)
 
 ```bash
 docker build -f docker/Dockerfile.flux-cu129 -t flux:cu129

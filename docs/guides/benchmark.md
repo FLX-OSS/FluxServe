@@ -52,6 +52,5 @@ python -m fluxserve.cli serve \
   --scheduler-policy paged \
   --request-rate 4 \
   --max-concurrency 32 \
-  --metric-percentiles 50,90,99 \
-  --percentile-metrics ttft,tpot,itl,e2el
+  --metric-percentiles 50,90,99
 ```
