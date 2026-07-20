@@ -3,17 +3,13 @@ FluxServe supports offline thorughput benchamrk with json-style input files.
 ```bash
 python -m fluxserve.cli bench_offline \
   --model inclusionAI/LLaDA2.0-mini \
-  --dataset ./data/sample.jsonl \
+  --dataset ./data/humaneval.jsonl \
   --tp-size 1 \
   --dp-size 1 \
   --ep-size 1 \
   --batch-size 4 \
   --gen-len 512 \
-  --block-length 64 \
-  --threshold 0.95 \
-  --parallel-decoding threshold \
-  --attention-backend flashinfer \
-  --kv-cache-layout paged
+  --block-length 64
 ```
 
 ## Online Benchmark
@@ -49,11 +45,10 @@ python -m fluxserve.cli serve \
   --model inclusionAI/LLaDA2.0-mini \
   --dataset ./data/humaneval.jsonl \
   --dataset-output-len 512 \
-  --scheduler-policy paged \
-  --request-rate 4 \
+  --request-rate 1 \
   --max-concurrency 32 \
   --metric-percentiles 50,90,99 \
-  --metrics E2E,QUEUE,EXECUTION,HTTP_OVERHEAD
+  --metrics E2E
 ```
 
 `E2E` is always required and is the only metric reported by default. Add

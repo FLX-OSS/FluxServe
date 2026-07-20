@@ -7,7 +7,7 @@
   - [ ] [LLaDA2.0-flash-fp8](https://huggingface.co/thnkinbtfly/llada2.0-flash-fp8): Full FP8 Support
 
 ### Engine Support
-- [ ] Kernel
+- [x] Kernel
     - [ ] Attention
         - [ ] Torch-SDPA
         - [ ] Torch-Flex
@@ -15,17 +15,17 @@
         - [ ] Flashinfer-Paged
     - [ ] MoE Fused Kernels
         - [ ] sgl-kernel
-    - [ ] Flux-Kernels
-        - [ ] RMSNorm
+    - [x] Flux-Kernels
+        - [x] RMSNorm
 - [ ] Distributed Execution
-    - [ ] TP + EP (TP=EP)
+    - [x] TP + EP (TP=EP)
     - [ ] DP + EP (DP=EP)
-- [ ] Flux-Scheduler
-    - [ ] FlashInfer + Paged KV
+- [x] Flux-Scheduler
+    - [x] FlashInfer + Paged KV
 
 ### Benchmark Support
-- [ ] Offline Benchmark Scripts
-- [ ] Online Benchmark Scripts
+- [x] Offline Benchmark Scripts
+- [x] Online Benchmark Scripts
 
 
 ### Env Support
