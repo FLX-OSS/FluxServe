@@ -41,6 +41,13 @@ from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 
 DEFAULT_TIMEOUT_SEC = 60 * 60
+SUPPORTED_METRICS = ("E2E", "QUEUE", "EXECUTION", "HTTP_OVERHEAD")
+METRIC_RESULT_NAMES = {
+    "E2E": "e2e",
+    "QUEUE": "queue",
+    "EXECUTION": "execution",
+    "HTTP_OVERHEAD": "http_overhead",
+}
 
 
 @dataclass
@@ -105,6 +112,21 @@ def _percentile(values: list[float], percentile: float) -> float:
     if not values:
         return 0.0
     return float(np.percentile(values, percentile))
+
+
+def _parse_metrics(value: str) -> tuple[str, ...]:
+    requested = {item.strip().upper() for item in value.split(",") if item.strip()}
+    if not requested:
+        raise argparse.ArgumentTypeError("--metrics must contain at least E2E.")
+    unknown = requested.difference(SUPPORTED_METRICS)
+    if unknown:
+        supported = ", ".join(SUPPORTED_METRICS)
+        raise argparse.ArgumentTypeError(
+            f"Unknown metric(s): {', '.join(sorted(unknown))}. Supported metrics: {supported}."
+        )
+    if "E2E" not in requested:
+        raise argparse.ArgumentTypeError("--metrics must include E2E.")
+    return tuple(metric for metric in SUPPORTED_METRICS if metric in requested)
 
 
 def _create_benchmark_connector(max_concurrency: int | None = None) -> aiohttp.TCPConnector:
@@ -417,6 +439,7 @@ def summarize(
     outputs: list[RequestOutput],
     duration_s: float,
     percentiles: list[float],
+    metrics: tuple[str, ...] = ("E2E",),
 ) -> dict[str, Any]:
     successes = [output for output in outputs if output.success]
     failed = [output for output in outputs if not output.success]
@@ -434,10 +457,14 @@ def summarize(
     ]
     total_input = sum(input_tokens)
     total_output = sum(completion_tokens)
-    latency_values = {
+    all_latency_values = {
+        "e2e": [output.e2e_latency * 1000 for output in successes],
         "queue": [output.queue_latency * 1000 for output in successes if output.queue_latency is not None],
         "execution": [output.execution_latency * 1000 for output in successes if output.execution_latency is not None],
-        "server_e2e": [output.e2e_latency * 1000 for output in successes],
+        "http_overhead": [
+            max(0.0, output.client_latency - output.e2e_latency) * 1000
+            for output in successes
+        ],
     }
 
     result = {
@@ -452,17 +479,12 @@ def summarize(
         "input_lens": [output.prompt_len for output in outputs],
         "output_lens": [output.output_tokens for output in outputs],
         "start_times": [output.start_time for output in outputs],
-        "queue_latencies": [output.queue_latency for output in outputs],
-        "execution_latencies": [output.execution_latency for output in outputs],
-        "server_e2els": [output.e2e_latency for output in outputs],
+        "e2els": [output.e2e_latency for output in outputs],
         "engine_e2els": [output.engine_e2e_latency for output in outputs],
         "client_latencies": [output.client_latency for output in outputs],
-        "http_overheads": [
-            max(0.0, output.client_latency - output.e2e_latency)
-            for output in outputs
-        ],
         "retry_counts": [output.retry_count for output in outputs],
         "total_retries": sum(output.retry_count for output in outputs),
+        "metrics": list(metrics),
         "e2e_sources": [output.e2e_source for output in outputs],
         "token_count_sources": [
             "server"
@@ -474,10 +496,20 @@ def summarize(
         "errors": [output.error for output in outputs],
     }
 
-    latency_values["http_overhead"] = [
-        max(0.0, output.client_latency - output.e2e_latency) * 1000
-        for output in successes
-    ]
+    if "QUEUE" in metrics:
+        result["queue_latencies"] = [output.queue_latency for output in outputs]
+    if "EXECUTION" in metrics:
+        result["execution_latencies"] = [output.execution_latency for output in outputs]
+    if "HTTP_OVERHEAD" in metrics:
+        result["http_overheads"] = [
+            max(0.0, output.client_latency - output.e2e_latency)
+            for output in outputs
+        ]
+
+    latency_values = {
+        METRIC_RESULT_NAMES[metric]: all_latency_values[METRIC_RESULT_NAMES[metric]]
+        for metric in metrics
+    }
     for metric_name, values in latency_values.items():
         result[f"mean_{metric_name}_ms"] = float(np.mean(values)) if values else 0.0
         result[f"median_{metric_name}_ms"] = float(np.median(values)) if values else 0.0
@@ -551,7 +583,7 @@ async def run_serving_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         duration_s = time.perf_counter() - start
 
     percentiles = [float(item) for item in args.metric_percentiles.split(",")]
-    result = summarize(outputs, duration_s, percentiles)
+    result = summarize(outputs, duration_s, percentiles, args.metrics)
     result.update(
         {
             "date": datetime.now().strftime("%Y%m%d-%H%M%S"),
@@ -576,7 +608,8 @@ async def run_serving_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     _print_metric("Request throughput (req/s):", result["request_throughput"], 2)
     _print_metric("Output token throughput (tok/s):", result["output_token_throughput"], 2)
     _print_metric("Total token throughput (tok/s):", result["total_token_throughput"], 2)
-    for metric in ("queue", "execution", "server_e2e", "http_overhead"):
+    for selected_metric in args.metrics:
+        metric = METRIC_RESULT_NAMES[selected_metric]
         print("-" * 50)
         _print_metric(f"Mean {metric.upper()} (ms):", result[f"mean_{metric}_ms"], 2)
         _print_metric(f"Median {metric.upper()} (ms):", result[f"median_{metric}_ms"], 2)
@@ -592,7 +625,7 @@ async def run_serving_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "start_times",
             "queue_latencies",
             "execution_latencies",
-            "server_e2els",
+            "e2els",
             "engine_e2els",
             "client_latencies",
             "http_overheads",
@@ -651,6 +684,12 @@ def add_bench_subparser(subparsers: argparse._SubParsersAction) -> None:
     serve.add_argument("--extra-body", type=json.loads, default={})
     serve.add_argument("--ignore-eos", action="store_true")
     serve.add_argument("--metric-percentiles", default="50,90,95,99")
+    serve.add_argument(
+        "--metrics",
+        type=_parse_metrics,
+        default=("E2E",),
+        help="Comma-separated output metrics; E2E is required (default: E2E).",
+    )
     serve.add_argument("--save-result", action="store_true")
     serve.add_argument("--save-detailed", action="store_true")
     serve.add_argument("--result-dir", default="bench_results")

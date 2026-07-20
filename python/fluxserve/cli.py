@@ -98,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--attention-backend",
         choices=("sdpa", "flex", "flashinfer"),
-        default="sdpa",
+        default="flashinfer",
     )
     serve.add_argument(
         "--flashinfer-decode-batch-mode",
@@ -118,7 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--kv-cache-layout",
         choices=("dense", "paged"),
-        default="dense",
+        default="paged",
     )
     serve.add_argument("--page-size", type=int, default=None)
     serve.add_argument("--parallel-decoding", default="threshold")

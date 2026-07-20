@@ -52,5 +52,10 @@ python -m fluxserve.cli serve \
   --scheduler-policy paged \
   --request-rate 4 \
   --max-concurrency 32 \
-  --metric-percentiles 50,90,99
+  --metric-percentiles 50,90,99 \
+  --metrics E2E,QUEUE,EXECUTION,HTTP_OVERHEAD
 ```
+
+`E2E` is always required and is the only metric reported by default. Add
+`QUEUE`, `EXECUTION`, or `HTTP_OVERHEAD` to `--metrics` to include those
+statistics in terminal and saved JSON output.
