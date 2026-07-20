@@ -8,7 +8,7 @@
 ### Run Docker Environment (Recommended)
 
 ```bash
-docker build -f docker/Dockerfile.flux-cu129 -t flux:cu129
+docker build -f docker/Dockerfile.flux-cu129 -t flux:cu129 .
 
 docker run -itd \
   --shm-size 32g \
