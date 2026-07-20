@@ -5,13 +5,13 @@
 --------------------------------------------------------------------------------
 
 ## About
-**FluxServe** is a lighweight and high-performance serving engine for diffusion langauge models. It is designed and implemented to deliver low-latency and high-throughput inference for Autoregressive (AR) diffusion models across different setups, ranging from single GPU batched inference to multi-GPU distributed serving.
+**FluxServe** is a lighweight and high-performance serving engine for diffusion langauge models. It is designed and implemented to deliver low-latency and high-throughput inference for autoregressive (AR) diffusion models across different setups, ranging from single GPU batched inference to multi-GPU distributed serving.
 
 Its core features include:
 
 - **Block Causal Attention**: Provides efficient attention runtime with a block-casual attention mechanism suitable for AR diffusion in real-world scenarios, including *varlen prefill* and *varlen block-deocde*.
 - **Dynamic Scheduler**: Provides scheduler with efficient C++ control plane and Python execution plane with fine-grained block-level request management suitable for block diffusion models.
-
+- **Multi-GPU Serving**: Provides tensor paralllel (TP), data parallel (DP) and expert parallel (EP) support for large-scale model, such as llada-2-flash.
 
 ## [Getting Started](docs/guides/getting_started.md)
 
