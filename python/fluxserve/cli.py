@@ -133,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--trust-remote-code", action="store_true", default=True)
     serve.add_argument(
         "--process-name",
-        default="fluxserve-serve",
+        default="fluxserve",
         help="Process title shown by ps/top for online serving.",
     )
     add_bench_subparser(sub)
