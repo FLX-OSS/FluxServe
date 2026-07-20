@@ -30,6 +30,8 @@
 
 ### Env Support
 - [ ] Dockerfile build
+    - [ ] RTX Pro 4000
+    - [ ] GH200
 - [ ] UV build
 
 ### Debugging Support

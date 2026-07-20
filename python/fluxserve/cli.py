@@ -1,0 +1,328 @@
+# Copyright (c) 2026 FLUX-OSS
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+
+import torch
+from transformers import AutoConfig, AutoTokenizer
+
+from fluxserve.bench import add_bench_subparser
+from fluxserve.bench_offline import add_bench_offline_subparser, bench_offline
+from fluxserve.backend.distributed.launch import (
+    destroy_distributed,
+    initialize_distributed,
+    launch_local_workers,
+    reject_external_distributed_launch,
+    should_launch_local_workers,
+)
+from fluxserve.backend.engine import AsyncLLM
+from fluxserve.backend.engine.distributed_executor import DistributedGenerationExecutor
+from fluxserve.backend.engine.executor import BlockDiffusionExecutor
+from fluxserve.backend.engine.scheduler_adapter import PagedSchedulerAdapter
+from fluxserve.backend.entrypoints.http_server import run
+from fluxserve.backend.execution.forward_batch_info import RunnerConfig
+from fluxserve.backend.execution.runners import (
+    BlockDiffusionRunner,
+    FlashInferDiffusionRunner,
+)
+from fluxserve.backend.layers.dp_attention import initialize_dp_attention
+from fluxserve.backend.layers.moe.utils import initialize_moe_config
+from fluxserve.backend.layers.quantization import (
+    QUANTIZATION_METHODS,
+    get_quantization_config,
+)
+from fluxserve.backend.utils.runtime_utils import require_nvidia_cuda
+from fluxserve.backend.utils.server_args import ServerArgs
+
+logger = logging.getLogger(__name__)
+
+
+def set_process_title(title: str) -> None:
+    try:
+        import setproctitle
+    except ImportError:
+        return
+    setproctitle.setproctitle(title)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="fluxserve")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    serve = sub.add_parser("serve")
+    serve.add_argument("--model", "--model-name", dest="model_name", required=True)
+    serve.add_argument("--host", default="0.0.0.0")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--device", default="cuda")
+    serve.add_argument("--max-num-seqs", type=int, default=8)
+    serve.add_argument("--max-scheduled-tokens", type=int, default=512)
+    serve.add_argument("--max-model-len", type=int, default=2048)
+    serve.add_argument("--max-new-tokens", type=int, default=128)
+    serve.add_argument(
+        "--quantization",
+        choices=("auto", *QUANTIZATION_METHODS),
+        default="auto",
+        help="Quantization backend. 'auto' detects supported Hugging Face metadata.",
+    )
+    serve.add_argument(
+        "--scheduler-policy",
+        choices=("fifo", "paged", "cpp_plan"),
+        default="fifo",
+    )
+    serve.add_argument("--scheduler-num-device-pages", type=int, default=0)
+    serve.add_argument("--block-length", type=int, default=64)
+    serve.add_argument("--prefilling-limit", type=int, default=128)
+    serve.add_argument("--mini-batch-size", type=int, default=4)
+    serve.add_argument(
+        "--attention-backend",
+        choices=("sdpa", "flex", "flashinfer"),
+        default="sdpa",
+    )
+    serve.add_argument(
+        "--flashinfer-decode-batch-mode",
+        choices=("default", "max_batch"),
+        default="max_batch",
+    )
+    serve.add_argument(
+        "--flashinfer-prefill-mode",
+        choices=("dense", "ragged", "paged"),
+        default="paged",
+    )
+    serve.add_argument(
+        "--flashinfer-cache-mode",
+        choices=("dense", "paged"),
+        default="paged",
+    )
+    serve.add_argument(
+        "--kv-cache-layout",
+        choices=("dense", "paged"),
+        default="dense",
+    )
+    serve.add_argument("--page-size", type=int, default=None)
+    serve.add_argument("--parallel-decoding", default="threshold")
+    serve.add_argument("--threshold", type=float, default=0.9)
+    serve.add_argument("--low-threshold", type=float, default=0.3)
+    serve.add_argument("--tp-size", type=int, default=1)
+    serve.add_argument("--dp-size", type=int, default=1)
+    serve.add_argument("--ep-size", type=int, default=1)
+    serve.add_argument("--pp-size", type=int, default=1)
+    serve.add_argument("--enable-dp-attention", action="store_true", default=False)
+    serve.add_argument("--distributed-backend", default="nccl")
+    serve.add_argument("--trust-remote-code", action="store_true", default=True)
+    serve.add_argument(
+        "--process-name",
+        default="fluxserve-serve",
+        help="Process title shown by ps/top for online serving.",
+    )
+    add_bench_subparser(sub)
+    add_bench_offline_subparser(sub)
+    return parser
+
+
+def _resolve_quant_config(model_config, quantization: str):
+    if quantization == "auto":
+        hf_quant_config = getattr(model_config, "quantization_config", None)
+        if not isinstance(hf_quant_config, dict):
+            return None
+
+        quant_method = str(hf_quant_config.get("quant_method", "")).lower()
+        quant_algo = str(hf_quant_config.get("quant_algo", "")).upper()
+        if quant_method == "modelopt" and "FP8" in quant_algo:
+            return get_quantization_config("modelopt_fp8").from_config(hf_quant_config)
+        if quant_method == "modelopt" and "NVFP4" in quant_algo:
+            return get_quantization_config("modelopt_fp4").from_config(hf_quant_config)
+        return None
+
+    hf_quant_config = getattr(model_config, "quantization_config", None)
+    if not isinstance(hf_quant_config, dict):
+        raise ValueError(
+            f"--quantization {quantization!r} requires quantization_config in config.json"
+        )
+    return get_quantization_config(quantization).from_config(hf_quant_config)
+
+
+def serve(args) -> None:
+    reject_external_distributed_launch()
+    if should_launch_local_workers(args.tp_size):
+        if args.process_name:
+            set_process_title(f"{args.process_name}:supervisor")
+        require_nvidia_cuda(args.device)
+        launch_local_workers(_serve_worker, args)
+        return
+    _serve_worker(args)
+
+
+def _serve_worker(args, *, init_method: str = "env://") -> None:
+    if args.process_name:
+        set_process_title(args.process_name)
+
+    require_nvidia_cuda(args.device)
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_name,
+        trust_remote_code=args.trust_remote_code,
+    )
+    model_config = AutoConfig.from_pretrained(
+        args.model_name,
+        trust_remote_code=args.trust_remote_code,
+    )
+    model_config.quant_config = _resolve_quant_config(
+        model_config,
+        args.quantization,
+    )
+    if args.scheduler_policy == "cpp_plan":
+        logger.warning("scheduler_policy='cpp_plan' is deprecated; use 'paged'.")
+        args.scheduler_policy = "paged"
+    if args.scheduler_policy == "paged" and (
+        args.attention_backend != "flashinfer"
+        or args.kv_cache_layout != "paged"
+        or args.flashinfer_cache_mode != "paged"
+        or args.flashinfer_prefill_mode != "paged"
+    ):
+        raise RuntimeError(
+            "scheduler_policy='paged' requires attention_backend='flashinfer', "
+            "kv_cache_layout='paged', flashinfer_cache_mode='paged', and "
+            "flashinfer_prefill_mode='paged'."
+        )
+    server_args = ServerArgs(
+        model_name=args.model_name,
+        model_config=model_config,
+        quantization=args.quantization,
+        device=args.device,
+        host=args.host,
+        port=args.port,
+        max_num_seqs=args.max_num_seqs,
+        max_scheduled_tokens=args.max_scheduled_tokens,
+        max_model_len=args.max_model_len,
+        scheduler_policy=args.scheduler_policy,
+        scheduler_page_size=args.page_size or args.block_length,
+        scheduler_num_device_pages=args.scheduler_num_device_pages,
+        trust_remote_code=args.trust_remote_code,
+        tp_size=args.tp_size,
+        dp_size=args.dp_size,
+        ep_size=args.ep_size,
+        pp_size=args.pp_size,
+        enable_dp_attention=args.enable_dp_attention,
+    )
+    context = initialize_distributed(
+        server_args,
+        backend=args.distributed_backend,
+        init_method=init_method,
+    )
+    if args.process_name and context.is_distributed:
+        set_process_title(f"{args.process_name}:rank{context.rank}")
+    if context.is_distributed:
+        server_args.device = f"cuda:{context.local_rank}"
+        args.device = server_args.device
+    else:
+        device_index = (
+            int(args.device)
+            if str(args.device).isdigit()
+            else torch.device(args.device).index or 0
+        )
+        torch.cuda.set_device(device_index)
+
+    try:
+        initialize_dp_attention(server_args=server_args, model_config=model_config)
+        initialize_moe_config(server_args)
+
+        runner_config = RunnerConfig(
+            gen_length=args.max_new_tokens,
+            block_length=args.block_length,
+            prefilling_limit=args.prefilling_limit,
+            mini_batch_size=args.mini_batch_size,
+            max_length=args.max_model_len,
+            supported_batch_sizes=tuple(
+                2**i for i in range(max(1, args.max_num_seqs).bit_length())
+            ),
+            attention_backend=args.attention_backend,
+            flashinfer_decode_batch_mode=args.flashinfer_decode_batch_mode,
+            flashinfer_prefill_mode=args.flashinfer_prefill_mode,
+            flashinfer_cache_mode=args.flashinfer_cache_mode,
+            kv_cache_layout=args.kv_cache_layout,
+            page_size=args.page_size,
+            parallel_decoding=args.parallel_decoding,
+            threshold=args.threshold,
+            low_threshold=args.low_threshold,
+        )
+        runner_cls = (
+            FlashInferDiffusionRunner
+            if args.attention_backend == "flashinfer"
+            else BlockDiffusionRunner
+        )
+        runner = runner_cls(
+            model_config=model_config,
+            server_args=server_args,
+            runner_config=runner_config,
+            device=args.device,
+        )
+        base_executor = BlockDiffusionExecutor(runner=runner, tokenizer=tokenizer)
+        executor = DistributedGenerationExecutor(base_executor, context)
+        if context.is_rank0:
+            scheduler = None
+            if args.scheduler_policy == "paged":
+                page_size = int(args.page_size or args.block_length)
+                num_device_pages = int(args.scheduler_num_device_pages)
+                if num_device_pages <= 0:
+                    num_device_pages = (
+                        args.max_num_seqs
+                        * ((args.max_model_len + page_size - 1) // page_size + 2)
+                        + 1
+                    )
+                server_args.scheduler_num_device_pages = num_device_pages
+                scheduler = PagedSchedulerAdapter(
+                    max_batch_size=args.max_num_seqs,
+                    max_scheduled_tokens=args.max_scheduled_tokens,
+                    page_size=page_size,
+                    num_device_pages=num_device_pages,
+                )
+            engine = AsyncLLM(
+                server_args=server_args,
+                executor=executor,
+                tokenizer=tokenizer,
+                scheduler=scheduler,
+            )
+            try:
+                run(engine, host=args.host, port=args.port)
+            finally:
+                executor.shutdown_workers()
+        else:
+            asyncio.run(executor.run_worker_loop())
+    finally:
+        destroy_distributed()
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    if args.command == "serve":
+        serve(args)
+    elif args.command == "bench":
+        args.dispatch_function(args)
+    elif args.command == "bench_offline":
+        bench_offline(args)
+
+
+if __name__ == "__main__":
+    main()

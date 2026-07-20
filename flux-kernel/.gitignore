@@ -1,0 +1,3 @@
+**/__pycache__/
+python/*.egg-info/
+python/flux_kernel/cuda/rmsnorm/objs/

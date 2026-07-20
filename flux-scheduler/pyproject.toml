@@ -1,0 +1,35 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.9.5",
+    "nanobind>=1.7.0",
+    "cmake>=3.22",
+    "ninja>=1.11",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "flux-scheduler"
+version = "0.1.0"
+description = "C++ scheduler with Python bindings"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8,<9",
+]
+
+[tool.scikit-build]
+build-dir = "build"
+cmake.version = ">=3.22"
+cmake.args = ["-DFLUX_SCHEDULER_BUILD_TESTS=OFF", "-DFLUX_SCHEDULER_BUILD_PYTHON=ON"]
+wheel.packages = ["python/flux_scheduler"]
+
+[tool.setuptools]
+license-files = ["LICENSE"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]

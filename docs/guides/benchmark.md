@@ -1,5 +1,5 @@
 ## Offline Benchmark
-
+FluxServe supports offline thorughput benchamrk with json-style input files.
 ```bash
 python -m fluxserve.cli bench_offline \
   --model inclusionAI/LLaDA2.0-mini \

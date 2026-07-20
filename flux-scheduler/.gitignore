@@ -1,0 +1,25 @@
+# Build outputs
+build/
+dist/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+.cache/
+*.json
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dylib
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Editor/OS noise
+.DS_Store
+*.swp
+.vscode/
