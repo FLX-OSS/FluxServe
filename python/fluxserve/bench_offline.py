@@ -56,6 +56,16 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 BUCKET_SIZE = 32
 
+
+def normalize_attention_backend_args(args) -> None:
+    if args.attention_backend == "flashinfer":
+        return
+    args.flashinfer_prefill_mode = "dense"
+    args.flashinfer_cache_mode = "dense"
+    args.kv_cache_layout = "dense"
+    args.page_size = None
+
+
 class BenchmarkLogger:
     def __init__(self, log_file: str | None = None, rank: int = 0):
         self.log_file = log_file
@@ -631,6 +641,7 @@ def bench_offline(args) -> None:
     from fluxserve.cli import set_process_title
 
     reject_external_distributed_launch()
+    normalize_attention_backend_args(args)
     if args.use_quant:
         args.quantization = "modelopt_fp8"
     args.log_file = resolve_log_file(args)
@@ -674,9 +685,9 @@ def bench_offline(args) -> None:
             f"(requested mini_batch_size={args.mini_batch_size})."
         )
         args.mini_batch_size = args.batch_size
+    
     if args.dp_size > 1:
-        if args.use_tp:
-            logger.info("[Info] Disabling model TP because dp_size > 1.")
+        logger.info("[Info] Disabling model TP because dp_size > 1.")
         args.use_tp = False
     else:
         args.use_tp = args.tp_size > 1

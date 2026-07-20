@@ -29,7 +29,11 @@ import torch
 from transformers import AutoConfig, AutoTokenizer
 
 from fluxserve.bench import add_bench_subparser
-from fluxserve.bench_offline import add_bench_offline_subparser, bench_offline
+from fluxserve.bench_offline import (
+    add_bench_offline_subparser,
+    bench_offline,
+    normalize_attention_backend_args,
+)
 from fluxserve.backend.distributed.launch import (
     destroy_distributed,
     initialize_distributed,
@@ -165,6 +169,7 @@ def _resolve_quant_config(model_config, quantization: str):
 
 def serve(args) -> None:
     reject_external_distributed_launch()
+    normalize_attention_backend_args(args)
     if should_launch_local_workers(args.tp_size):
         if args.process_name:
             set_process_title(f"{args.process_name}:supervisor")
