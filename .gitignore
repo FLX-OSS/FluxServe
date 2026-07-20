@@ -35,6 +35,10 @@ manager/dist/*
 # docker commands
 **/commands/
 
+# experimental runs
+**/runs/
+
+
 # mysql
 mysql
 

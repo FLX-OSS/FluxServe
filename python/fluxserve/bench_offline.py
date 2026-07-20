@@ -600,17 +600,17 @@ def add_bench_offline_subparser(subparsers) -> None:
     parser.add_argument("--use-quant", "--use_quant", dest="use_quant", action="store_true")
     parser.add_argument("--use-cuda-graph", "--use_cuda_graph", dest="use_cuda_graph", action="store_true")
     parser.add_argument("--prefilling-limit", "--prefilling_limit", dest="prefilling_limit", type=int, default=128)
-    parser.add_argument("--attention-backend", "--attention_backend", dest="attention_backend", choices=("sdpa", "flex", "flashinfer"), default="sdpa")
+    parser.add_argument("--attention-backend", "--attention_backend", dest="attention_backend", choices=("sdpa", "flex", "flashinfer"), default="flashinfer")
     parser.add_argument("--flashinfer-decode-batch-mode", "--flashinfer_decode_batch_mode", dest="flashinfer_decode_batch_mode", choices=("default", "max_batch"), default="max_batch")
     parser.add_argument("--flashinfer-prefill-mode", "--flashinfer_prefill_mode", dest="flashinfer_prefill_mode", choices=("dense", "ragged", "paged"), default="paged")
     parser.add_argument("--flashinfer-cache-mode", "--flashinfer_cache_mode", dest="flashinfer_cache_mode", choices=("dense", "paged"), default="paged")
-    parser.add_argument("--kv-cache-layout", "--kv_cache_layout", dest="kv_cache_layout", choices=("dense", "paged"), default="dense")
+    parser.add_argument("--kv-cache-layout", "--kv_cache_layout", dest="kv_cache_layout", choices=("dense", "paged"), default="paged")
     parser.add_argument("--page-size", "--page_size", dest="page_size", type=int)
     parser.add_argument("--gen-len", "--gen_len", dest="gen_len", type=int, default=1024)
     parser.add_argument("--block-length", "--block_length", dest="block_length", type=int, default=64)
     parser.add_argument("--threshold", type=float, default=0.9)
     parser.add_argument("--low-threshold", "--low_threshold", dest="low_threshold", type=float, default=0.3)
-    parser.add_argument("--parallel-decoding", "--parallel_decoding", dest="parallel_decoding", default="hierarchy")
+    parser.add_argument("--parallel-decoding", "--parallel_decoding", dest="parallel_decoding", default="threshold")
     parser.add_argument("--use-credit", "--use_credit", dest="use_credit", action="store_true")
     parser.add_argument("--dataset-format", "--dataset_format", dest="dataset_format", choices=("auto", "legacy", "openai"), default="openai")
     parser.add_argument(
@@ -624,7 +624,7 @@ def add_bench_offline_subparser(subparsers) -> None:
     parser.add_argument("--output-dir", "--output_dir", dest="output_dir", default="runs/detailed_results")
     parser.add_argument("--log-file", "--log_file", dest="log_file", default="run.log")
     parser.add_argument("--trust-remote-code", "--trust_remote_code", dest="trust_remote_code", action="store_true", default=True)
-    parser.add_argument("--process-name", "--process_name", dest="process_name", default="fluxserve-bench-offline")
+    parser.add_argument("--process-name", "--process_name", dest="process_name", default="fluxserve")
 
 
 def bench_offline(args) -> None:
