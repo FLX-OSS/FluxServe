@@ -1,4 +1,4 @@
-"""Optional copied TokenSpeed CUDA RMSNorm wrapper.
+"""Optional CUDA RMSNorm wrapper.
 
 The copied CUDA source lives next to this file under `csrc/`. Loading requires a
 prebuilt TVM-FFI shared library at `objs/rmsnorm_fused_parallel.so`.
@@ -42,7 +42,7 @@ def _load_rmsnorm_module():
     so_path = _shared_library_path()
     if not so_path.exists():
         raise RuntimeError(
-            f"Copied TokenSpeed rmsnorm library not found at {so_path}. "
+            f"rmsnorm library not found at {so_path}. "
             "Build the CUDA sources under csrc/ before using this optional path."
         )
     return tvm_ffi.load_module(str(so_path))

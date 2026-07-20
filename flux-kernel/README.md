@@ -8,7 +8,7 @@ Install in editable mode from the FluxServe repo root:
 pip install -e flux-kernel/python/ --no-build-isolation
 ```
 
-The install builds the copied TokenSpeed CUDA RMSNorm shared library by default.
+The install builds CUDA RMSNorm shared library by default.
 Set `FLUX_KERNEL_SKIP_CUDA_BUILD=1` to skip native CUDA compilation.
 
 The RMSNorm APIs are exposed as:
