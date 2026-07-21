@@ -15,6 +15,8 @@ Its core features include:
 
 ## [Getting Started](docs/guides/getting_started.md)
 
+## [Development Roadmap](docs/roadmap.md)
+
 ## Performance Results
 FluxServe achieves up to an average of 2.3x speedup against SGLang in batched inference. It also can sustain up to 40% more throughput when serving 100B LLaDA-2.0-Flash. Detailed benchmark guides can be found [here](docs/guides/benchmark.md).
 
@@ -23,11 +25,6 @@ FluxServe achieves up to an average of 2.3x speedup against SGLang in batched in
       <img src="./assets/figures/results.png" style="width: 100%; object-fit: contain;" />
   </tr>
 </table>
-
-## [Development Roadmap](docs/roadmap.md)
-
-
-## [Contribution Guide](docs/roadmap.md)
 
 ## Acknowledgments
 We learned the system design and reused code from the following projects: [vllm](https://github.com/vllm-project/vllm), [SGLang](https://github.com/sgl-project/sglang), [TokenSpeed](https://github.com/lightseekorg/tokenspeed), and [dInfer](https://github.com/inclusionAI/dInfer).
