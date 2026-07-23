@@ -32,6 +32,11 @@ manager/dist/*
 # GH200 related
 **/gh200/
 
+**/scripts/
+
+**/pod_attn_tests/
+
+
 # docker commands
 **/commands/
 
