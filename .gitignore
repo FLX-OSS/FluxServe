@@ -34,8 +34,6 @@ manager/dist/*
 
 **/scripts/
 
-**/pod_attn_tests/
-
 
 # docker commands
 **/commands/
