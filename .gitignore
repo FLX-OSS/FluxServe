@@ -31,7 +31,7 @@ manager/dist/*
 
 # GH200 related
 **/gh200/
-
+**/openai/
 **/scripts/
 
 

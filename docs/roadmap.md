@@ -1,5 +1,6 @@
 ### Model Support
 - [ ] LLaDA2.1
+- [ ] LLaDA2.2
 - [ ] DiffusionGemma
 
 ### Quantization Support
