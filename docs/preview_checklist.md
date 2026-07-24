@@ -30,9 +30,6 @@
 - [x] Dockerfile build
 - [x] UV build
 
-### Debugging Support
-- [ ] CI/CD
-
 
 ## Performance Results
 - [x] Offline Benchmark
