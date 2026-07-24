@@ -25,6 +25,7 @@ import logging
 import os
 import signal
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -36,6 +37,10 @@ from fluxserve.backend import distributed
 from fluxserve.backend.utils.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
+
+_SHUTDOWN_GRACE_PERIOD_S = 3.0
+_TERMINATE_GRACE_PERIOD_S = 5.0
+_SUPERVISOR_POLL_INTERVAL_S = 0.1
 
 
 @dataclass(frozen=True)
@@ -152,29 +157,55 @@ def launch_local_workers(
 
 def _supervise_processes(process_context) -> None:
     previous_handlers = {}
+    shutdown_requested_at = None
+    force_shutdown = False
 
     def request_shutdown(signum, _frame):
-        if signum == signal.SIGINT:
-            raise KeyboardInterrupt
-        raise SystemExit(128 + signum)
+        nonlocal shutdown_requested_at, force_shutdown
+        if shutdown_requested_at is None:
+            shutdown_requested_at = time.monotonic()
+            logger.info(
+                "received %s; waiting for FluxServe workers to shut down",
+                signal.Signals(signum).name,
+            )
+            if signum == signal.SIGTERM:
+                rank0_process = process_context.processes[0]
+                if rank0_process.is_alive():
+                    os.kill(rank0_process.pid, signal.SIGTERM)
+        else:
+            force_shutdown = True
+            logger.warning("received another shutdown signal; stopping workers")
 
     try:
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous_handlers[signum] = signal.signal(signum, request_shutdown)
-        while not process_context.join(timeout=0.5):
-            pass
+        while not process_context.join(timeout=_SUPERVISOR_POLL_INTERVAL_S):
+            if shutdown_requested_at is None:
+                continue
+            if force_shutdown:
+                break
+            grace_period_expired = (
+                time.monotonic() - shutdown_requested_at
+                >= _SHUTDOWN_GRACE_PERIOD_S
+            )
+            if grace_period_expired:
+                break
     finally:
-        for process in process_context.processes:
-            if process.is_alive():
-                process.terminate()
-        for process in process_context.processes:
-            process.join(timeout=5)
-        for process in process_context.processes:
-            if process.is_alive():
-                process.kill()
-                process.join()
+        _stop_remaining_processes(process_context.processes)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
+
+
+def _stop_remaining_processes(processes) -> None:
+    remaining = [process for process in processes if process.is_alive()]
+    for process in remaining:
+        process.terminate()
+    for process in remaining:
+        process.join(timeout=_TERMINATE_GRACE_PERIOD_S)
+    for process in remaining:
+        if process.is_alive():
+            process.kill()
+            process.join()
 
 
 def _local_worker_entry(
@@ -184,6 +215,10 @@ def _local_worker_entry(
     worker: Callable[..., None],
     args,
 ) -> None:
+    # The terminal sends SIGINT to the whole foreground process group. Only
+    # rank 0 owns Uvicorn; other ranks must stay alive for its shutdown broadcast.
+    if local_rank != 0:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
     os.environ.update(
         {
             "RANK": str(local_rank),
