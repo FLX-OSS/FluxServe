@@ -14,6 +14,7 @@ class FakeProcess:
         self.terminate = Mock(side_effect=self._terminate)
         self.kill = Mock(side_effect=self._kill)
         self.join = Mock()
+        self.close = Mock()
 
     def _terminate(self):
         if not self.survives_terminate:
@@ -75,8 +76,9 @@ def test_first_sigint_allows_workers_to_exit_gracefully():
 
     _supervise_with_signals(context, [signal.SIGINT], [10.0, 11.0])
 
-    assert context.join.call_count == 2
+    assert context.join.call_count == 3
     process.terminate.assert_not_called()
+    process.close.assert_called_once_with()
 
 
 def test_shutdown_timeout_terminates_remaining_workers():
@@ -86,15 +88,21 @@ def test_shutdown_timeout_terminates_remaining_workers():
     _supervise_with_signals(context, [signal.SIGINT], [10.0, 13.0])
 
     process.terminate.assert_called_once_with()
-    process.join.assert_called_once_with(timeout=launch._TERMINATE_GRACE_PERIOD_S)
+    assert process.join.call_args_list == [
+        call(timeout=launch._TERMINATE_GRACE_PERIOD_S),
+        call(),
+    ]
     process.kill.assert_not_called()
+    process.close.assert_called_once_with()
 
 
 def test_sigterm_is_forwarded_to_rank_zero():
     process = FakeProcess(alive=False, pid=4321)
     context = FakeProcessContext([process], [False, True])
 
-    with patch.object(launch.os, "kill") as kill_mock:
+    with patch.object(launch.os, "kill") as kill_mock, pytest.raises(
+        SystemExit, match="143"
+    ):
         _supervise_with_signals(context, [signal.SIGTERM], [10.0, 11.0])
 
     kill_mock.assert_not_called()
@@ -104,7 +112,9 @@ def test_sigterm_is_forwarded_when_rank_zero_is_alive():
     process = FakeProcess(pid=4321)
     context = FakeProcessContext([process], [False, True])
 
-    with patch.object(launch.os, "kill") as kill_mock:
+    with patch.object(launch.os, "kill") as kill_mock, pytest.raises(
+        SystemExit, match="143"
+    ):
         _supervise_with_signals(context, [signal.SIGTERM], [10.0, 11.0])
 
     kill_mock.assert_called_once_with(4321, signal.SIGTERM)
@@ -120,8 +130,10 @@ def test_second_signal_escalates_immediately():
         [10.0, 10.1],
     )
 
-    assert context.join.call_count == 2
+    assert context.join.call_count == 3
     process.terminate.assert_called_once_with()
+    process.join.assert_called_once_with()
+    process.close.assert_called_once_with()
 
 
 def test_worker_that_survives_terminate_is_killed():

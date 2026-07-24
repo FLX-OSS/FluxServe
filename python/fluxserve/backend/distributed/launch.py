@@ -38,7 +38,7 @@ from fluxserve.backend.utils.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
 
-_SHUTDOWN_GRACE_PERIOD_S = 3.0
+_SHUTDOWN_GRACE_PERIOD_S = 5.0
 _TERMINATE_GRACE_PERIOD_S = 5.0
 _SUPERVISOR_POLL_INTERVAL_S = 0.1
 
@@ -158,12 +158,14 @@ def launch_local_workers(
 def _supervise_processes(process_context) -> None:
     previous_handlers = {}
     shutdown_requested_at = None
+    shutdown_signal = None
     force_shutdown = False
 
     def request_shutdown(signum, _frame):
-        nonlocal shutdown_requested_at, force_shutdown
+        nonlocal shutdown_requested_at, shutdown_signal, force_shutdown
         if shutdown_requested_at is None:
             shutdown_requested_at = time.monotonic()
+            shutdown_signal = signum
             logger.info(
                 "received %s; waiting for FluxServe workers to shut down",
                 signal.Signals(signum).name,
@@ -179,33 +181,59 @@ def _supervise_processes(process_context) -> None:
     try:
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous_handlers[signum] = signal.signal(signum, request_shutdown)
-        while not process_context.join(timeout=_SUPERVISOR_POLL_INTERVAL_S):
+        try:
+            while not process_context.join(timeout=_SUPERVISOR_POLL_INTERVAL_S):
+                if shutdown_requested_at is None:
+                    continue
+                if force_shutdown:
+                    break
+                grace_period_expired = (
+                    time.monotonic() - shutdown_requested_at
+                    >= _SHUTDOWN_GRACE_PERIOD_S
+                )
+                if grace_period_expired:
+                    break
+        except BaseException:
             if shutdown_requested_at is None:
-                continue
-            if force_shutdown:
-                break
-            grace_period_expired = (
-                time.monotonic() - shutdown_requested_at
-                >= _SHUTDOWN_GRACE_PERIOD_S
-            )
-            if grace_period_expired:
-                break
+                raise
     finally:
-        _stop_remaining_processes(process_context.processes)
+        _stop_remaining_processes(
+            process_context.processes,
+            force=lambda: force_shutdown,
+        )
+        if shutdown_requested_at is not None:
+            _drain_process_context(process_context)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
 
+    if shutdown_signal == signal.SIGTERM:
+        raise SystemExit(128 + signal.SIGTERM)
 
-def _stop_remaining_processes(processes) -> None:
+
+def _stop_remaining_processes(processes, *, force: Callable[[], bool] = lambda: False) -> None:
     remaining = [process for process in processes if process.is_alive()]
     for process in remaining:
         process.terminate()
-    for process in remaining:
-        process.join(timeout=_TERMINATE_GRACE_PERIOD_S)
+    if not force():
+        for process in remaining:
+            process.join(timeout=_TERMINATE_GRACE_PERIOD_S)
     for process in remaining:
         if process.is_alive():
             process.kill()
-            process.join()
+        process.join()
+
+
+def _drain_process_context(process_context) -> None:
+    try:
+        process_context.join(timeout=0)
+    except BaseException:
+        # Intentional signal exits can be reported as worker failures by spawn.
+        pass
+    for process in process_context.processes:
+        try:
+            process.close()
+        except ValueError:
+            logger.warning("could not close worker process %s", process.pid)
 
 
 def _local_worker_entry(
