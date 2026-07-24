@@ -28,7 +28,7 @@
 
 ### Env Support
 - [x] Dockerfile build
-- [ ] UV build
+- [x] UV build
 
 ### Debugging Support
 - [ ] CI/CD
