@@ -34,10 +34,8 @@ from flux_kernel.ops import silu_and_mul as flux_silu_and_mul
 
 from fluxserve.backend.layers.moe.moe_runner import MoeRunnerConfig
 from fluxserve.backend.utils.runtime_utils import (
-    cpu_has_amx_support,
     direct_register_custom_op,
     get_bool_env_var,
-    is_cpu,
     is_cuda,
     is_hip,
 )
@@ -51,14 +49,10 @@ if TYPE_CHECKING:
 
 _is_hip = is_hip()
 _is_cuda = is_cuda()
-_is_cpu_amx_available = cpu_has_amx_support()
-_is_cpu = is_cpu()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 
-if _is_cpu and _is_cpu_amx_available:
-    pass
-elif _is_hip:
-    from sgl_kernel import gelu_and_mul, silu_and_mul
+if _is_hip:
+    from sgl_kernel import silu_and_mul
 
     if _use_aiter:
         try:
@@ -67,12 +61,6 @@ elif _is_hip:
             raise ImportError("aiter is required when SGLANG_USE_AITER is set to True")
     else:
         from vllm import _custom_ops as vllm_ops
-
-
-def _gelu_and_mul(input: torch.Tensor, out: torch.Tensor) -> None:
-    from sgl_kernel import gelu_and_mul
-
-    gelu_and_mul(input, out)
 
 padding_size = 128 if bool(int(os.getenv("SGLANG_MOE_PADDING", "0"))) else 0
 
@@ -519,37 +507,23 @@ def fused_experts_impl(
             per_channel_quant=per_channel_quant,
             block_shape=block_shape,
         )
-        if activation == "silu":
-            if gemm1_alpha is not None:
-                assert gemm1_limit is not None
-                intermediate_cache2 = swiglu_with_alpha_and_limit(
-                    intermediate_cache1.view(-1, N),
-                    gemm1_alpha,
-                    gemm1_limit,
-                )
-            elif _is_cuda:
-                flux_silu_and_mul(
-                    intermediate_cache1.view(-1, N), intermediate_cache2
-                )
-            elif _is_hip:
-                silu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
-            else:
-                vllm_ops.silu_and_mul(
-                    intermediate_cache2, intermediate_cache1.view(-1, N)
-                )
-        elif activation == "gelu":
-            assert gemm1_alpha is None, "gemm1_alpha is not supported for gelu"
-            assert gemm1_limit is None, "gemm1_limit is not supported for gelu"
-            if _is_cuda:
-                _gelu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
-            elif _is_hip:
-                gelu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
-            else:
-                vllm_ops.gelu_and_mul(
-                    intermediate_cache2, intermediate_cache1.view(-1, N)
-                )
-        else:
+        if activation != "silu":
             raise ValueError(f"Unsupported activation: {activation=}")
+        if gemm1_alpha is not None:
+            assert gemm1_limit is not None
+            intermediate_cache2 = swiglu_with_alpha_and_limit(
+                intermediate_cache1.view(-1, N),
+                gemm1_alpha,
+                gemm1_limit,
+            )
+        elif _is_cuda:
+            flux_silu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
+        elif _is_hip:
+            silu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
+        else:
+            vllm_ops.silu_and_mul(
+                intermediate_cache2, intermediate_cache1.view(-1, N)
+            )
 
         invoke_fused_moe_kernel(
             intermediate_cache2,

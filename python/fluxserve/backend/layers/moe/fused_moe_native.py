@@ -26,7 +26,7 @@ It is based on https://github.com/pytorch-labs/gpt-fast/blob/32971d3129541c5bfb4
 import torch
 from torch.nn import functional as F
 
-from fluxserve.backend.layers.activation import GeluAndMul, SiluAndMul
+from fluxserve.backend.layers.activation import SiluAndMul
 from fluxserve.backend.layers.moe.moe_runner import MoeRunnerConfig
 from fluxserve.backend.layers.moe.token_dispatcher import StandardDispatchOutput
 from fluxserve.backend.layers.moe.topk import StandardTopKOutput
@@ -49,12 +49,9 @@ def fused_moe_forward_native(
     w1_weights, w3_weights = torch.chunk(w13_weights, 2, dim=2)
     w2_weights = layer.w2_weight[topk_ids]
     x1 = torch.einsum("ti,taoi -> tao", x, w1_weights)
-    if moe_runner_config.activation == "silu":
-        x1 = F.silu(x1)
-    elif moe_runner_config.activation == "gelu":
-        x1 = F.gelu(x1)
-    else:
+    if moe_runner_config.activation != "silu":
         raise ValueError(f"Unsupported activation: {moe_runner_config.activation=}")
+    x1 = F.silu(x1)
     x3 = torch.einsum("ti, taoi -> tao", x, w3_weights)
     expert_outs = torch.einsum("tao, taio -> tai", (x1 * x3), w2_weights)
     return torch.einsum("tai,ta -> ti", expert_outs, topk_weights.to(expert_outs.dtype))
@@ -92,12 +89,9 @@ def moe_forward_native(
     sorted_tokens = x[idxs // topk_ids.shape[1]]
     tokens_per_expert = tokens_per_expert.cpu().numpy()
 
-    if moe_runner_config.activation == "silu":
-        act = SiluAndMul()
-    elif moe_runner_config.activation == "gelu":
-        act = GeluAndMul()
-    else:
+    if moe_runner_config.activation != "silu":
         raise ValueError(f"Unsupported activation: {moe_runner_config.activation=}")
+    act = SiluAndMul()
 
     outputs = []
     start_idx = 0

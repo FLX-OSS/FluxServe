@@ -198,15 +198,6 @@ def is_xpu() -> bool:
     return False
 
 
-def cpu_has_amx_support() -> bool:
-    return False
-
-
-def use_intel_amx_backend(*args, **kwargs) -> bool:
-    del args, kwargs
-    return False
-
-
 def is_flashinfer_available() -> bool:
     try:
         return importlib.util.find_spec("flashinfer") is not None

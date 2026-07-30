@@ -93,7 +93,6 @@ from fluxserve.backend.utils.runtime_utils import (
     next_power_of_2,
     print_warning_once,
     set_weight_attrs,
-    use_intel_amx_backend,
 )
 
 
@@ -972,32 +971,6 @@ class Fp8MoEMethod(FusedMoEMethodBase):
         x = dispatch_output.hidden_states
         topk_output = dispatch_output.topk_output
         moe_runner_config = self.moe_runner_config
-
-        if use_intel_amx_backend(layer):
-            from fluxserve.backend.layers.moe.topk import apply_topk_weights_cpu
-
-            topk_weights, topk_ids, _ = topk_output
-            x, topk_weights = apply_topk_weights_cpu(
-                moe_runner_config.apply_router_weight_on_input, topk_weights, x
-            )
-
-            output = torch.ops.sgl_kernel.fused_experts_cpu(
-                x,
-                layer.w13_weight,
-                layer.w2_weight,
-                topk_weights,
-                topk_ids,
-                False,  # inplace See [Note] inplace should be False in fused_experts.
-                False,  # use_int8_w8a8
-                True,  # use_fp8_w8a16
-                layer.w13_weight_scale_inv,  # w1_scale
-                layer.w2_weight_scale_inv,  # w2_scale
-                self.quant_config.weight_block_size,  # block_size
-                None,  # a1_scale
-                None,  # a2_scale
-                True,  # is_vnni
-            )
-            return StandardCombineInput(hidden_states=output)
 
         if _is_hip:
             ret = self.maybe_apply_hip_fused_experts(

@@ -54,7 +54,6 @@ from fluxserve.backend.layers.quantization.unquant import UnquantizedFusedMoEMet
 from fluxserve.backend.layers.utils import narrow_padded_param_and_loaded_weight
 from fluxserve.backend.managers.schedule_batch import global_server_args_dict
 from fluxserve.backend.utils.runtime_utils import (
-    cpu_has_amx_support,
     get_bool_env_var,
     is_cpu,
     is_flashinfer_available,
@@ -73,7 +72,6 @@ if is_flashinfer_available():
     )
 
 _is_hip = is_hip()
-_is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
 
 
