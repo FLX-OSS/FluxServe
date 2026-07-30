@@ -30,7 +30,7 @@ from fluxserve.backend.engine.executor import GenerationExecutor
 from fluxserve.backend.engine.io_struct import GenerateReqInput, GenerateReqOutput
 from fluxserve.backend.engine.processor import InputProcessor, OutputProcessor
 from fluxserve.backend.engine.request import RequestState
-from fluxserve.backend.engine.scheduler_adapter import FifoSchedulerAdapter
+from fluxserve.backend.engine.scheduler_adapter import DefaultSchedulerAdapter
 from fluxserve.backend.metrics.engine import EngineMetrics
 from fluxserve.backend.utils.server_args import ServerArgs
 
@@ -55,7 +55,11 @@ class AsyncLLM:
                 trust_remote_code=server_args.trust_remote_code,
             )
         self.tokenizer = tokenizer
-        self.scheduler = scheduler or FifoSchedulerAdapter(server_args.max_num_seqs)
+        self.scheduler = (
+            DefaultSchedulerAdapter(server_args.max_num_seqs)
+            if scheduler is None
+            else scheduler
+        )
         self.input_processor = InputProcessor(server_args, self.tokenizer)
         self.output_processor = OutputProcessor()
         self.metrics = EngineMetrics()

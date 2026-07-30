@@ -96,8 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve.add_argument(
         "--scheduler-policy",
-        choices=("fifo", "paged", "cpp_plan"),
-        default="fifo",
+        choices=("default", "paged"),
+        default="default",
     )
     serve.add_argument("--scheduler-num-device-pages", type=int, default=0)
     serve.add_argument("--block-length", type=int, default=64)
@@ -201,9 +201,6 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         model_config,
         args.quantization,
     )
-    if args.scheduler_policy == "cpp_plan":
-        logger.warning("scheduler_policy='cpp_plan' is deprecated; use 'paged'.")
-        args.scheduler_policy = "paged"
     if args.scheduler_policy == "paged" and (
         args.attention_backend != "flashinfer"
         or args.kv_cache_layout != "paged"

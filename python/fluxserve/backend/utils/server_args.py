@@ -60,7 +60,7 @@ class ServerArgs:
     max_model_len: int = 2048
     stream_interval: int = 1
     enable_prefix_caching: bool = False
-    scheduler_policy: str = "fifo"
+    scheduler_policy: str = "default"
     scheduler_page_size: int | None = None
     scheduler_num_device_pages: int = 0
 

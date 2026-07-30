@@ -31,7 +31,7 @@ class ScheduledBatch:
     request_ids: list[str]
 
 
-class FifoSchedulerAdapter:
+class DefaultSchedulerAdapter:
     def __init__(self, max_batch_size: int):
         self.max_batch_size = max_batch_size
         self._queue: list[str] = []
@@ -58,7 +58,7 @@ class FifoSchedulerAdapter:
         self._queue = [rid for rid in self._queue if rid != request_id]
 
 
-class FluxSchedulerAdapter(FifoSchedulerAdapter):
+class FluxSchedulerAdapter(DefaultSchedulerAdapter):
     """Thin runtime wrapper around flux_scheduler.
 
     The current online milestone executes whole requests through the existing
@@ -80,7 +80,7 @@ class FluxSchedulerAdapter(FifoSchedulerAdapter):
         except ImportError as exc:
             raise RuntimeError(
                 "flux_scheduler is not installed. Install tests/flux-scheduler "
-                "or use FifoSchedulerAdapter for tests."
+                "or use DefaultSchedulerAdapter for tests."
             ) from exc
 
         cfg = SchedulerConfig()
@@ -203,7 +203,3 @@ class PagedSchedulerAdapter:
         event.add_event(ev)
         self._scheduler.advance(event)
         self._active.discard(request_id)
-
-
-# Compatibility for integrations importing the pre-rename class directly.
-CppPlanSchedulerAdapter = PagedSchedulerAdapter
