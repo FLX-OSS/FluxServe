@@ -34,9 +34,14 @@ manager/dist/*
 **/openai/
 **/scripts/
 
+# foundry related
+**/foundry/
 
 # docker commands
 **/commands/
+!docker/commands/
+docker/commands/*
+!docker/commands/start_foundry_docker.sh
 
 # experimental runs
 **/runs/

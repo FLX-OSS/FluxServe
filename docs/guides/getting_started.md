@@ -59,8 +59,71 @@ python -m fluxserve.cli serve \
   --dp-size 1
 ```
 
+### Option 2: Run the Foundry-Compatible Docker Environment
 
-### Option 2: Run UV Environment
+Foundry requires PyTorch 2.9 or newer and its current recipe targets PyTorch
+2.11 with CUDA 13.0. The dedicated image keeps that stack isolated from
+FluxServe's default PyTorch 2.8/CUDA 12.9 environment.
+
+The local Foundry checkout must exist at `foundry/` inside the FluxServe
+checkout. Build and launch the toolchain image from the repository root:
+
+```bash
+docker build \
+  -f docker/Dockerfile.flux-foundry-cu130 \
+  -t flux:foundry-cu130 \
+  .
+
+bash docker/commands/start_foundry_docker.sh
+docker exec -it flux_foundry_workspace bash --login
+```
+
+Inside the container, install the mounted projects without allowing
+FluxServe's default dependency pins to replace PyTorch 2.11:
+
+```bash
+cd /workspace/FluxServe
+python -m pip install -e . --no-deps
+python -m pip install -e flux-kernel/python --no-build-isolation --no-deps
+python -m pip install -e flux-scheduler --no-build-isolation --no-deps
+python -m pip install -e foundry --no-build-isolation
+```
+
+If the container was started from an older image, install the scheduler's
+OpenSSL headers before retrying its editable build:
+
+```bash
+apt-get update && apt-get install -y --no-install-recommends libssl-dev
+```
+
+Verify the CUDA/PyTorch stack and native modules:
+
+```bash
+python - <<'PY'
+import torch
+import flux_kernel
+import flux_scheduler
+import fluxserve
+import foundry
+import foundry.ops
+
+print("torch:", torch.__version__)
+print("torch CUDA:", torch.version.cuda)
+print("CUDA available:", torch.cuda.is_available())
+print("FluxServe and Foundry imports successful")
+PY
+
+ldd foundry/python/foundry/libcuda_hook.so
+python -m pytest foundry/tests/test_imports.py
+python -m fluxserve.cli --help
+```
+
+The launcher accepts `IMAGE_NAME`, `CONTAINER_NAME`, `HOST_FLUX_SERVE`,
+`HOST_HF_CACHE`, and `CACHE_ROOT` overrides. The default native build target is
+Hopper (SM90); override `TORCH_CUDA_ARCH_LIST` when building packages if needed.
+
+
+### Option 3: Run UV Environment
 
 For host prerequisites, CUDA architecture selection, and troubleshooting, see
 [Building FluxServe with uv](uv_build.md).
