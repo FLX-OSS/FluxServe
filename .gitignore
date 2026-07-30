@@ -46,6 +46,9 @@ docker/commands/*
 # experimental runs
 **/runs/
 
+# tools
+**/tools/
+**/*_audit.**
 
 # mysql
 mysql
@@ -104,3 +107,5 @@ test/e2e/v1/*.log
 test/e2e/*.log
 # Exclude build artifacts
 bin/
+.sgl-kernel-audit/
+.sgl-kernel-benchmarks/

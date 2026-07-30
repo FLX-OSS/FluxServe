@@ -47,11 +47,18 @@ class BuildNative(Command):
             return
 
         from flux_kernel.cuda.rmsnorm import ensure_rmsnorm_fused_parallel_built
+        from flux_kernel.cuda.activation import build_activation
+        from flux_kernel.cuda.moe import build_moe
+        from flux_kernel.cuda.rope import build_rope
 
         ensure_rmsnorm_fused_parallel_built(
             force=False,
             verbose=bool(getattr(self, "verbose", False)),
         )
+        verbose = bool(getattr(self, "verbose", False))
+        build_activation(force=False, verbose=verbose)
+        build_moe(force=False, verbose=verbose)
+        build_rope(force=False, verbose=verbose)
 
 
 class BuildPyWithNative(build_py):
@@ -84,6 +91,9 @@ setup(
             "objs/*.so",
             "objs/*.build",
         ],
+        "flux_kernel.cuda.activation": ["csrc/**/*.cu", "csrc/**/*.cuh", "csrc/**/*.h", "objs/*.so", "objs/*.build"],
+        "flux_kernel.cuda.moe": ["csrc/**/*.cu", "csrc/**/*.cuh", "csrc/**/*.h", "objs/*.so", "objs/*.build"],
+        "flux_kernel.cuda.rope": ["csrc/**/*.cu", "csrc/**/*.cuh", "csrc/**/*.h", "objs/*.so", "objs/*.build"],
     },
     include_package_data=True,
     cmdclass={

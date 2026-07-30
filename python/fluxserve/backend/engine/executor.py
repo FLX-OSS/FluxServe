@@ -25,6 +25,8 @@ from typing import Protocol
 
 import torch
 
+from fluxserve.diagnostics.sgl_kernel_trace import trace_phase
+
 from .request import RequestState
 
 
@@ -63,6 +65,7 @@ class BlockDiffusionExecutor:
         self.runner = runner
         self.tokenizer = tokenizer
 
+    @trace_phase("request_eager")
     async def execute_batch(self, requests: list[RequestState]) -> list[ExecutionResult]:
         if not requests:
             return []
@@ -116,6 +119,7 @@ class BlockDiffusionExecutor:
             )
         return results
 
+    @trace_phase("request_eager")
     async def execute_forward_plan(
         self, op, states_by_id: dict[str, RequestState]
     ) -> list[ForwardStepResult]:

@@ -25,6 +25,10 @@ import argparse
 import asyncio
 import logging
 
+from fluxserve.diagnostics.sgl_kernel_trace import bootstrap as _bootstrap_sgl_trace
+
+_bootstrap_sgl_trace()
+
 import torch
 from transformers import AutoConfig, AutoTokenizer
 
