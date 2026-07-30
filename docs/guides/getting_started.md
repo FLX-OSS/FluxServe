@@ -29,12 +29,6 @@ git clone https://github.com/FLX-OSS/FluxServe
 cd FluxServe
 ```
 
-Install the Python runtime:
-
-```bash
-pip install -e .
-```
-
 Install the flux-kernel package:
 
 ```bash
@@ -45,6 +39,12 @@ Install the flux-scheduler package:
 
 ```bash
 pip install -e flux-scheduler
+```
+
+Install the Python runtime:
+
+```bash
+pip install -e .
 ```
 
 Launch FluxServe engine:

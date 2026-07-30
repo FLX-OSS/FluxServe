@@ -33,6 +33,7 @@ manager/dist/*
 **/gh200/
 **/openai/
 **/scripts/
+*.def
 
 # foundry related
 **/foundry/

@@ -24,6 +24,7 @@
 
 import logging
 import math
+from functools import lru_cache
 from typing import Optional
 
 import torch
@@ -31,6 +32,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from transformers import PretrainedConfig
+from flux_kernel.ops import silu_and_mul
 
 from fluxserve.backend.distributed import (
     divide,
@@ -47,8 +49,12 @@ from fluxserve.backend.utils.runtime_utils import (
 
 _is_cuda = is_cuda()
 
-if _is_cuda:
-    from sgl_kernel import gelu_and_mul, gelu_tanh_and_mul, silu_and_mul
+
+@lru_cache(maxsize=1)
+def _get_sgl_gelu_kernels():
+    from sgl_kernel import gelu_and_mul, gelu_tanh_and_mul
+
+    return gelu_and_mul, gelu_tanh_and_mul
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +72,7 @@ class SiluAndMul(CustomOp):
         return out
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if _is_cuda and "silu_and_mul" in globals():
+        if _is_cuda:
             return self.forward_cuda(x)
         return self.forward_native(x)
 
@@ -80,6 +86,7 @@ class GeluAndMul(CustomOp):
         d = x.shape[-1] // 2
         output_shape = x.shape[:-1] + (d,)
         out = torch.empty(output_shape, dtype=x.dtype, device=x.device)
+        gelu_and_mul, gelu_tanh_and_mul = _get_sgl_gelu_kernels()
         if self.approximate == "tanh":
             gelu_tanh_and_mul(x, out)
         elif self.approximate == "none":
@@ -96,8 +103,11 @@ class GeluAndMul(CustomOp):
         return self._forward_impl(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if _is_cuda and "gelu_and_mul" in globals():
-            return self.forward_cuda(x)
+        if _is_cuda:
+            try:
+                return self.forward_cuda(x)
+            except ImportError:
+                pass
         return self.forward_native(x)
 
 

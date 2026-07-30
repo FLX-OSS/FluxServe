@@ -24,13 +24,14 @@ from typing import Tuple
 
 import torch
 import triton
+from flux_kernel.ops import moe_align_block_size as flux_moe_align_block_size
 
 from fluxserve.backend.utils.runtime_utils import is_cuda, is_hip
 
 _is_cuda = is_cuda()
 _is_hip = is_hip()
 
-if _is_cuda or _is_hip:
+if _is_hip:
     from sgl_kernel import moe_align_block_size as sgl_moe_align_block_size
 
 
@@ -94,7 +95,8 @@ def moe_align_block_size(
     if not fuse_sorted_ids_padding:
         sorted_ids.fill_(topk_ids.numel())
 
-    sgl_moe_align_block_size(
+    align_impl = flux_moe_align_block_size if _is_cuda else sgl_moe_align_block_size
+    align_impl(
         topk_ids,
         num_experts + 1,
         block_size,

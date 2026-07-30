@@ -36,6 +36,7 @@ from typing import (
 
 import torch
 import torch.nn.functional as F
+from flux_kernel.ops import moe_fused_gate
 
 from fluxserve.backend.utils.runtime_utils import CustomOp
 from fluxserve.backend.eplb import expert_location_dispatch
@@ -64,10 +65,6 @@ logger = logging.getLogger(__name__)
 
 
 _is_cuda = is_cuda()
-
-if _is_cuda:
-    from sgl_kernel import moe_fused_gate
-    from sgl_kernel import topk_softmax
 
 # -------------------------------- TopKConfig ---------------------------------------
 
@@ -283,7 +280,7 @@ class TopK(CustomOp):
         num_token_non_padded: Optional[torch.Tensor] = None,
         expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
     ) -> TopKOutput:
-        if _is_cuda and "routing" in globals() and "topk_softmax" in globals():
+        if _is_cuda and "routing" in globals():
             return self.forward_cuda(
                 hidden_states,
                 router_logits,
@@ -381,6 +378,8 @@ def fused_topk(
     num_token_non_padded: Optional[torch.Tensor] = None,
     expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
 ):
+    from sgl_kernel import topk_softmax
+
     assert hidden_states.shape[0] == gating_output.shape[0], "Number of tokens mismatch"
 
     M, _ = hidden_states.shape
