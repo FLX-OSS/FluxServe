@@ -58,6 +58,17 @@ from fluxserve.backend.execution.forward_batch_info import (
 )
 from fluxserve.backend.utils.runtime_utils import dump_to_file
 
+
+def top_p_normalize_probs_torch(
+    probs: torch.Tensor,
+    top_ps: torch.Tensor,
+) -> torch.Tensor:
+    probs_sort, probs_idx = probs.sort(dim=-1, descending=True)
+    probs_sum = torch.cumsum(probs_sort, dim=-1)
+    probs_sort[(probs_sum - probs_sort) > top_ps.view(-1, 1)] = 0.0
+    probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
+    return torch.zeros_like(probs_sort).scatter_(-1, probs_idx, probs_sort)
+
 logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass
@@ -752,8 +763,6 @@ class LogitsProcessor(nn.Module):
             logits_metadata.top_p_normalized_logprobs
             and (logits_metadata.top_p != 1.0).any()
         ):
-            from fluxserve.backend.layers.sampler import top_p_normalize_probs_torch
-
             probs = torch.softmax(last_logits, dim=-1)
             del last_logits
             probs = top_p_normalize_probs_torch(probs, logits_metadata.top_p)

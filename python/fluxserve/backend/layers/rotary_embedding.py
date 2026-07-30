@@ -183,30 +183,20 @@ class RotaryEmbedding(CustomOp):
         offsets: Optional[torch.Tensor] = None,
         fused_set_kv_buffer_arg: Optional[Any] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if fused_set_kv_buffer_arg is not None:
+            raise NotImplementedError("fused KV-cache scatter is not supported")
         if _is_cuda and (self.head_size in [64, 128, 256, 512]):
             if self.cos_sin_cache.device != query.device:
                 self.cos_sin_cache = self.cos_sin_cache.to(query.device)
-            rope_impl = apply_rope_with_cos_sin_cache_inplace
-            if fused_set_kv_buffer_arg is not None:
-                from sgl_kernel import apply_rope_with_cos_sin_cache_inplace as rope_impl
-            rope_impl(
+            apply_rope_with_cos_sin_cache_inplace(
                 positions=positions,
                 query=query,
                 key=key,
                 head_size=self.head_size,
                 cos_sin_cache=self.cos_sin_cache,
                 is_neox=self.is_neox_style,
-                # Compatible with old sgl-kernel
-                **(
-                    dict(fused_set_kv_buffer_arg=fused_set_kv_buffer_arg)
-                    if fused_set_kv_buffer_arg is not None
-                    else {}
-                ),
             )
         else:
-            assert (
-                fused_set_kv_buffer_arg is None
-            ), "save kv cache is not supported for vllm_rotary_embedding."
             if getattr(self, "vllm_rotary_embedding", None) is None:
                 return self.forward_native(positions, query, key, offsets, None)
             self.cos_sin_cache = self.cos_sin_cache.to(query.device, dtype=query.dtype)
