@@ -260,6 +260,7 @@ def build_server_args(args, model_config):
         ep_size=args.ep_size,
         pp_size=1,
         moe_dense_tp_size=1 if args.dp_size > 1 else None,
+        max_num_seqs=args.batch_size,
     )
 
 
@@ -281,7 +282,8 @@ def build_runner_config(args, batch_info):
         supported_batch_sizes=batch_info.supported_batch_sizes,
         enable_cuda_graph=args.use_cuda_graph,
         use_cross_block=args.batch_size == 1,
-        cache="",
+        cache=args.cache,
+        prefix_cache_num_pages=args.prefix_cache_num_pages,
         parallel_decoding=args.parallel_decoding,
         threshold=args.threshold,
         low_threshold=args.low_threshold,
@@ -416,6 +418,18 @@ def run_worker(args, *, init_method: str = "env://"):
             and getattr(args, "kv_cache_layout", "dense") == "paged"
         ),
     )
+    if args.cache == "prefix":
+        page_size = args.page_size or args.block_length
+        pages_per_sequence = (
+            batch_info.max_length + page_size - 1
+        ) // page_size
+        min_active_pages = args.batch_size * pages_per_sequence + 1
+        if args.prefix_cache_num_pages < min_active_pages:
+            raise ValueError(
+                "--prefix-cache-num-pages is too small for one active batch: "
+                f"need at least {min_active_pages}, got "
+                f"{args.prefix_cache_num_pages}"
+            )
     batch_info = maybe_disable_sorting(batch_info, args.disable_sorting)
     logger.info(
         "[Info] Input batching order: "
@@ -464,6 +478,16 @@ def run_worker(args, *, init_method: str = "env://"):
         )
 
         warmup_runner(runner, args, device, logger)
+        if args.cache == "prefix":
+            from fluxserve.backend.managers.prefix_cache import PrefixCacheManager
+
+            runner.ensure_paged_kv_cache(
+                num_device_pages=args.prefix_cache_num_pages
+            )
+            runner.prefix_cache_manager = PrefixCacheManager(
+                page_size=int(runner.runner_config.page_size),
+                num_pages=args.prefix_cache_num_pages,
+            )
 
         sorted_input_ids = [all_input_ids[i] for i in batch_info.sorted_indices]
         sorted_padded_gen_lens = [padded_gen_lens[i] for i in batch_info.sorted_indices]
@@ -510,6 +534,10 @@ def run_worker(args, *, init_method: str = "env://"):
         stop = time.time()
 
         if rank == 0:
+            if args.cache == "prefix":
+                logger.info(
+                    f"[Prefix cache] {runner.prefix_cache_manager.snapshot()}"
+                )
             _write_results(
                 args,
                 batch_info,
@@ -622,6 +650,14 @@ def add_bench_offline_subparser(subparsers) -> None:
     parser.add_argument("--low-threshold", "--low_threshold", dest="low_threshold", type=float, default=0.3)
     parser.add_argument("--parallel-decoding", "--parallel_decoding", dest="parallel_decoding", default="threshold")
     parser.add_argument("--use-credit", "--use_credit", dest="use_credit", action="store_true")
+    parser.add_argument("--cache", choices=("prefix",), default="")
+    parser.add_argument(
+        "--prefix-cache-num-pages",
+        "--prefix_cache_num_pages",
+        dest="prefix_cache_num_pages",
+        type=int,
+        default=0,
+    )
     parser.add_argument("--dataset-format", "--dataset_format", dest="dataset_format", choices=("auto", "legacy", "openai"), default="openai")
     parser.add_argument(
         "--disable-sorting",
@@ -642,6 +678,23 @@ def bench_offline(args) -> None:
 
     reject_external_distributed_launch()
     normalize_attention_backend_args(args)
+    if args.cache == "prefix":
+        page_size = args.page_size or args.block_length
+        if not (
+            args.attention_backend == "flashinfer"
+            and args.flashinfer_prefill_mode == "paged"
+            and args.flashinfer_cache_mode == "paged"
+            and args.kv_cache_layout == "paged"
+        ):
+            raise ValueError(
+                "--cache prefix requires FlashInfer paged prefill, cache, and KV layout"
+            )
+        if args.block_length % page_size != 0:
+            raise ValueError(
+                "--cache prefix requires page_size to divide block_length"
+            )
+        if args.prefix_cache_num_pages <= 1:
+            raise ValueError("--prefix-cache-num-pages must be greater than 1")
     if args.use_quant:
         args.quantization = "modelopt_fp8"
     args.log_file = resolve_log_file(args)

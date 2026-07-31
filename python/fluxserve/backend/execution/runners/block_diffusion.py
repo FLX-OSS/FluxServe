@@ -255,27 +255,57 @@ class BlockDiffusionRunner(ModelRunner):
         if self.runner_config.attention_backend != "flex" and not use_unbounded_prefill:
             decoding_start = decoding_start.clip(0, self.prefilling_limit)
         prefilling_lengths = decoding_start.clone()
-
-        self.past_key_values = self.allocate_kv_cache(batch_size)
+        prefix_offsets = torch.zeros_like(prefilling_lengths)
+        prefix_manager = getattr(self, "prefix_cache_manager", None)
+        prefix_leases = []
+        if prefix_manager is None:
+            self.past_key_values = self.allocate_kv_cache(batch_size)
+        else:
+            required_pages = (
+                total_length + self.past_key_values.page_size - 1
+            ) // self.past_key_values.page_size
+            for seq_id in range(batch_size):
+                prompt_len = int(non_mask_number[seq_id].item())
+                lease = prefix_manager.acquire(
+                    prompts[seq_id, :prompt_len].tolist(),
+                    cacheable_length=int(decoding_start[seq_id].item()),
+                    required_pages=required_pages,
+                )
+                prefix_leases.append(lease)
+                prefix_offsets[seq_id] = lease.matched_tokens
+                prefilling_lengths[seq_id] -= lease.matched_tokens
+                self.past_key_values.set_page_table(seq_id, lease.page_ids)
         num_layers = self.model.model.config.num_hidden_layers
 
-        self._prefill_batches(
-            x,
-            prefilling_lengths,
-            non_mask_number,
-            attention_mask,
-            pos_ids,
-            num_layers,
-            mini_batch_size,
-        )
-        self._decode_batches(
-            x,
-            decoding_start,
-            total_length,
-            pos_ids,
-            num_layers,
-            mini_batch_size,
-        )
+        try:
+            self._prefill_batches(
+                x,
+                prefilling_lengths,
+                non_mask_number,
+                attention_mask,
+                pos_ids,
+                num_layers,
+                mini_batch_size,
+                prefix_offsets=prefix_offsets,
+            )
+            if prefix_manager is not None:
+                for seq_id, lease in enumerate(prefix_leases):
+                    prompt_len = int(non_mask_number[seq_id].item())
+                    prefix_manager.commit(
+                        lease, prompts[seq_id, :prompt_len].tolist()
+                    )
+                    self.past_key_values.set_page_table(seq_id, lease.page_ids)
+            self._decode_batches(
+                x,
+                decoding_start,
+                total_length,
+                pos_ids,
+                num_layers,
+                mini_batch_size,
+            )
+        finally:
+            for lease in prefix_leases:
+                prefix_manager.release(lease)
 
         logger.info("The number of diffusion iterations: %s", self.num_forwards)
         return x.get_generated_tokens()
@@ -289,7 +319,9 @@ class BlockDiffusionRunner(ModelRunner):
         pos_ids,
         num_layers,
         mini_batch_size,
+        prefix_offsets=None,
     ):
+        del prefix_offsets
         prefilling_flag = prefilling_lengths > 0
         while torch.any(prefilling_flag):
             seq_ids = select_batch_sequences_by_mask_number(

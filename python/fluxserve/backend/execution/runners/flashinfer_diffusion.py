@@ -620,6 +620,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         pos_ids,
         num_layers,
         mini_batch_size,
+        prefix_offsets=None,
     ):
         if self._use_flashinfer_paged_prefill():
             return self._prefill_batches_paged(
@@ -628,6 +629,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 pos_ids,
                 num_layers,
                 mini_batch_size,
+                prefix_offsets,
             )
         if self.runner_config.flashinfer_prefill_mode != "ragged":
             return super()._prefill_batches(
@@ -638,6 +640,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 pos_ids,
                 num_layers,
                 mini_batch_size,
+                prefix_offsets=prefix_offsets,
             )
 
         prefilling_flag = prefilling_lengths > 0
@@ -686,28 +689,48 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         pos_ids,
         num_layers,
         mini_batch_size,
+        prefix_offsets=None,
     ):
+        if prefix_offsets is None:
+            prefix_offsets = torch.zeros_like(prefilling_lengths)
         prefilling_flag = prefilling_lengths > 0
         while torch.any(prefilling_flag):
             seq_ids = select_batch_sequences_by_mask_number(
                 x, prefilling_flag, self.decoder.mask_id, mini_batch_size
             )
-            prefilling_length = int(torch.max(prefilling_lengths[seq_ids]).item())
-            prefilling_x = x.select_seqs(seq_ids)
+            q_lens = prefilling_lengths[seq_ids]
+            q_offsets = prefix_offsets[seq_ids]
+            prefilling_length = int(torch.max(q_lens).item())
+            prefill_tokens = torch.full(
+                (len(seq_ids), prefilling_length),
+                self.decoder.mask_id,
+                dtype=torch.long,
+                device=self.device,
+            )
+            for row, seq_id in enumerate(seq_ids.tolist()):
+                q_len = int(q_lens[row].item())
+                q_offset = int(q_offsets[row].item())
+                prefill_tokens[row, :q_len] = x.data[
+                    seq_id, q_offset : q_offset + q_len
+                ]
             forward_batch = self._make_forward_batch(
                 len(seq_ids) * prefilling_length,
                 is_prefill=True,
             )
-            forward_batch = self._make_flashinfer_paged_prefill_batch(
+            forward_batch = self._make_scheduler_paged_batch(
                 seq_ids=seq_ids,
-                prefilling_lengths=prefilling_lengths,
+                q_offsets=q_offsets,
+                q_lens=q_lens,
+                kv_lens=q_offsets + q_lens,
                 forward_batch=forward_batch,
+                is_prefill=True,
             )
             output = self.model(
-                prefilling_x[:, :prefilling_length].contiguous(),
+                prefill_tokens,
                 use_cache=True,
                 attention_mask=None,
-                position_ids=pos_ids[seq_ids, :prefilling_length].contiguous(),
+                position_ids=q_offsets.unsqueeze(1)
+                + torch.arange(prefilling_length, device=self.device),
                 past_key_values=[
                     self.past_key_values.layer_paged_kv(layer_id)
                     for layer_id in range(num_layers)

@@ -121,6 +121,7 @@ class RunnerConfig:
     use_cross_block: bool = False
     early_stop: bool = True
     cache: str = ""
+    prefix_cache_num_pages: int = 0
     max_cache_length_align: int = 128
     parallel_decoding: str = "hierarchy"
     threshold: float = 0.9
