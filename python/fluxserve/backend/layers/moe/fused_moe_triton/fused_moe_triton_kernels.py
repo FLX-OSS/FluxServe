@@ -27,11 +27,6 @@ import torch
 import triton
 import triton.language as tl
 
-from fluxserve.backend.layers.quantization.fp8_kernel import (
-    per_token_group_quant_fp8,
-    scaled_fp8_quant,
-    sglang_per_token_group_quant_fp8,
-)
 from fluxserve.backend.utils.runtime_utils import (
     get_bool_env_var,
     is_cuda,
@@ -588,25 +583,7 @@ def invoke_fused_moe_kernel(
 
     padded_size = 0
     if use_fp8_w8a8:
-        assert B_scale is not None
-        if block_shape is None:
-            # activation tensor-wise fp8 quantization, dynamic or static
-            padded_size = padding_size
-            # activations apply per-token quantization when weights apply per-channel quantization by default
-            A, A_scale = scaled_fp8_quant(
-                A, A_scale, use_per_token_if_dynamic=per_channel_quant
-            )
-        else:
-            # activation block-wise fp8 quantization
-            assert len(block_shape) == 2
-            block_n, block_k = block_shape[0], block_shape[1]
-            if _is_cuda:
-                A, A_scale = sglang_per_token_group_quant_fp8(A, block_k)
-            else:
-                A, A_scale = per_token_group_quant_fp8(A, block_k)
-            assert triton.cdiv(A.shape[-1], block_k) == A_scale.shape[-1]
-            assert triton.cdiv(B.shape[-2], block_n) == B_scale.shape[-2]
-            assert triton.cdiv(B.shape[-1], block_k) == B_scale.shape[-1]
+        raise NotImplementedError("FP8 MoE quantization is not supported")
     elif use_int8_w8a8:
         assert B_scale is not None
         if block_shape is None:

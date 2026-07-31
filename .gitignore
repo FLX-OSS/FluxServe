@@ -46,6 +46,7 @@ docker/commands/*
 
 # experimental runs
 **/runs/
+**/tp*/
 
 # tools
 **/tools/

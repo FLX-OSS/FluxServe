@@ -45,7 +45,6 @@ from fluxserve.backend.layers.dp_attention import (
 )
 from fluxserve.backend.layers.moe import (
     get_moe_a2a_backend,
-    should_use_flashinfer_cutlass_moe_fp4_allgather,
 )
 from fluxserve.backend.managers.schedule_batch import global_server_args_dict
 from fluxserve.backend.execution.forward_batch_info import ForwardBatch
@@ -141,7 +140,6 @@ class LayerScatterModes:
                 if (
                     # Token dispatch/combine will be handled outside of LayerCommunicator for these modes.
                     not get_moe_a2a_backend().is_none()
-                    or should_use_flashinfer_cutlass_moe_fp4_allgather()
                 )
                 else ScatterMode.FULL
             )

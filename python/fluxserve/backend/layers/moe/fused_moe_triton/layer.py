@@ -36,64 +36,28 @@ from fluxserve.backend.eplb.expert_location import get_global_expert_location_me
 from fluxserve.backend.layers.moe import (
     MoeRunnerConfig,
     get_moe_runner_backend,
-    should_use_flashinfer_trtllm_moe,
 )
-from fluxserve.backend.layers.moe.token_dispatcher.standard import (
-    StandardDispatcher,
-    StandardDispatchOutput,
-)
+from fluxserve.backend.layers.moe.token_dispatcher.standard import StandardDispatcher
 from fluxserve.backend.layers.moe.topk import TopKOutput, TopKOutputChecker
 from fluxserve.backend.layers.quantization.base_config import (
     FusedMoEMethodBase,
     QuantizationConfig,
     QuantizeMethodBase,
 )
-from fluxserve.backend.layers.quantization.fp8 import Fp8MoEMethod
-from fluxserve.backend.layers.quantization.modelopt_quant import ModelOptNvFp4FusedMoEMethod
 from fluxserve.backend.layers.quantization.unquant import UnquantizedFusedMoEMethod
 from fluxserve.backend.layers.utils import narrow_padded_param_and_loaded_weight
 from fluxserve.backend.managers.schedule_batch import global_server_args_dict
 from fluxserve.backend.utils.runtime_utils import (
     get_bool_env_var,
     is_cpu,
-    is_flashinfer_available,
     is_hip,
-    next_power_of_2,
-    round_up,
 )
-
-if is_flashinfer_available():
-    from flashinfer import (
-        RoutingMethodType,
-        fp4_quantize,
-        reorder_rows_for_gated_act_gemm,
-        shuffle_matrix_a,
-        shuffle_matrix_sf_a,
-    )
 
 _is_hip = is_hip()
 _is_cpu = is_cpu()
 
 
-# Try to import FP4 TRTLLM function if flashinfer is available
-trtllm_fp4_block_scale_moe = None
-if should_use_flashinfer_trtllm_moe():
-    try:
-        from flashinfer.fused_moe import trtllm_fp4_block_scale_moe
-    except ImportError:
-        trtllm_fp4_block_scale_moe = None
-
 logger = logging.getLogger(__name__)
-
-
-def _get_tile_tokens_dim(num_tokens, top_k, num_experts):
-    # Guess tokens per expert assuming perfect expert distribution first.
-    num_tokens_per_expert = (num_tokens * top_k) // num_experts
-    # And pad the number to the next power of 2.
-    tile_tokens_dim = next_power_of_2(num_tokens_per_expert)
-    # Cap to 8-64 tokens per CTA tile as it's the range supported by the kernel.
-    tile_tokens_dim = min(max(tile_tokens_dim, 8), 64)
-    return tile_tokens_dim
 
 
 class FusedMoeWeightScaleSupported(Enum):
@@ -160,13 +124,6 @@ class FusedMoE(torch.nn.Module):
         self.expert_map_cpu = None
         self.expert_map_gpu = None
 
-        enable_flashinfer_cutlass_moe = get_moe_runner_backend().is_flashinfer_cutlass()
-
-        if enable_flashinfer_cutlass_moe and quant_config is None:
-            logger.warning("Disable flashinfer MoE when quantization config is None.")
-            enable_flashinfer_cutlass_moe = False
-
-        self.enable_flashinfer_cutlass_moe = enable_flashinfer_cutlass_moe
         self.moe_ep_size = get_moe_expert_parallel_world_size()
         self.moe_ep_rank = get_moe_expert_parallel_rank()
         self.moe_tp_size = get_moe_tensor_parallel_world_size()
@@ -195,14 +152,6 @@ class FusedMoE(torch.nn.Module):
         self.use_triton_kernels = get_moe_runner_backend().is_triton_kernel()
 
         self.quant_config = quant_config
-        self.use_flashinfer_mxfp4_moe = get_moe_runner_backend().is_flashinfer_mxfp4()
-        # TODO maybe we should remove this `if`, since `Mxfp4MoEMethod` does another round-up logic
-        if (
-            self.quant_config is not None
-            and self.quant_config.get_name() == "mxfp4"
-            and self.use_flashinfer_mxfp4_moe
-        ):
-            hidden_size = round_up(hidden_size, 256)
         self.hidden_size = hidden_size
 
         self.moe_runner_config = MoeRunnerConfig(
@@ -246,12 +195,7 @@ class FusedMoE(torch.nn.Module):
         self.quant_method.create_moe_runner(self, self.moe_runner_config)
         self.dispatcher = StandardDispatcher()
 
-        self.should_fuse_routed_scaling_factor_in_topk = isinstance(
-            self.quant_method, ModelOptNvFp4FusedMoEMethod
-        ) or (
-            isinstance(self.quant_method, Fp8MoEMethod)
-            and self.quant_method.use_cutlass_fused_experts_fp8
-        )
+        self.should_fuse_routed_scaling_factor_in_topk = False
 
     def _load_per_tensor_weight_scale(
         self,
@@ -491,23 +435,6 @@ class FusedMoE(torch.nn.Module):
         expert_id: Optional[int],
     ) -> None:
 
-        # if expert_id is None, then
-        # all the experts are loaded at the same time
-        if (
-            not expert_id
-            and self.quant_config is not None
-            and self.quant_config.get_name() == "mxfp4"
-            and self.quant_config.is_static_cfg()
-        ):
-            if "bias" in weight_name:
-                dim1 = loaded_weight.shape[1]
-                param.data[:, :dim1].copy_(loaded_weight)
-            else:
-                dim1 = loaded_weight.shape[1]
-                dim2 = loaded_weight.shape[2]
-                param.data[:, :dim1, :dim2].copy_(loaded_weight)
-            return
-
         global_expert_location_metadata = get_global_expert_location_metadata()
         if global_expert_location_metadata is None:
             self._weight_loader_impl(
@@ -588,13 +515,6 @@ class FusedMoE(torch.nn.Module):
                 f"shard_id must be ['w1','w2','w3'] but " f"got {shard_id}."
             )
 
-        # Flashinfer assumes w31 format for w13_weight. Same for the scales.
-        if should_use_flashinfer_trtllm_moe() and (
-            isinstance(self.quant_method, ModelOptNvFp4FusedMoEMethod)
-            or isinstance(self.quant_method, Fp8MoEMethod)
-        ):
-            shard_id = {"w1": "w3", "w3": "w1", "w2": "w2"}[shard_id]
-
         WEIGHT_SCALE_SUPPORTED = [e.value for e in FusedMoeWeightScaleSupported]
         # Fetch the dim to shard the parameter/loaded weight
         # based on the shard id. This will be whatever
@@ -650,34 +570,6 @@ class FusedMoE(torch.nn.Module):
                 expert_data=expert_data,
                 tp_rank=tp_rank,
             )
-            return
-
-        if "ModelOpt" in self.quant_method.__class__.__name__:
-            # Determine per-tensor weight scale patterns based on variant
-            is_fp4_variant = isinstance(self.quant_method, ModelOptNvFp4FusedMoEMethod)
-
-            # FP4 uses "weight_scale_2" for per-tensor, FP8 uses "weight_scale" for per-tensor
-            per_tensor_conditions = (
-                "weight_scale_2" in weight_name
-                if is_fp4_variant
-                else "weight_scale" in weight_name
-            ) or "input_scale" in weight_name
-
-            if per_tensor_conditions:
-                self._load_per_tensor_weight_scale(
-                    shard_id=shard_id,
-                    param=param,
-                    loaded_weight=loaded_weight,
-                    expert_id=expert_id,
-                )
-            elif "weight" in weight_name:
-                self._load_model_weight_or_group_weight_scale(
-                    shard_id=shard_id,
-                    shard_dim=shard_dim,
-                    loaded_weight=loaded_weight,
-                    expert_data=expert_data,
-                    tp_rank=tp_rank,
-                )
             return
 
         # Case weight scales and zero_points
@@ -756,22 +648,6 @@ class FusedMoE(torch.nn.Module):
     ) -> None:
         tp_rank = self.moe_tp_rank
 
-        if (
-            self.quant_config is not None
-            and self.quant_config.get_name() == "mxfp4"
-            and self.quant_config.is_static_cfg()
-        ):
-            if "bias" in weight_name:
-                dim1 = loaded_weight.shape[1]
-                param.data[:, :dim1].copy_(loaded_weight)
-            elif "scale" in weight_name:
-                param.data.copy_(loaded_weight)
-            else:
-                dim1 = loaded_weight.shape[1]
-                dim2 = loaded_weight.shape[2]
-                param.data[:, :dim1, :dim2].copy_(loaded_weight)
-            return
-
         # compressed-tensors checkpoints with packed weights are stored flipped
         # TODO: check self.quant_method.quant_config.quant_format
         # against known CompressionFormat enum values that have this quality
@@ -829,7 +705,7 @@ class FusedMoE(torch.nn.Module):
         origin_hidden_states_dim = hidden_states.shape[-1]
         assert self.quant_method is not None
 
-        if self.moe_ep_size > 1 and not self.enable_flashinfer_cutlass_moe:
+        if self.moe_ep_size > 1:
             if self.expert_map_cpu is not None and self.expert_map_gpu is None:
                 # If we are in EP mode, we need to move the expert map to GPU.
                 self.expert_map_gpu = self.expert_map_cpu.to(device="cuda")
@@ -912,33 +788,6 @@ class FusedMoE(torch.nn.Module):
         ]
 
     @classmethod
-    def make_expert_params_mapping_fused_mxfp4(
-        cls,
-        ckpt_gate_up_proj_name: str,
-        ckpt_down_proj_name: str,
-        ckpt_gate_up_proj_bias_name: str,
-        ckpt_down_proj_bias_name: str,
-        ckpt_gate_up_proj_scale_name: str,
-        ckpt_down_proj_scale_name: str,
-    ):
-        return [
-            ("experts.w13_weight", f"experts.{ckpt_gate_up_proj_name}", "w13"),
-            (
-                "experts.w13_weight_bias",
-                f"experts.{ckpt_gate_up_proj_bias_name}",
-                "w13",
-            ),
-            ("experts.w2_weight", f"experts.{ckpt_down_proj_name}", "w2"),
-            ("experts.w2_weight_bias", f"experts.{ckpt_down_proj_bias_name}", "w2"),
-            (
-                "experts.w13_weight_scale",
-                f"experts.{ckpt_gate_up_proj_scale_name}",
-                "w13",
-            ),
-            ("experts.w2_weight_scale", f"experts.{ckpt_down_proj_scale_name}", "w2"),
-        ]
-
-    @classmethod
     def make_expert_input_scale_params_mapping(
         cls,
         num_experts: int,
@@ -954,130 +803,3 @@ class FusedMoE(torch.nn.Module):
             for expert_id in range(num_experts)
             for shard_id in ["w1", "w2", "w3"]
         ]
-
-
-class FlashInferFusedMoE(FusedMoE):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.use_flashinfer_trtllm_moe = should_use_flashinfer_trtllm_moe()
-
-    def forward(self, hidden_states: torch.Tensor, topk_output: TopKOutput):
-        assert self.use_flashinfer_trtllm_moe
-        assert (
-            self.moe_runner_config.activation == "silu"
-        ), "Only silu is supported for flashinfer blockscale fp8 moe"
-        assert self.quant_method is not None
-        assert (
-            topk_output.topk_config.renormalize
-        ), "Renormalize is required for flashinfer blockscale fp8 moe"
-        assert (
-            self.num_fused_shared_experts == 0
-        ), "Fused shared experts are not supported for flashinfer blockscale fp8 moe"
-
-        assert TopKOutputChecker.format_is_bypassed(topk_output)
-
-        # Matrix multiply.
-        final_hidden_states = self.quant_method.apply_with_router_logits(
-            layer=self,
-            dispatch_output=StandardDispatchOutput(
-                hidden_states=hidden_states, topk_output=topk_output
-            ),
-        )
-
-        if self.reduce_results and (self.moe_tp_size > 1 or self.moe_ep_size > 1):
-            final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
-
-        return final_hidden_states
-
-
-class FlashInferFP4MoE(FusedMoE):
-    """FP4 TRTLLM MoE implementation using FlashInfer."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    # ---------------------------------------------------------------------
-    # Helper: quantize hidden states to FP4 each forward pass
-    # ---------------------------------------------------------------------
-    def _quantize_hidden_states_fp4(self, hidden_states: torch.Tensor):
-        """
-        Quantize hidden states using global scale factor from quantization method.
-
-        Global scale factor is set by ModelOptNvFp4FusedMoEMethod during weight loading.
-        Only block scales are computed at runtime for efficiency.
-
-        Returns (packed_fp4_uint8, scale_float8_e4m3fn_runtime, global_scale_float32)
-        """
-
-        # flashinfer.fp4_quantize returns (packed_uint8, scale_fp8)
-        # Only the block scales are computed at runtime
-        hs_fp4_bytes, hs_sf_bytes = fp4_quantize(
-            hidden_states,
-            self.w13_input_scale_quant,
-            16,  # sf_vec_size
-            False,  # use_ue8m0
-            False,  # is_sf_swizzled_layout
-        )
-
-        hs_fp4 = hs_fp4_bytes.reshape(
-            hidden_states.shape[0], hidden_states.shape[1] // 2
-        )
-        hs_sf = hs_sf_bytes.view(torch.float8_e4m3fn).reshape(-1)
-
-        return hs_fp4, hs_sf
-
-    def forward(self, hidden_states: torch.Tensor, topk_output: TopKOutput):
-        """Forward pass using FP4 TRTLLM kernel.
-
-        Args:
-            hidden_states: Input tensor
-            topk_output: TopKOutput object with Bypassed format
-        """
-        assert isinstance(self.quant_method, ModelOptNvFp4FusedMoEMethod)
-
-        assert TopKOutputChecker.format_is_bypassed(topk_output)
-
-        router_logits = topk_output.router_logits
-        topk_config = topk_output.topk_config
-
-        hs_fp4, hs_scale_linear = self._quantize_hidden_states_fp4(hidden_states)
-
-        router_logits = router_logits.to(torch.float32)
-
-        result = trtllm_fp4_block_scale_moe(
-            routing_logits=router_logits,
-            routing_bias=topk_config.correction_bias.to(hidden_states.dtype),
-            hidden_states=hs_fp4,
-            hidden_states_scale=hs_scale_linear.view(torch.float8_e4m3fn).flatten(),
-            gemm1_weights=self.gemm1_weights_fp4_shuffled.data,
-            gemm1_weights_scale=self.gemm1_scales_fp4_shuffled.data.view(
-                torch.float8_e4m3fn
-            ),
-            gemm1_bias=None,
-            gemm1_alpha=None,
-            gemm1_beta=None,
-            gemm1_clamp_limit=None,
-            gemm2_weights=self.gemm2_weights_fp4_shuffled.data,
-            gemm2_weights_scale=self.gemm2_scales_fp4_shuffled.data.view(
-                torch.float8_e4m3fn
-            ),
-            gemm2_bias=None,
-            output1_scale_scalar=self.g1_scale_c.data,
-            output1_scale_gate_scalar=self.g1_alphas.data,
-            output2_scale_scalar=self.g2_alphas.data,
-            num_experts=self.num_experts,
-            top_k=topk_config.top_k,
-            n_group=topk_config.num_expert_group,
-            topk_group=topk_config.topk_group,
-            intermediate_size=self.intermediate_size_per_partition,
-            local_expert_offset=self.moe_ep_rank * self.num_local_experts,
-            local_num_experts=self.num_local_experts,
-            routed_scaling_factor=self.moe_runner_config.routed_scaling_factor,
-            tile_tokens_dim=_get_tile_tokens_dim(
-                hidden_states.shape[0], topk_config.top_k, self.num_local_experts
-            ),
-            routing_method_type=RoutingMethodType.DeepSeekV3,
-            do_finalize=True,
-        )[0]
-
-        return result

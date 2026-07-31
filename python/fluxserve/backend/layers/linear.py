@@ -66,18 +66,13 @@ WEIGHT_LOADER_V2_SUPPORTED = [
     "AWQMarlinLinearMethod",
     "AWQLinearMethod",
     "GPTQMarlinLinearMethod",
-    "Fp8LinearMethod",
     "BlockInt8LinearMethod",
     "MarlinLinearMethod",
     "QQQLinearMethod",
     "GPTQMarlin24LinearMethod",
     "TPUInt8LinearMethod",
     "GPTQLinearMethod",
-    "FBGEMMFp8LinearMethod",
-    "ModelOptFp8LinearMethod",
-    "ModelOptFp4LinearMethod",
     "IPEXAWQLinearMethod",
-    "PetitNvFp4LinearMethod",
 ]
 
 _is_cpu = is_cpu()

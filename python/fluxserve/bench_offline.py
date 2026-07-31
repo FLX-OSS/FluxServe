@@ -47,7 +47,6 @@ from fluxserve.backend.execution.runners import (
 )
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
 from fluxserve.backend.layers.moe import initialize_moe_config
-from fluxserve.backend.layers.quantization import QUANTIZATION_METHODS
 from fluxserve.backend.metrics import record_batch_performance_metrics
 from fluxserve.backend.utils.server_args import ServerArgs
 from fluxserve.backend.utils.runtime_utils import require_nvidia_cuda
@@ -251,8 +250,6 @@ def build_server_args(args, model_config):
     return ServerArgs(
         model_name=args.model_name,
         model_config=model_config,
-        quantization=args.quantization,
-        modelopt_quant="fp8" if args.quantization == "modelopt_fp8" else "",
         enable_dp_attention=args.dp_size > 1,
         trust_remote_code=True,
         tp_size=args.parallel_world_size,
@@ -375,7 +372,7 @@ def warmup_runner(runner, args, device, logger):
 
 @torch.no_grad()
 def run_worker(args, *, init_method: str = "env://"):
-    from fluxserve.cli import _resolve_quant_config, set_process_title
+    from fluxserve.cli import _reject_unsupported_quantization, set_process_title
 
     server_args = None
     context = None
@@ -428,16 +425,8 @@ def run_worker(args, *, init_method: str = "env://"):
         args.model_name,
         trust_remote_code=args.trust_remote_code,
     )
-    model_config.quant_config = _resolve_quant_config(
-        model_config,
-        args.quantization,
-    )
-    if model_config.quant_config is None:
-        logger.info("[Info] No supported quantization config detected.")
-    else:
-        logger.info(
-            f"[Info] Using quantization config: {model_config.quant_config.get_name()}"
-        )
+    _reject_unsupported_quantization(model_config)
+    model_config.quant_config = None
 
     server_args = build_server_args(args, model_config)
     server_args.device = device
@@ -602,12 +591,6 @@ def add_bench_offline_subparser(subparsers) -> None:
     parser.add_argument("--ep-size", "--ep_size", dest="ep_size", type=int, default=1)
     parser.add_argument("--pp-size", "--pp_size", dest="pp_size", type=int, default=1)
     parser.add_argument("--distributed-backend", "--distributed_backend", dest="distributed_backend", default="nccl")
-    parser.add_argument(
-        "--quantization",
-        choices=("auto", *QUANTIZATION_METHODS),
-        default="auto",
-    )
-    parser.add_argument("--use-quant", "--use_quant", dest="use_quant", action="store_true")
     parser.add_argument("--use-cuda-graph", "--use_cuda_graph", dest="use_cuda_graph", action="store_true")
     parser.add_argument("--prefilling-limit", "--prefilling_limit", dest="prefilling_limit", type=int, default=128)
     parser.add_argument("--attention-backend", "--attention_backend", dest="attention_backend", choices=("sdpa", "flex", "flashinfer"), default="flashinfer")
@@ -642,8 +625,6 @@ def bench_offline(args) -> None:
 
     reject_external_distributed_launch()
     normalize_attention_backend_args(args)
-    if args.use_quant:
-        args.quantization = "modelopt_fp8"
     args.log_file = resolve_log_file(args)
     os.makedirs(os.path.dirname(args.log_file) or ".", exist_ok=True)
     with open(args.log_file, "w"):

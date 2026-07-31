@@ -20,19 +20,9 @@
 
 from __future__ import annotations
 
-import importlib.util
 import logging
 from enum import Enum
-from functools import lru_cache
 from typing import TYPE_CHECKING, Optional
-
-from packaging import version as pkg_version
-
-from fluxserve.backend.distributed.parallel_state import get_moe_expert_parallel_world_size
-from fluxserve.backend.layers.dp_attention import (
-    get_attention_dp_size,
-    is_dp_attention_enabled,
-)
 
 if TYPE_CHECKING:
     from fluxserve.backend.utils.server_args import ServerArgs
@@ -64,37 +54,17 @@ class MoeA2ABackend(Enum):
 class MoeRunnerBackend(Enum):
 
     AUTO = "auto"
-    DEEP_GEMM = "deep_gemm"
     TRITON = "triton"
     TRITON_KERNEL = "triton_kernel"
-    FLASHINFER_TRTLLM = "flashinfer_trtllm"
-    FLASHINFER_CUTLASS = "flashinfer_cutlass"
-    FLASHINFER_MXFP4 = "flashinfer_mxfp4"
-    FLASHINFER_CUTEDSL = "flashinfer_cutedsl"
 
     def is_auto(self):
         return self == MoeRunnerBackend.AUTO
-
-    def is_deep_gemm(self):
-        return self == MoeRunnerBackend.DEEP_GEMM
 
     def is_triton(self):
         return self == MoeRunnerBackend.TRITON
 
     def is_triton_kernel(self):
         return self == MoeRunnerBackend.TRITON_KERNEL
-
-    def is_flashinfer_trtllm(self):
-        return self == MoeRunnerBackend.FLASHINFER_TRTLLM
-
-    def is_flashinfer_cutlass(self):
-        return self == MoeRunnerBackend.FLASHINFER_CUTLASS
-
-    def is_flashinfer_cutedsl(self):
-        return self == MoeRunnerBackend.FLASHINFER_CUTEDSL
-
-    def is_flashinfer_mxfp4(self):
-        return self == MoeRunnerBackend.FLASHINFER_MXFP4
 
 
 class DeepEPMode(Enum):
@@ -135,7 +105,6 @@ IS_TBO_ENABLED: Optional[bool] = None
 IS_SBO_ENABLED: Optional[bool] = None
 TBO_TOKEN_DISTRIBUTION_THRESHOLD: Optional[float] = None
 DEEPEP_CONFIG: Optional[str] = None
-DISABLE_FLASHINFER_CUTLASS_MOE_FP4_ALLGATHER: Optional[bool] = None
 
 
 def initialize_moe_config(server_args: ServerArgs):
@@ -146,7 +115,6 @@ def initialize_moe_config(server_args: ServerArgs):
     global IS_TBO_ENABLED
     global IS_SBO_ENABLED
     global TBO_TOKEN_DISTRIBUTION_THRESHOLD
-    global DISABLE_FLASHINFER_CUTLASS_MOE_FP4_ALLGATHER
 
     MOE_A2A_BACKEND = MoeA2ABackend(server_args.moe_a2a_backend)
     MOE_RUNNER_BACKEND = MoeRunnerBackend(server_args.moe_runner_backend)
@@ -155,9 +123,6 @@ def initialize_moe_config(server_args: ServerArgs):
     IS_TBO_ENABLED = server_args.enable_two_batch_overlap
     IS_SBO_ENABLED = server_args.enable_single_batch_overlap
     TBO_TOKEN_DISTRIBUTION_THRESHOLD = server_args.tbo_token_distribution_threshold
-    DISABLE_FLASHINFER_CUTLASS_MOE_FP4_ALLGATHER = (
-        server_args.disable_flashinfer_cutlass_moe_fp4_allgather
-    )
 
 
 def get_moe_a2a_backend() -> MoeA2ABackend:
@@ -216,26 +181,3 @@ def get_tbo_token_distribution_threshold() -> float:
         )
         TBO_TOKEN_DISTRIBUTION_THRESHOLD = 0.48
     return TBO_TOKEN_DISTRIBUTION_THRESHOLD
-
-
-@lru_cache(maxsize=1)
-def should_use_flashinfer_trtllm_moe():
-    result = get_moe_runner_backend().is_flashinfer_trtllm() and (
-        not importlib.util.find_spec("flashinfer")
-        or pkg_version.parse(__import__("flashinfer").__version__)
-        >= pkg_version.parse("0.2.9rc1")
-    )
-    return result
-
-
-@lru_cache(maxsize=1)
-def should_use_flashinfer_cutlass_moe_fp4_allgather():
-    """
-    Perform FP4 quantize before all-gather for flashinfer cutlass moe to reduce communication cost for high-throughput serving.
-    """
-    return (
-        not DISABLE_FLASHINFER_CUTLASS_MOE_FP4_ALLGATHER
-        and get_moe_runner_backend().is_flashinfer_cutlass()
-        and is_dp_attention_enabled()
-        and get_moe_expert_parallel_world_size() == get_attention_dp_size()
-    )

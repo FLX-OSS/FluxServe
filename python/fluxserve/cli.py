@@ -25,10 +25,6 @@ import argparse
 import asyncio
 import logging
 
-from fluxserve.diagnostics.sgl_kernel_trace import bootstrap as _bootstrap_sgl_trace
-
-_bootstrap_sgl_trace()
-
 import torch
 from transformers import AutoConfig, AutoTokenizer
 
@@ -57,10 +53,6 @@ from fluxserve.backend.execution.runners import (
 )
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
 from fluxserve.backend.layers.moe.utils import initialize_moe_config
-from fluxserve.backend.layers.quantization import (
-    QUANTIZATION_METHODS,
-    get_quantization_config,
-)
 from fluxserve.backend.utils.runtime_utils import require_nvidia_cuda
 from fluxserve.backend.utils.server_args import ServerArgs
 
@@ -88,12 +80,6 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--max-scheduled-tokens", type=int, default=512)
     serve.add_argument("--max-model-len", type=int, default=2048)
     serve.add_argument("--max-new-tokens", type=int, default=128)
-    serve.add_argument(
-        "--quantization",
-        choices=("auto", *QUANTIZATION_METHODS),
-        default="auto",
-        help="Quantization backend. 'auto' detects supported Hugging Face metadata.",
-    )
     serve.add_argument(
         "--scheduler-policy",
         choices=("default", "paged"),
@@ -149,26 +135,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve_quant_config(model_config, quantization: str):
-    if quantization == "auto":
-        hf_quant_config = getattr(model_config, "quantization_config", None)
-        if not isinstance(hf_quant_config, dict):
-            return None
+def _reject_unsupported_quantization(model_config) -> None:
+    quant_config = getattr(model_config, "quantization_config", None)
+    if not isinstance(quant_config, dict):
+        return
 
-        quant_method = str(hf_quant_config.get("quant_method", "")).lower()
-        quant_algo = str(hf_quant_config.get("quant_algo", "")).upper()
-        if quant_method == "modelopt" and "FP8" in quant_algo:
-            return get_quantization_config("modelopt_fp8").from_config(hf_quant_config)
-        if quant_method == "modelopt" and "NVFP4" in quant_algo:
-            return get_quantization_config("modelopt_fp4").from_config(hf_quant_config)
-        return None
-
-    hf_quant_config = getattr(model_config, "quantization_config", None)
-    if not isinstance(hf_quant_config, dict):
-        raise ValueError(
-            f"--quantization {quantization!r} requires quantization_config in config.json"
-        )
-    return get_quantization_config(quantization).from_config(hf_quant_config)
+    nested = quant_config.get("quantization")
+    configs = (quant_config, nested) if isinstance(nested, dict) else (quant_config,)
+    for config in configs:
+        quant_method = str(config.get("quant_method", "")).lower()
+        quant_algo = str(config.get("quant_algo", "")).upper()
+        if "fp8" in quant_method or "FP8" in quant_algo or "FP4" in quant_algo:
+            raise ValueError(
+                "FluxServe does not currently support FP8 or FP4 quantized checkpoints. "
+                "Use an unquantized BF16/FP16 checkpoint."
+            )
 
 
 def serve(args) -> None:
@@ -197,10 +178,8 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         args.model_name,
         trust_remote_code=args.trust_remote_code,
     )
-    model_config.quant_config = _resolve_quant_config(
-        model_config,
-        args.quantization,
-    )
+    _reject_unsupported_quantization(model_config)
+    model_config.quant_config = None
     if args.scheduler_policy == "paged" and (
         args.attention_backend != "flashinfer"
         or args.kv_cache_layout != "paged"
@@ -215,7 +194,6 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
     server_args = ServerArgs(
         model_name=args.model_name,
         model_config=model_config,
-        quantization=args.quantization,
         device=args.device,
         host=args.host,
         port=args.port,

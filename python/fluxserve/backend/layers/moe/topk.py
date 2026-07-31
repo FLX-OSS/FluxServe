@@ -47,7 +47,6 @@ from fluxserve.backend.eplb.expert_location_dispatch import (
 )
 from fluxserve.backend.layers.moe import (
     get_moe_runner_backend,
-    should_use_flashinfer_trtllm_moe,
 )
 from fluxserve.backend.utils.runtime_utils import (
     get_compiler_backend,
@@ -238,11 +237,6 @@ class TopK(CustomOp):
             output_format = self.topk_config.output_format
         elif get_moe_runner_backend().is_triton_kernel():
             output_format = TopKOutputFormat.TRITON_KERNEL
-        elif (
-            should_use_flashinfer_trtllm_moe()
-            or get_moe_runner_backend().is_flashinfer_mxfp4()
-        ):
-            output_format = TopKOutputFormat.BYPASSED
         else:
             output_format = TopKOutputFormat.STANDARD
 
@@ -345,24 +339,13 @@ def fused_topk(
     num_token_non_padded: Optional[torch.Tensor] = None,
     expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
 ):
-    from sgl_kernel import topk_softmax
-
-    assert hidden_states.shape[0] == gating_output.shape[0], "Number of tokens mismatch"
-
-    M, _ = hidden_states.shape
-
-    topk_weights = torch.empty(
-        M, topk, dtype=torch.float32, device=hidden_states.device
+    topk_weights, topk_ids = fused_topk_torch_native(
+        hidden_states=hidden_states,
+        gating_output=gating_output,
+        topk=topk,
+        renormalize=renormalize,
     )
-    topk_ids = torch.empty(M, topk, dtype=torch.int32, device=hidden_states.device)
-
-    topk_softmax(
-        topk_weights,
-        topk_ids,
-        gating_output,
-        renormalize,
-    )
-
+    topk_ids = topk_ids.to(torch.int32)
     topk_ids = topk_ids_logical_to_physical(topk_ids, expert_location_dispatch_info)
     _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
     return topk_weights, topk_ids

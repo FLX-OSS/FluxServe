@@ -26,8 +26,6 @@ from fluxserve.backend.configs.model_config import ModelConfig
 class ServerArgs:
     model_name: str = ""
     model_config: ModelConfig = None
-    quantization: str = "auto"
-    modelopt_quant: str = ""
     device: str = "cuda"
     enable_dp_attention: bool = False
     trust_remote_code: bool = True
@@ -43,7 +41,6 @@ class ServerArgs:
     enable_two_batch_overlap: bool = False
     enable_single_batch_overlap: bool = False
     tbo_token_distribution_threshold: float = 0.48
-    disable_flashinfer_cutlass_moe_fp4_allgather: bool = False
     enable_cudagraph_gc: bool = False
     enable_dp_lm_head: bool = False
     enable_fp32_lm_head: bool = False

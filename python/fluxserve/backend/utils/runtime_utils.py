@@ -284,11 +284,6 @@ def dispose_tensor(x: torch.Tensor):
     x.set_(torch.empty((0,), device=x.device, dtype=x.dtype))
 
 
-def deep_gemm_fp8_fp8_bf16_nt(*args, **kwargs):
-    del args, kwargs
-    raise NotImplementedError("FluxServe deep_gemm custom op has not been extracted.")
-
-
 def inplace_all_reduce(*args, **kwargs):
     del args, kwargs
     raise NotImplementedError("FluxServe inplace_all_reduce custom op has not been extracted.")

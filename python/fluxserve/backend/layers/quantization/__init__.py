@@ -20,29 +20,6 @@
 
 from fluxserve.backend.layers.quantization.base_config import QuantizationConfig
 
-QUANTIZATION_METHODS = ("fp8", "modelopt_fp8", "modelopt_fp4")
-
-def get_quantization_config(quantization: str):
-    if quantization == "fp8":
-        from fluxserve.backend.layers.quantization.fp8 import Fp8Config
-
-        return Fp8Config
-    if quantization in ("modelopt_fp8", "modelopt_fp4"):
-        from fluxserve.backend.layers.quantization.modelopt_quant import (
-            ModelOptFp4Config,
-            ModelOptFp8Config,
-        )
-
-        return {
-            "modelopt_fp8": ModelOptFp8Config,
-            "modelopt_fp4": ModelOptFp4Config,
-        }[quantization]
-    else:
-        raise ValueError(
-            f"Invalid quantization method: {quantization}. "
-            f"Available methods: {list(QUANTIZATION_METHODS)}"
-        )
-
 
 def monkey_patch_isinstance_for_vllm_base_layer(reverse: bool = False):
     del reverse
