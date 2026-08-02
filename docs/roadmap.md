@@ -15,9 +15,9 @@
 - [ ] Model Parallelism
   - [ ] Pipeline Parallelism
 - [ ] Runtime Optimization
-  - [ ] CUDA Graph
+  - [ ] CUDA Graph (WIP)
 - [ ] Cache Optimization
-  - [ ] Prefix Cache
+  - [ ] Prefix Cache (WIP)
 - [ ] MoE Optimization
   - [ ] DeepEP
   - [ ] EPLB
