@@ -25,11 +25,16 @@ from typing import Optional
 import torch
 
 from fluxserve.backend.configs.model_config import ModelConfig
-from fluxserve.backend.distributed import get_tp_group, set_custom_all_reduce
+from fluxserve.backend.distributed import (
+    get_moe_expert_parallel_world_size,
+    get_tp_group,
+    set_custom_all_reduce,
+)
 from fluxserve.backend.execution.cuda_graph_runner import CudaGraphRunner
 from fluxserve.backend.execution.decoders import load_decoder
 from fluxserve.backend.execution.forward_batch_info import RunnerConfig
 from fluxserve.backend.execution.forward_batch_info import ForwardBatch
+from fluxserve.backend.layers.dp_attention import get_attention_tp_size
 from fluxserve.backend.managers.kvcache import KVCache
 from fluxserve.backend.model_loader import get_model
 from fluxserve.backend.utils.runtime_utils import (
@@ -67,9 +72,27 @@ class ModelRunner:
         self.max_length = max(self.runner_config.max_length, max(self.cache_lengths))
         self.decoding_lengths = list(self.runner_config.decoding_lengths)
         self.supported_batch_sizes = list(self.runner_config.supported_batch_sizes)
+        self.enable_flashinfer_attention_graph = bool(
+            self.runner_config.enable_cuda_graph
+            and self.runner_config.attention_backend == "flashinfer"
+            and self.runner_config.kv_cache_layout == "paged"
+            and self.runner_config.flashinfer_cache_mode == "paged"
+            and self.runner_config.flashinfer_prefill_mode == "paged"
+            and (
+                (
+                    get_attention_tp_size() == 1
+                    and get_moe_expert_parallel_world_size() == 1
+                )
+                or (
+                    get_attention_tp_size() == 4
+                    and get_moe_expert_parallel_world_size() == 4
+                )
+            )
+        )
         if (
             self.runner_config.attention_backend == "flashinfer"
             and self.runner_config.enable_cuda_graph
+            and not self.enable_flashinfer_attention_graph
         ):
             logger.info(
                 "Disabling CUDA graph because attention_backend='flashinfer' "
@@ -79,6 +102,7 @@ class ModelRunner:
         if (
             self.runner_config.kv_cache_layout == "paged"
             and self.runner_config.enable_cuda_graph
+            and not self.enable_flashinfer_attention_graph
         ):
             logger.info(
                 "Disabling CUDA graph because kv_cache_layout='paged' "
@@ -95,7 +119,10 @@ class ModelRunner:
                 "flux-cu129 Apptainer environment or run with "
                 "attention_backend='sdpa'."
             )
-        self.enable_cuda_graph = self.runner_config.enable_cuda_graph
+        self.enable_cuda_graph = bool(
+            self.runner_config.enable_cuda_graph
+            and not self.enable_flashinfer_attention_graph
+        )
         self.enable_compile = self.runner_config.enable_compile
         self.use_cross_block = self.runner_config.use_cross_block
         self.early_stop = self.runner_config.early_stop

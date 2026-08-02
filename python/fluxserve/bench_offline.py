@@ -277,6 +277,9 @@ def build_runner_config(args, batch_info):
         cache_lengths=cache_lengths,
         supported_batch_sizes=batch_info.supported_batch_sizes,
         enable_cuda_graph=args.use_cuda_graph,
+        enable_prefill_cuda_graph=args.use_prefill_cuda_graph,
+        enable_decode_cuda_graph=args.use_decode_cuda_graph,
+        cuda_graph_capture_sizes=args.cuda_graph_capture_sizes,
         use_cross_block=args.batch_size == 1,
         cache="",
         parallel_decoding=args.parallel_decoding,
@@ -341,20 +344,32 @@ def log_input_shape_summary(input_lengths, batch_info, args, logger):
 
 
 def warmup_runner(runner, args, device, logger):
-    warmup_ids = torch.randint(
-        0,
-        100000,
-        (args.mini_batch_size, args.block_length),
-        dtype=torch.long,
-        device=device,
-    )
     original_gen_length = runner.runner_config.gen_length
-    runner.runner_config.gen_length = args.block_length
-    runner.generate(warmup_ids)
-
-    if args.attention_backend == "flex":
+    use_prefill_graph = bool(
+        args.use_cuda_graph or args.use_prefill_cuda_graph
+    )
+    use_decode_graph = bool(args.use_cuda_graph or args.use_decode_cuda_graph)
+    warmup_prefill_shapes = args.attention_backend == "flex" or bool(
+        use_prefill_graph
+        and args.attention_backend == "flashinfer"
+        and args.flashinfer_prefill_mode == "paged"
+        and args.flashinfer_cache_mode == "paged"
+        and args.kv_cache_layout == "paged"
+    )
+    if warmup_prefill_shapes:
         warmup_shapes = []
-        for prefill_length in runner.prefill_lengths:
+        prefill_lengths = runner.prefill_lengths
+        graph_runner = getattr(runner, "flashinfer_graph_runner", None)
+        if graph_runner is not None:
+            by_bucket = {}
+            for prefill_length in prefill_lengths:
+                bucket = graph_runner.bucket(int(prefill_length))
+                if bucket is not None:
+                    by_bucket.setdefault(bucket, int(prefill_length))
+            prefill_lengths = [
+                by_bucket[bucket] for bucket in sorted(by_bucket, reverse=True)
+            ]
+        for prefill_length in prefill_lengths:
             warmup_shapes.append((args.mini_batch_size, int(prefill_length)))
             prefill_ids = torch.randint(
                 0,
@@ -365,7 +380,29 @@ def warmup_runner(runner, args, device, logger):
             )
             runner.runner_config.gen_length = args.block_length
             runner.generate(prefill_ids)
-        logger.info(f"[Info] Flex prefill warmup shapes: {warmup_shapes}")
+        logger.info(f"[Info] Prefill warmup shapes: {warmup_shapes}")
+    else:
+        warmup_ids = torch.randint(
+            0,
+            100000,
+            (args.mini_batch_size, args.block_length),
+            dtype=torch.long,
+            device=device,
+        )
+        runner.runner_config.gen_length = args.block_length
+        runner.generate(warmup_ids)
+
+    graph_runner = getattr(runner, "flashinfer_graph_runner", None)
+    if graph_runner is not None and use_decode_graph:
+        block_length = int(runner.block_length)
+        graph_runner.capture_decode_lengths(
+            runner,
+            range(
+                block_length * 2,
+                int(runner.max_length) + 1,
+                block_length,
+            ),
+        )
 
     runner.runner_config.gen_length = original_gen_length
 
@@ -376,6 +413,7 @@ def run_worker(args, *, init_method: str = "env://"):
 
     server_args = None
     context = None
+    runner = None
     rank = int(os.environ.get("RANK", "0"))
     gpu_id = int(os.environ.get("LOCAL_RANK", "0"))
     world_size = int(args.parallel_world_size)
@@ -440,6 +478,7 @@ def run_worker(args, *, init_method: str = "env://"):
         initialize_moe_config(server_args)
 
         runner_config = build_runner_config(args, batch_info)
+        runner_config.cuda_graph_log_callback = logger.info
         runner_cls = (
             FlashInferDiffusionRunner
             if args.attention_backend == "flashinfer"
@@ -513,6 +552,9 @@ def run_worker(args, *, init_method: str = "env://"):
                 logger,
             )
     finally:
+        if runner is not None and hasattr(runner, "shutdown_cuda_graphs"):
+            logger.info(f"[Shutdown] rank={rank} releasing CUDA graphs")
+            runner.shutdown_cuda_graphs()
         destroy_distributed()
 
 
@@ -592,6 +634,18 @@ def add_bench_offline_subparser(subparsers) -> None:
     parser.add_argument("--pp-size", "--pp_size", dest="pp_size", type=int, default=1)
     parser.add_argument("--distributed-backend", "--distributed_backend", dest="distributed_backend", default="nccl")
     parser.add_argument("--use-cuda-graph", "--use_cuda_graph", dest="use_cuda_graph", action="store_true")
+    parser.add_argument("--use-prefill-cuda-graph", "--use_prefill_cuda_graph", dest="use_prefill_cuda_graph", action="store_true")
+    parser.add_argument("--use-decode-cuda-graph", "--use_decode_cuda_graph", dest="use_decode_cuda_graph", action="store_true")
+    parser.add_argument(
+        "--cuda-graph-capture-sizes",
+        "--cuda_graph_capture_sizes",
+        dest="cuda_graph_capture_sizes",
+        type=int,
+        nargs="+",
+        default=[64, 128, 256, 512, 1024],
+        metavar="N",
+        help="Prefill sequence-length buckets captured by CUDA graphs.",
+    )
     parser.add_argument("--prefilling-limit", "--prefilling_limit", dest="prefilling_limit", type=int, default=128)
     parser.add_argument("--attention-backend", "--attention_backend", dest="attention_backend", choices=("sdpa", "flex", "flashinfer"), default="flashinfer")
     parser.add_argument("--flashinfer-decode-batch-mode", "--flashinfer_decode_batch_mode", dest="flashinfer_decode_batch_mode", choices=("default", "max_batch"), default="max_batch")
@@ -649,12 +703,18 @@ def bench_offline(args) -> None:
     args.parallel_world_size = args.tp_size * args.dp_size
     args.world_size = args.parallel_world_size
     args.enable_dp_attention = args.dp_size > 1
-    if args.dp_size > 1 and args.use_cuda_graph:
+    if args.dp_size > 1 and (
+        args.use_cuda_graph
+        or args.use_prefill_cuda_graph
+        or args.use_decode_cuda_graph
+    ):
         logger.info(
             "[Info] Disabling CUDA graph because dp_attention requires "
             "ForwardBatch metadata."
         )
         args.use_cuda_graph = False
+        args.use_prefill_cuda_graph = False
+        args.use_decode_cuda_graph = False
     if args.batch_size == 1:
         args.use_naive_batching = True
     if args.use_naive_batching:

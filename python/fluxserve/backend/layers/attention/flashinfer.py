@@ -352,6 +352,16 @@ class FlashInferPagedPrefillAttention:
             page_size,
         )
         q_packed = self._pack_q(q, prefill_lens)
+        if forward_batch.flashinfer_full_prefill_graph:
+            output = forward_batch.flashinfer_cuda_graph_runner.run_attention(
+                q=q_packed,
+                paged_kv_cache=past_key_values,
+                num_q_heads=self.config.num_heads,
+                num_kv_heads=self.config.num_kv_heads,
+                head_dim=self.config.head_dim,
+                sm_scale=self.config.scale,
+            )
+            return self._pad_output(output, q, prefill_lens)
         plan_key = (
             "paged_prefill",
             tuple(prefill_lens),
@@ -527,6 +537,10 @@ class FlashInferPagedAttention:
             self.config.num_heads,
             self.config.head_dim,
         )
+        if forward_batch.flashinfer_full_decode_graph:
+            return forward_batch.flashinfer_cuda_graph_runner.run_decode_attention(
+                q_packed, past_key_values
+            )
         plan_key = (
             "paged_block_extend",
             tuple(kv_lens),

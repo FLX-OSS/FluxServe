@@ -124,6 +124,17 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--pp-size", type=int, default=1)
     serve.add_argument("--enable-dp-attention", action="store_true", default=False)
     serve.add_argument("--distributed-backend", default="nccl")
+    serve.add_argument("--use-cuda-graph", action="store_true")
+    serve.add_argument("--use-prefill-cuda-graph", action="store_true")
+    serve.add_argument("--use-decode-cuda-graph", action="store_true")
+    serve.add_argument(
+        "--cuda-graph-capture-sizes",
+        type=int,
+        nargs="+",
+        default=[64, 128, 256, 512, 1024],
+        metavar="N",
+        help="Prefill sequence-length buckets captured by CUDA graphs.",
+    )
     serve.add_argument("--trust-remote-code", action="store_true", default=True)
     serve.add_argument(
         "--process-name",
@@ -241,6 +252,10 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             supported_batch_sizes=tuple(
                 2**i for i in range(max(1, args.max_num_seqs).bit_length())
             ),
+            enable_cuda_graph=args.use_cuda_graph,
+            enable_prefill_cuda_graph=args.use_prefill_cuda_graph,
+            enable_decode_cuda_graph=args.use_decode_cuda_graph,
+            cuda_graph_capture_sizes=args.cuda_graph_capture_sizes,
             attention_backend=args.attention_backend,
             flashinfer_decode_batch_mode=args.flashinfer_decode_batch_mode,
             flashinfer_prefill_mode=args.flashinfer_prefill_mode,

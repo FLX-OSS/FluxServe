@@ -1,3 +1,5 @@
+import logging
+
 import torch
 
 from fluxserve.backend.execution.forward_batch_info import ForwardBatch, ForwardMode
@@ -10,6 +12,11 @@ from fluxserve.backend.execution.runners.utils import (
 )
 from fluxserve.backend.layers.dp_attention import get_attention_tp_size
 from fluxserve.backend.managers.kvcache import PagedKVCache
+from fluxserve.backend.execution.flashinfer_cuda_graph_runner import (
+    FlashInferCudaGraphRunner,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class FlashInferDiffusionRunner(BlockDiffusionRunner):
@@ -22,6 +29,29 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 "FlashInferDiffusionRunner requires attention_backend='flashinfer'."
             )
         self._paged_request_slots: dict[str, int] = {}
+        self.flashinfer_graph_runner = (
+            FlashInferCudaGraphRunner(
+                self.device,
+                self.runner_config.cuda_graph_capture_sizes,
+                self.runner_config.cuda_graph_log_callback,
+                self.model.model.config.num_hidden_layers,
+            )
+            if self.enable_flashinfer_attention_graph
+            else None
+        )
+        if self.flashinfer_graph_runner is not None:
+            if self.runner_config.enable_prefill_cuda_graph:
+                self.flashinfer_graph_runner.log(
+                    "CUDA graph enabled: FlashInfer paged prefill "
+                    "(batch_size=1, buckets=%s)",
+                    self.flashinfer_graph_runner.capture_sizes,
+                )
+            if self.runner_config.enable_decode_cuda_graph:
+                self.flashinfer_graph_runner.log(
+                    "CUDA graph enabled: FlashInfer paged decode "
+                    "(batch_size=1, block_length=%d)",
+                    self.block_length,
+                )
 
     def _paged_slot(self, request_id: str) -> int:
         existing = self._paged_request_slots.get(request_id)
@@ -38,6 +68,10 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             f"{self.server_args.max_num_seqs}"
         )
 
+    def shutdown_cuda_graphs(self) -> None:
+        if self.flashinfer_graph_runner is not None:
+            self.flashinfer_graph_runner.shutdown(self.tp_group.device_group)
+
     def _release_paged_slot(self, request_id: str) -> None:
         self._paged_request_slots.pop(request_id, None)
 
@@ -47,7 +81,38 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
 
     def allocate_kv_cache(self, batch_size):
         if self.runner_config.kv_cache_layout == "paged":
-            return super().allocate_kv_cache(batch_size)
+            if self.flashinfer_graph_runner is None:
+                return super().allocate_kv_cache(batch_size)
+            config = self.model.model.config
+            existing = getattr(self, "past_key_values", None)
+            if (
+                isinstance(existing, PagedKVCache)
+                and not existing.uses_external_page_table
+                and existing.batch_size >= int(batch_size)
+                and existing.max_length >= self.max_length
+                and existing.page_size == int(self.runner_config.page_size)
+                and existing.local_kv_heads
+                == max(1, config.num_key_value_heads // get_attention_tp_size())
+            ):
+                return existing
+            if isinstance(existing, PagedKVCache):
+                self.flashinfer_graph_runner.invalidate()
+            return PagedKVCache(
+                num_layers=config.num_hidden_layers,
+                batch_size=batch_size,
+                local_kv_heads=max(
+                    1, config.num_key_value_heads // get_attention_tp_size()
+                ),
+                max_length=self.max_length,
+                head_dim=config.hidden_size // config.num_attention_heads,
+                page_size=int(self.runner_config.page_size),
+                reserve_dummy_page=max(
+                    self.runner_config.cuda_graph_capture_sizes
+                )
+                // int(self.runner_config.page_size),
+                dtype=torch.bfloat16,
+                device=self.device,
+            )
         config = self.model.model.config
         num_layers = config.num_hidden_layers
         num_kv_heads = config.num_key_value_heads
@@ -81,6 +146,14 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             and self.runner_config.flashinfer_prefill_mode == "paged"
         )
 
+    def _attach_flashinfer_graph(self, forward_batch: ForwardBatch) -> ForwardBatch:
+        if self.flashinfer_graph_runner is not None:
+            forward_batch.flashinfer_cuda_graph_runner = self.flashinfer_graph_runner
+            forward_batch.flashinfer_cuda_graph_dummy_page = int(
+                self.past_key_values.dummy_page_id
+            )
+        return forward_batch
+
     def ensure_paged_kv_cache(self, *, num_device_pages: int) -> None:
         if not self._use_flashinfer_paged_prefill():
             raise RuntimeError(
@@ -101,6 +174,9 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             and self.past_key_values.batch_size >= max_num_seqs
         ):
             return
+        if self.flashinfer_graph_runner is not None:
+            self.flashinfer_graph_runner.invalidate()
+        scheduler_pages = int(num_device_pages)
         self.past_key_values = PagedKVCache(
             num_layers=num_layers,
             batch_size=max_num_seqs,
@@ -108,10 +184,15 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             max_length=self.max_length,
             head_dim=head_dim,
             page_size=int(self.runner_config.page_size),
-            num_pages=int(num_device_pages),
+            num_pages=scheduler_pages,
+            reserve_dummy_page=max(
+                self.runner_config.cuda_graph_capture_sizes
+            )
+            // int(self.runner_config.page_size),
             dtype=torch.bfloat16,
             device=self.device,
         )
+        self.past_key_values.scheduler_num_pages = scheduler_pages
 
     async def execute_paged_forward_plan(
         self,
@@ -383,6 +464,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             forward_batch = ForwardBatch(
                 forward_mode=ForwardMode.EXTEND if is_prefill else ForwardMode.DECODE
             )
+        self._attach_flashinfer_graph(forward_batch)
         qo_values = [0]
         for q_len in q_lens.detach().cpu().tolist():
             qo_values.append(qo_values[-1] + int(q_len))
@@ -441,7 +523,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         else:
             forward_batch.use_flashinfer_decode = False
             forward_batch.use_flashinfer_paged_decode = True
-        return forward_batch
+        return self._attach_flashinfer_graph(forward_batch)
 
     def _make_flashinfer_decode_batch(
         self,
@@ -609,7 +691,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         )
         forward_batch.flashinfer_block_length = int(self.block_length)
         forward_batch.flashinfer_page_size = int(self.past_key_values.page_size)
-        return forward_batch
+        return self._attach_flashinfer_graph(forward_batch)
 
     def _prefill_batches(
         self,
@@ -703,20 +785,38 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 prefilling_lengths=prefilling_lengths,
                 forward_batch=forward_batch,
             )
-            output = self.model(
-                prefilling_x[:, :prefilling_length].contiguous(),
-                use_cache=True,
-                attention_mask=None,
-                position_ids=pos_ids[seq_ids, :prefilling_length].contiguous(),
-                past_key_values=[
-                    self.past_key_values.layer_paged_kv(layer_id)
-                    for layer_id in range(num_layers)
-                ],
-                forward_batch=forward_batch,
-            )
+            input_ids = prefilling_x[:, :prefilling_length].contiguous()
+            position_ids = pos_ids[seq_ids, :prefilling_length].contiguous()
+            if (
+                self.flashinfer_graph_runner is not None
+                and self.runner_config.enable_prefill_cuda_graph
+                and len(seq_ids) == 1
+                and self.flashinfer_graph_runner.can_run(
+                    q_len=prefilling_length,
+                    q_offset=0,
+                    page_size=int(self.past_key_values.page_size),
+                )
+            ):
+                self.flashinfer_graph_runner.replay(
+                    runner=self,
+                    input_ids=input_ids,
+                    position_ids=position_ids,
+                    forward_batch=forward_batch,
+                )
+            else:
+                self.model(
+                    input_ids,
+                    use_cache=True,
+                    attention_mask=None,
+                    position_ids=position_ids,
+                    past_key_values=[
+                        self.past_key_values.layer_paged_kv(layer_id)
+                        for layer_id in range(num_layers)
+                    ],
+                    forward_batch=forward_batch,
+                )
 
             # Paged prefill attention writes K/V into PagedKVCache per layer.
-            _ = output
             self.num_forwards += 1
             prefilling_flag[seq_ids] = False
 
@@ -772,7 +872,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             int(x) for x in last_page_len.detach().cpu().tolist()
         )
         forward_batch.flashinfer_page_size = int(self.past_key_values.page_size)
-        return forward_batch
+        return self._attach_flashinfer_graph(forward_batch)
 
     def _decode_batches(
         self,
@@ -905,28 +1005,49 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             ]
         else:
             past_key_values = decoding_past_key_values
-        output = self.model(
-            decoding_block,
-            use_cache=True,
-            position_ids=decoding_pos_ids,
-            past_key_values=past_key_values,
-            forward_batch=forward_batch,
+        use_decode_graph = bool(
+            self.flashinfer_graph_runner is not None
+            and self.runner_config.enable_decode_cuda_graph
+            and self._use_flashinfer_paged_cache()
+            and self.flashinfer_graph_runner.can_run_decode(
+                batch_size=len(seq_ids),
+                q_len=self.block_length,
+                kv_len=current_cache_length,
+            )
         )
-        logits = output.logits[: len(seq_ids)]
+        if use_decode_graph:
+            hidden_states = self.flashinfer_graph_runner.replay_decode(
+                runner=self,
+                input_ids=decoding_block,
+                position_ids=decoding_pos_ids,
+                forward_batch=forward_batch,
+            )
+            logits = self.model._get_logits(hidden_states)[: len(seq_ids)]
+            output = None
+        else:
+            output = self.model(
+                decoding_block,
+                use_cache=True,
+                position_ids=decoding_pos_ids,
+                past_key_values=past_key_values,
+                forward_batch=forward_batch,
+            )
+            logits = output.logits[: len(seq_ids)]
 
         self.decoder.batch_decode(
             logits, decoding_start[seq_ids], decoding_x, self.block_length
         )
 
         block_finished = (decoding_block == self.decoder.mask_id).sum(dim=1) == 0
-        self._update_finished_kv_cache(
-            output,
-            seq_ids,
-            decoding_start,
-            block_finished,
-            current_cache_length,
-            num_layers,
-        )
+        if output is not None:
+            self._update_finished_kv_cache(
+                output,
+                seq_ids,
+                decoding_start,
+                block_finished,
+                current_cache_length,
+                num_layers,
+            )
 
         decoding_start[seq_ids] += block_finished.long() * self.block_length
         x[seq_ids] = decoding_x.data
