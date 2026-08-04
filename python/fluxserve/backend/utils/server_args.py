@@ -52,6 +52,7 @@ class ServerArgs:
     speculative_algorithm: str | None = None
     host: str = "0.0.0.0"
     port: int = 8000
+    apply_template: bool = False
     max_num_seqs: int = 8
     max_scheduled_tokens: int = 512
     max_model_len: int = 2048

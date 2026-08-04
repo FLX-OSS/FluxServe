@@ -231,6 +231,7 @@ NB_MODULE(flux_scheduler_ext, m) {
         .def(nb::init<>())
         .def_rw("request_id", &flux::RequestSpec::request_id)
         .def_rw("tokens", &flux::RequestSpec::tokens)
+        .def_rw("prefill_length", &flux::RequestSpec::prefill_length)
         .def_rw("rolling_hashes", &flux::RequestSpec::rolling_hashes)
         .def_rw("storage_hit_pages", &flux::RequestSpec::storage_hit_pages);
 

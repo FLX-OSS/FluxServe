@@ -86,6 +86,11 @@ class AsyncLLM:
         if self._task is None:
             self._task = asyncio.create_task(self._run_loop())
 
+    async def startup_executor(self) -> None:
+        startup = getattr(self.executor, "startup", None)
+        if startup is not None:
+            await self._execute(startup)
+
     async def shutdown(self) -> None:
         self._closed = True
         self._new_request_event.set()
@@ -136,7 +141,11 @@ class AsyncLLM:
             await state.queue.put(output)
 
     def get_metrics_snapshot(self) -> dict[str, int | float]:
-        return self.metrics.snapshot()
+        snapshot = self.metrics.snapshot()
+        stats = getattr(self.executor, "cuda_graph_stats", None)
+        if stats is not None:
+            snapshot.update({f"cuda_graph_{k}": v for k, v in stats().items()})
+        return snapshot
 
     async def _collect_one(self, state: RequestState) -> GenerateReqOutput:
         output = None
@@ -281,8 +290,9 @@ class AsyncLLM:
                 result.text,
                 result.finish_reason if result.finished else None,
             )
-            if result.token_ids:
+            if result.decode_block_completed:
                 state.mark_decode_block_done()
+            if result.token_ids:
                 token_results[result.rid] = result.token_ids
 
             if result.finished:

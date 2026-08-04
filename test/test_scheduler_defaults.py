@@ -56,6 +56,14 @@ def test_scheduler_policy_defaults_to_default():
     assert ServerArgs().scheduler_policy == "default"
     args = build_parser().parse_args(["serve", "--model", "model"])
     assert args.scheduler_policy == "default"
+    assert args.apply_template is False
+
+
+def test_cli_accepts_apply_template():
+    args = build_parser().parse_args(
+        ["serve", "--model", "model", "--apply-template"]
+    )
+    assert args.apply_template is True
 
 
 @pytest.mark.parametrize("policy", ["default", "paged"])

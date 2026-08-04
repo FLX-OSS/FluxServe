@@ -75,6 +75,14 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--model", "--model-name", dest="model_name", required=True)
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument(
+        "--apply-template",
+        action="store_true",
+        help=(
+            "Render chat requests with tokenizer.apply_chat_template(). "
+            "By default FluxServe uses its LLaDA-compatible prompt renderer."
+        ),
+    )
     serve.add_argument("--device", default="cuda")
     serve.add_argument("--max-num-seqs", type=int, default=8)
     serve.add_argument("--max-scheduled-tokens", type=int, default=512)
@@ -208,6 +216,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         device=args.device,
         host=args.host,
         port=args.port,
+        apply_template=args.apply_template,
         max_num_seqs=args.max_num_seqs,
         max_scheduled_tokens=args.max_scheduled_tokens,
         max_model_len=args.max_model_len,
@@ -243,6 +252,43 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         initialize_dp_attention(server_args=server_args, model_config=model_config)
         initialize_moe_config(server_args)
 
+        if args.scheduler_policy == "paged":
+            page_size = int(args.page_size or args.block_length)
+            if page_size != int(args.block_length):
+                raise ValueError(
+                    "paged block diffusion requires page_size == block_length"
+                )
+            if int(args.max_model_len) % int(args.block_length) != 0:
+                raise ValueError(
+                    "paged block diffusion requires max_model_len to be "
+                    "divisible by block_length"
+                )
+            if int(args.max_scheduled_tokens) % int(args.block_length) != 0:
+                raise ValueError(
+                    "paged block diffusion requires max_scheduled_tokens to be "
+                    "divisible by block_length"
+                )
+            num_device_pages = int(args.scheduler_num_device_pages)
+            if num_device_pages <= 0:
+                num_device_pages = (
+                    args.max_num_seqs
+                    * ((args.max_model_len + page_size - 1) // page_size + 2)
+                    + 1
+                )
+            server_args.scheduler_num_device_pages = num_device_pages
+
+        graph_capture_sizes = tuple(
+            int(size)
+            for size in args.cuda_graph_capture_sizes
+            if 0 < int(size) <= int(args.max_model_len)
+            and int(size) % int(args.block_length) == 0
+        )
+        if args.use_cuda_graph and not graph_capture_sizes:
+            raise ValueError(
+                "CUDA graph capture sizes must include at least one block-aligned "
+                "length no greater than max_model_len"
+            )
+
         runner_config = RunnerConfig(
             gen_length=args.max_new_tokens,
             block_length=args.block_length,
@@ -255,7 +301,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             enable_cuda_graph=args.use_cuda_graph,
             enable_prefill_cuda_graph=args.use_prefill_cuda_graph,
             enable_decode_cuda_graph=args.use_decode_cuda_graph,
-            cuda_graph_capture_sizes=args.cuda_graph_capture_sizes,
+            cuda_graph_capture_sizes=graph_capture_sizes,
             attention_backend=args.attention_backend,
             flashinfer_decode_batch_mode=args.flashinfer_decode_batch_mode,
             flashinfer_prefill_mode=args.flashinfer_prefill_mode,
@@ -283,19 +329,13 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             scheduler = None
             if args.scheduler_policy == "paged":
                 page_size = int(args.page_size or args.block_length)
-                num_device_pages = int(args.scheduler_num_device_pages)
-                if num_device_pages <= 0:
-                    num_device_pages = (
-                        args.max_num_seqs
-                        * ((args.max_model_len + page_size - 1) // page_size + 2)
-                        + 1
-                    )
-                server_args.scheduler_num_device_pages = num_device_pages
+                num_device_pages = int(server_args.scheduler_num_device_pages)
                 scheduler = PagedSchedulerAdapter(
                     max_batch_size=args.max_num_seqs,
                     max_scheduled_tokens=args.max_scheduled_tokens,
                     page_size=page_size,
                     num_device_pages=num_device_pages,
+                    max_model_len=args.max_model_len,
                 )
             engine = AsyncLLM(
                 server_args=server_args,
@@ -306,7 +346,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             try:
                 run(engine, host=args.host, port=args.port)
             finally:
-                executor.shutdown_workers()
+                asyncio.run(executor.shutdown_workers())
         else:
             asyncio.run(executor.run_worker_loop())
     finally:

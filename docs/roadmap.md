@@ -16,6 +16,8 @@
   - [ ] Pipeline Parallelism
 - [ ] Runtime Optimization
   - [ ] CUDA Graph (WIP)
+    - [x] BS=1
+    - [ ] CUDA Graph Output Mismatch Fix
 - [ ] Cache Optimization
   - [ ] Prefix Cache (WIP)
 - [ ] MoE Optimization
@@ -26,7 +28,6 @@
 
 ### Evaluation Support
 - [ ] [LM-Eval-Harness](https://github.com/EleutherAI/lm-evaluation-harness)
-
 
 ### PR Support
 - [ ] CI/CD Suites

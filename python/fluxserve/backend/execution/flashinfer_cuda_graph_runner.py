@@ -3,6 +3,7 @@ from __future__ import annotations
 import bisect
 import gc
 import logging
+import time
 from dataclasses import dataclass
 
 import torch
@@ -67,19 +68,34 @@ class FlashInferCudaGraphRunner:
         self.replay_count = 0
         self.decode_capture_count = 0
         self.decode_replay_count = 0
+        self.invalidation_count = 0
+        self.prefill_fallback_count = 0
+        self.decode_fallback_count = 0
+        self.capture_time_s = 0.0
 
     def log(self, message: str, *args) -> None:
         if self._log_callback is not None:
             self._log_callback(message % args)
         else:
-            logger.info(message, *args)
+            logger.warning(message, *args)
 
-    def invalidate(self) -> None:
-        if self._graphs:
-            logger.info("Invalidating %d full-prefill CUDA graphs", len(self._graphs))
+    def invalidate(self, reason: str = "unspecified") -> None:
+        had_graphs = bool(self._graphs or self._decode_graphs)
+        if had_graphs:
+            self.invalidation_count += 1
+            self.log(
+                "Invalidating CUDA graphs: prefill=%d decode=%d reason=%s",
+                len(self._graphs), len(self._decode_graphs), reason,
+            )
         self._active_entry = None
         self._graphs.clear()
         self._decode_graphs.clear()
+
+    def reset_serving_counts(self) -> None:
+        self.replay_count = 0
+        self.decode_replay_count = 0
+        self.prefill_fallback_count = 0
+        self.decode_fallback_count = 0
 
     def shutdown(self, process_group=None) -> None:
         """Release captured collectives before their NCCL process group."""
@@ -169,11 +185,27 @@ class FlashInferCudaGraphRunner:
         )
 
     def capture_decode_lengths(self, runner, lengths) -> None:
+        started = time.perf_counter()
         cache = runner.past_key_values
         for kv_len in sorted(set(map(int, lengths)), reverse=True):
             key = (kv_len, cache.data.data_ptr(), torch.long)
             if key not in self._decode_graphs:
                 self._capture_decode(runner, kv_len, key)
+        self.capture_time_s += time.perf_counter() - started
+
+    def stats(self) -> dict[str, int | float]:
+        return {
+            "prefill_capture_count": self.capture_count,
+            "prefill_replay_count": self.replay_count,
+            "prefill_fallback_count": self.prefill_fallback_count,
+            "decode_capture_count": self.decode_capture_count,
+            "decode_replay_count": self.decode_replay_count,
+            "decode_fallback_count": self.decode_fallback_count,
+            "invalidation_count": self.invalidation_count,
+            "capture_time_s": self.capture_time_s,
+            "memory_allocated_bytes": torch.cuda.memory_allocated(self.device),
+            "memory_reserved_bytes": torch.cuda.memory_reserved(self.device),
+        }
 
     def replay_decode(
         self,
@@ -357,9 +389,8 @@ class FlashInferCudaGraphRunner:
             default=0,
         )
         for actual_length in range(
-            max(int(runner.block_length), previous_bucket + int(runner.block_length)),
+            max(1, previous_bucket + 1),
             bucket + 1,
-            int(runner.block_length),
         ):
             actual_mask = mask & (k_pos[None, :] < actual_length)
             actual_mask[actual_length:] = False

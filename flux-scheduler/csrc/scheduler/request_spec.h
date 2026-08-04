@@ -31,6 +31,9 @@ namespace flux {
 struct RequestSpec {
     std::string request_id;
     std::vector<std::int32_t> tokens;
+    // Number of prompt tokens whose KV is stable after prefill. A negative
+    // value preserves the legacy behavior of prefilling the complete prompt.
+    std::int32_t prefill_length{-1};
     std::vector<std::string> rolling_hashes;
     std::int32_t storage_hit_pages{0};
 };

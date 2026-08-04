@@ -39,6 +39,8 @@ import aiohttp
 import numpy as np
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
+from fluxserve.prompt_utils import render_openai_messages
+
 
 DEFAULT_TIMEOUT_SEC = 60 * 60
 SUPPORTED_METRICS = ("E2E", "QUEUE", "EXECUTION", "HTTP_OVERHEAD")
@@ -208,11 +210,9 @@ def load_jsonl_requests(
         if isinstance(output_len, bool) or not isinstance(output_len, int) or output_len <= 0:
             raise ValueError(f"max_tokens in {dataset}:{line_number} must be a positive integer.")
         body["max_tokens"] = output_len
-        input_ids = tokenizer.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-        )
+        # Measure the exact prompt sent through the online server.  This must
+        # stay aligned with bench_offline and the chat endpoint.
+        input_ids = tokenizer(render_openai_messages(messages))["input_ids"]
         requests.append(
             SampleRequest(
                 messages=messages,

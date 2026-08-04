@@ -50,6 +50,7 @@ from fluxserve.backend.layers.moe import initialize_moe_config
 from fluxserve.backend.metrics import record_batch_performance_metrics
 from fluxserve.backend.utils.server_args import ServerArgs
 from fluxserve.backend.utils.runtime_utils import require_nvidia_cuda
+from fluxserve.prompt_utils import render_openai_messages
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -88,21 +89,6 @@ class BenchmarkLogger:
 
 def bucket_length(length: int) -> int:
     return BUCKET_SIZE * (length // BUCKET_SIZE)
-
-
-def render_openai_messages(messages):
-    rendered = []
-    for message in messages:
-        role = message.get("role", "").upper()
-        content = message.get("content", "")
-        if role == "SYSTEM":
-            rendered.append(f"<role>SYSTEM</role>{content}<|role_end|>")
-        elif role == "ASSISTANT":
-            rendered.append(f"<role>ASSISTANT</role>{content}<|role_end|>")
-        else:
-            rendered.append(f"<role>HUMAN</role>{content}<|role_end|>")
-    rendered.append("<role>ASSISTANT</role>")
-    return "".join(rendered)
 
 
 def load_openai_style_inputs(dataset, tokenizer):
