@@ -33,7 +33,9 @@ class _DecodeGraphEntry:
     graph: torch.cuda.CUDAGraph
     input_ids: torch.Tensor
     position_ids: torch.Tensor
+    kv_indptr: torch.Tensor
     kv_indices: torch.Tensor
+    last_page_len: torch.Tensor
     slot_mapping: torch.Tensor
     wrapper: object
     hidden_states: torch.Tensor
@@ -68,6 +70,10 @@ class FlashInferCudaGraphRunner:
         self.replay_count = 0
         self.decode_capture_count = 0
         self.decode_replay_count = 0
+        self.decode_decomposed_plan_count = 0
+        self.decode_component_replay_count = 0
+        self._decode_capture_counts_by_bs = {size: 0 for size in (1, 2, 4, 8)}
+        self._decode_replay_counts_by_bs = {size: 0 for size in (1, 2, 4, 8)}
         self.invalidation_count = 0
         self.prefill_fallback_count = 0
         self.decode_fallback_count = 0
@@ -94,6 +100,10 @@ class FlashInferCudaGraphRunner:
     def reset_serving_counts(self) -> None:
         self.replay_count = 0
         self.decode_replay_count = 0
+        self.decode_decomposed_plan_count = 0
+        self.decode_component_replay_count = 0
+        for batch_size in self._decode_replay_counts_by_bs:
+            self._decode_replay_counts_by_bs[batch_size] = 0
         self.prefill_fallback_count = 0
         self.decode_fallback_count = 0
 
@@ -178,34 +188,68 @@ class FlashInferCudaGraphRunner:
 
     def can_run_decode(self, *, batch_size: int, q_len: int, kv_len: int) -> bool:
         return bool(
-            batch_size == 1
+            batch_size in (1, 2, 4, 8)
             and q_len == 64
             and kv_len >= q_len
             and kv_len % q_len == 0
         )
 
-    def capture_decode_lengths(self, runner, lengths) -> None:
+    @staticmethod
+    def decompose_batch_size(batch_size: int) -> tuple[int, ...]:
+        """Decompose a batch into exact power-of-two graphs without padding."""
+        if batch_size <= 0:
+            return ()
+        parts = []
+        remaining = int(batch_size)
+        for bucket in (8, 4, 2, 1):
+            while remaining >= bucket:
+                parts.append(bucket)
+                remaining -= bucket
+        return tuple(parts)
+
+    @staticmethod
+    def capture_batch_sizes(max_batch_size: int) -> tuple[int, ...]:
+        """Return graph sizes reachable up to the configured online limit."""
+        if max_batch_size <= 0:
+            return ()
+        return tuple(size for size in (1, 2, 4, 8) if size <= max_batch_size)
+
+    def record_decode_decomposition(self, component_count: int) -> None:
+        if int(component_count) > 1:
+            self.decode_decomposed_plan_count += 1
+
+    def capture_decode_batch_sizes(self, runner, batch_sizes=(1, 2, 4, 8)) -> None:
         started = time.perf_counter()
         cache = runner.past_key_values
-        for kv_len in sorted(set(map(int, lengths)), reverse=True):
-            key = (kv_len, cache.data.data_ptr(), torch.long)
+        for batch_size in sorted(set(map(int, batch_sizes)), reverse=True):
+            key = (batch_size, cache.data.data_ptr(), torch.long)
             if key not in self._decode_graphs:
-                self._capture_decode(runner, kv_len, key)
+                self._capture_decode(runner, batch_size, key)
         self.capture_time_s += time.perf_counter() - started
 
     def stats(self) -> dict[str, int | float]:
-        return {
+        stats = {
             "prefill_capture_count": self.capture_count,
             "prefill_replay_count": self.replay_count,
             "prefill_fallback_count": self.prefill_fallback_count,
             "decode_capture_count": self.decode_capture_count,
             "decode_replay_count": self.decode_replay_count,
+            "decode_decomposed_plan_count": self.decode_decomposed_plan_count,
+            "decode_component_replay_count": self.decode_component_replay_count,
             "decode_fallback_count": self.decode_fallback_count,
             "invalidation_count": self.invalidation_count,
             "capture_time_s": self.capture_time_s,
             "memory_allocated_bytes": torch.cuda.memory_allocated(self.device),
             "memory_reserved_bytes": torch.cuda.memory_reserved(self.device),
         }
+        for batch_size in (1, 2, 4, 8):
+            stats[f"decode_capture_bs_{batch_size}"] = (
+                self._decode_capture_counts_by_bs[batch_size]
+            )
+            stats[f"decode_replay_bs_{batch_size}"] = (
+                self._decode_replay_counts_by_bs[batch_size]
+            )
+        return stats
 
     def replay_decode(
         self,
@@ -215,66 +259,96 @@ class FlashInferCudaGraphRunner:
         position_ids: torch.Tensor,
         forward_batch: ForwardBatch,
     ) -> torch.Tensor:
-        kv_len = int(forward_batch.flashinfer_kv_lens_cpu[0])
+        batch_size = int(input_ids.shape[0])
         cache = runner.past_key_values
-        key = (kv_len, cache.data.data_ptr(), input_ids.dtype)
+        key = (batch_size, cache.data.data_ptr(), input_ids.dtype)
         entry = self._decode_graphs.get(key)
         if entry is None:
-            entry = self._capture_decode(runner, kv_len, key)
+            entry = self._capture_decode(runner, batch_size, key)
         entry.input_ids.copy_(input_ids)
         entry.position_ids.copy_(position_ids)
-        entry.kv_indices.copy_(forward_batch.flashinfer_paged_kv_indices)
+        actual_indices = forward_batch.flashinfer_paged_kv_indices
+        if actual_indices.numel() > entry.kv_indices.numel():
+            raise RuntimeError(
+                "Dynamic decode metadata exceeds captured page capacity: "
+                f"actual={actual_indices.numel()}, capacity={entry.kv_indices.numel()}"
+            )
+        entry.kv_indptr.copy_(forward_batch.flashinfer_kv_indptr)
+        entry.kv_indices.fill_(int(cache.dummy_page_id))
+        entry.kv_indices[: actual_indices.numel()].copy_(actual_indices)
+        entry.last_page_len.copy_(forward_batch.flashinfer_paged_kv_last_page_len)
         entry.slot_mapping.copy_(forward_batch.flashinfer_slot_mapping.reshape(-1))
         entry.graph.replay()
         self.decode_replay_count += 1
+        self.decode_component_replay_count += 1
+        self._decode_replay_counts_by_bs[batch_size] += 1
         return entry.hidden_states
 
     def run_decode_attention(self, q: torch.Tensor, paged_kv_cache) -> torch.Tensor:
         if not isinstance(self._active_entry, _DecodeGraphEntry):
             raise RuntimeError("FlashInfer full-decode graph is not active")
         output = self._active_entry.wrapper.run(q, paged_kv_cache)
-        bsz = 1
+        bsz = int(self._active_entry.input_ids.shape[0])
         q_len = int(self._active_entry.input_ids.shape[1])
         return output.view(bsz, q_len, q.shape[1], q.shape[2]).transpose(1, 2).contiguous()
 
-    def _capture_decode(self, runner, kv_len: int, key: tuple) -> _DecodeGraphEntry:
+    def _capture_decode(self, runner, batch_size: int, key: tuple) -> _DecodeGraphEntry:
         import flashinfer
 
         cache = runner.past_key_values
         block_length = int(runner.block_length)
         page_size = int(cache.page_size)
-        num_pages = (kv_len + page_size - 1) // page_size
-        q_offset = kv_len - block_length
+        max_kv_len = (int(runner.max_length) // block_length) * block_length
+        max_kv_len = max(block_length, max_kv_len)
+        pages_per_row = (max_kv_len + page_size - 1) // page_size
+        num_pages = batch_size * pages_per_row
+        q_offset = max_kv_len - block_length
+        qo_indptr = torch.arange(
+            batch_size + 1, dtype=torch.int32, device=self.device
+        ) * block_length
+        kv_indptr = torch.arange(
+            batch_size + 1, dtype=torch.int32, device=self.device
+        ) * pages_per_row
+        if int(cache.num_dummy_pages) < batch_size:
+            raise RuntimeError(
+                "Dynamic decode capture requires one dummy page per batch row: "
+                f"need={batch_size}, reserved={cache.num_dummy_pages}"
+            )
+        dummy_page_ids = torch.arange(
+            int(cache.dummy_page_id),
+            int(cache.dummy_page_id) + batch_size,
+            dtype=torch.int32,
+            device=self.device,
+        )
+        kv_indices = dummy_page_ids.repeat_interleave(pages_per_row)
+        last_page_len = torch.full(
+            (batch_size,), page_size, dtype=torch.int32, device=self.device
+        )
         wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(
-            self._workspace, kv_layout="NHD", backend="fa2"
+            self._workspace, kv_layout="NHD", use_cuda_graph=True,
+            qo_indptr_buf=qo_indptr,
+            paged_kv_indptr_buf=kv_indptr,
+            paged_kv_indices_buf=kv_indices,
+            paged_kv_last_page_len_buf=last_page_len,
+            backend="fa2",
         )
         input_ids = torch.full(
-            (1, block_length), int(runner.decoder.mask_id), dtype=torch.long,
+            (batch_size, block_length), int(runner.decoder.mask_id), dtype=torch.long,
             device=self.device,
         )
         position_ids = torch.arange(
-            q_offset, kv_len, dtype=torch.long, device=self.device
-        ).unsqueeze(0)
-        kv_indices = torch.full(
-            (num_pages,), int(cache.dummy_page_id), dtype=torch.int32,
-            device=self.device,
+            q_offset, max_kv_len, dtype=torch.long, device=self.device
+        ).unsqueeze(0).repeat(batch_size, 1)
+        slot_mapping = (
+            dummy_page_ids.to(torch.long).unsqueeze(1) * page_size
+            + torch.arange(block_length, dtype=torch.long, device=self.device)
+        ).reshape(-1)
+        kv_lens = torch.full(
+            (batch_size,), max_kv_len, dtype=torch.int32, device=self.device
         )
-        slot_mapping = torch.arange(
-            cache.dummy_page_id * page_size,
-            cache.dummy_page_id * page_size + block_length,
-            dtype=torch.long,
-            device=self.device,
+        q_offsets = torch.full(
+            (batch_size,), q_offset, dtype=torch.int32, device=self.device
         )
-        qo_indptr = torch.tensor([0, block_length], dtype=torch.int32, device=self.device)
-        kv_indptr = torch.tensor([0, num_pages], dtype=torch.int32, device=self.device)
-        last_page_len = torch.tensor(
-            [((kv_len - 1) % page_size) + 1], dtype=torch.int32, device=self.device
-        )
-        kv_lens = torch.tensor([kv_len], dtype=torch.int32, device=self.device)
-        q_offsets = torch.tensor([q_offset], dtype=torch.int32, device=self.device)
-        q_pos = torch.arange(q_offset, kv_len, device=self.device)
-        k_pos = torch.arange(kv_len, device=self.device)
-        mask = (q_pos[:, None] // block_length) >= (k_pos[None, :] // block_length)
         wrapper.plan(
             qo_indptr, kv_indptr, kv_indices, last_page_len,
             num_qo_heads=runner.model.model.config.num_attention_heads
@@ -286,7 +360,6 @@ class FlashInferCudaGraphRunner:
             head_dim_qk=runner.model.model.config.hidden_size
             // runner.model.model.config.num_attention_heads,
             page_size=page_size,
-            custom_mask=mask.flatten(),
             causal=False,
             q_data_type=torch.bfloat16,
             kv_data_type=cache.data.dtype,
@@ -295,18 +368,18 @@ class FlashInferCudaGraphRunner:
         forward_batch = ForwardBatch(
             forward_mode=ForwardMode.DECODE,
             use_flashinfer_paged_decode=True,
-            flashinfer_kv_lens_cpu=(kv_len,),
+            flashinfer_kv_lens_cpu=(max_kv_len,) * batch_size,
             flashinfer_kv_lens=kv_lens,
-            flashinfer_q_offsets_cpu=(q_offset,),
+            flashinfer_q_offsets_cpu=(q_offset,) * batch_size,
             flashinfer_q_offsets=q_offsets,
-            flashinfer_qo_indptr_cpu=(0, block_length),
+            flashinfer_qo_indptr_cpu=tuple(qo_indptr.cpu().tolist()),
             flashinfer_qo_indptr=qo_indptr,
-            flashinfer_kv_indptr_cpu=(0, num_pages),
+            flashinfer_kv_indptr_cpu=tuple(kv_indptr.cpu().tolist()),
             flashinfer_kv_indptr=kv_indptr,
             flashinfer_paged_kv_indices=kv_indices,
             flashinfer_paged_kv_last_page_len=last_page_len,
-            flashinfer_seq_ids=torch.zeros(1, dtype=torch.long, device=self.device),
-            flashinfer_slot_mapping=slot_mapping.view(1, block_length),
+            flashinfer_seq_ids=torch.arange(batch_size, dtype=torch.long, device=self.device),
+            flashinfer_slot_mapping=slot_mapping.view(batch_size, block_length),
             flashinfer_block_length=block_length,
             flashinfer_page_size=page_size,
             flashinfer_cuda_graph_runner=self,
@@ -323,14 +396,17 @@ class FlashInferCudaGraphRunner:
             )
             return hidden_states
 
-        self.log("CUDA graph capturing: full paged decode kv_len=%d", kv_len)
+        self.log(
+            "CUDA graph capturing: dynamic paged decode batch_size=%d max_kv_len=%d",
+            batch_size, max_kv_len,
+        )
         placeholder = torch.empty(
-            1, block_length, runner.model.model.config.hidden_size,
+            batch_size, block_length, runner.model.model.config.hidden_size,
             dtype=torch.bfloat16, device=self.device,
         )
         entry = _DecodeGraphEntry(
-            torch.cuda.CUDAGraph(), input_ids, position_ids, kv_indices,
-            slot_mapping, wrapper, placeholder,
+            torch.cuda.CUDAGraph(), input_ids, position_ids, kv_indptr, kv_indices,
+            last_page_len, slot_mapping, wrapper, placeholder,
         )
         self._active_entry = entry
         try:
@@ -348,7 +424,11 @@ class FlashInferCudaGraphRunner:
             self._active_entry = None
         self._decode_graphs[key] = entry
         self.decode_capture_count += 1
-        self.log("CUDA graph captured: full paged decode kv_len=%d layers=%d", kv_len, cache.num_layers)
+        self._decode_capture_counts_by_bs[batch_size] += 1
+        self.log(
+            "CUDA graph captured: dynamic paged decode batch_size=%d layers=%d",
+            batch_size, cache.num_layers,
+        )
         return entry
 
     def _capture(self, runner, bucket: int, key: tuple) -> _GraphEntry:

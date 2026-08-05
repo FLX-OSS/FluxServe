@@ -228,8 +228,48 @@ def test_fluxserve_runner_decode_eligibility() -> None:
         page_size=PAGE_SIZE,
     )
     assert runner.can_run_decode(batch_size=1, q_len=64, kv_len=64)
+    assert runner.can_run_decode(batch_size=2, q_len=64, kv_len=256)
+    assert runner.can_run_decode(batch_size=4, q_len=64, kv_len=256)
+    assert runner.can_run_decode(batch_size=8, q_len=64, kv_len=256)
     assert runner.can_run_decode(batch_size=1, q_len=64, kv_len=256)
-    assert not runner.can_run_decode(batch_size=2, q_len=64, kv_len=256)
+    assert not runner.can_run_decode(batch_size=3, q_len=64, kv_len=256)
     assert not runner.can_run_decode(batch_size=1, q_len=32, kv_len=256)
     assert not runner.can_run_decode(batch_size=1, q_len=64, kv_len=224)
     assert not runner.can_run_decode(batch_size=1, q_len=64, kv_len=32)
+
+
+def test_fluxserve_runner_decomposes_decode_batches_without_padding() -> None:
+    _require_cuda_and_flashinfer()
+    from fluxserve.backend.execution.flashinfer_cuda_graph_runner import (
+        FlashInferCudaGraphRunner,
+    )
+
+    expected = {
+        1: (1,),
+        2: (2,),
+        3: (2, 1),
+        4: (4,),
+        5: (4, 1),
+        6: (4, 2),
+        7: (4, 2, 1),
+        8: (8,),
+        11: (8, 2, 1),
+    }
+    for batch_size, parts in expected.items():
+        assert FlashInferCudaGraphRunner.decompose_batch_size(batch_size) == parts
+        assert sum(parts) == batch_size
+
+
+def test_fluxserve_runner_selects_reachable_online_decode_graphs() -> None:
+    _require_cuda_and_flashinfer()
+    from fluxserve.backend.execution.flashinfer_cuda_graph_runner import (
+        FlashInferCudaGraphRunner,
+    )
+
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(0) == ()
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(1) == (1,)
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(3) == (1, 2)
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(4) == (1, 2, 4)
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(6) == (1, 2, 4)
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(8) == (1, 2, 4, 8)
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(12) == (1, 2, 4, 8)

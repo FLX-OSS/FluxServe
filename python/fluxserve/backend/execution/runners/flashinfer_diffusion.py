@@ -50,8 +50,8 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 )
             if self.runner_config.enable_decode_cuda_graph:
                 self.flashinfer_graph_runner.log(
-                    "CUDA graph enabled: FlashInfer paged decode "
-                    "(batch_size=1, block_length=%d)",
+                    "CUDA graph enabled: FlashInfer dynamic paged decode "
+                    "(batch_sizes=1,2,4,8, block_length=%d)",
                     self.block_length,
                 )
 
@@ -109,9 +109,10 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 head_dim=config.hidden_size // config.num_attention_heads,
                 page_size=int(self.runner_config.page_size),
                 reserve_dummy_page=max(
-                    self.runner_config.cuda_graph_capture_sizes
-                )
-                // int(self.runner_config.page_size),
+                    8 if self.runner_config.enable_decode_cuda_graph else 0,
+                    max(self.runner_config.cuda_graph_capture_sizes)
+                    // int(self.runner_config.page_size),
+                ),
                 dtype=torch.bfloat16,
                 device=self.device,
             )
@@ -188,9 +189,10 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             page_size=int(self.runner_config.page_size),
             num_pages=scheduler_pages,
             reserve_dummy_page=max(
-                self.runner_config.cuda_graph_capture_sizes
-            )
-            // int(self.runner_config.page_size),
+                8 if self.runner_config.enable_decode_cuda_graph else 0,
+                max(self.runner_config.cuda_graph_capture_sizes)
+                // int(self.runner_config.page_size),
+            ),
             dtype=torch.bfloat16,
             device=self.device,
         )
@@ -221,10 +223,10 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 warmup = _WarmupPrefill(int(bucket), int(self.decoder.mask_id))
                 self._execute_paged_prefill(warmup, 1, [0])
         if self.runner_config.enable_decode_cuda_graph:
-            graph_runner.capture_decode_lengths(
-                self,
-                range(self.block_length * 2, self.max_length + 1, self.block_length),
+            decode_batch_sizes = graph_runner.capture_batch_sizes(
+                int(self.server_args.max_num_seqs)
             )
+            graph_runner.capture_decode_batch_sizes(self, decode_batch_sizes)
         graph_runner.capture_time_s = time.perf_counter() - started
         stats = graph_runner.stats()
         graph_runner.log("CUDA graph online startup complete: %s", stats)
@@ -1067,6 +1069,36 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         pos_ids,
         num_layers,
     ):
+        # CUDA graphs have exact power-of-two batch shapes. Split irregular
+        # batches instead of padding them: padded rows would still enter the
+        # MoE router, experts, shared experts, and distributed collectives.
+        if (
+            self.flashinfer_graph_runner is not None
+            and self.runner_config.enable_decode_cuda_graph
+            and self._use_flashinfer_paged_cache()
+        ):
+            parts = self.flashinfer_graph_runner.decompose_batch_size(len(seq_ids))
+            if len(parts) > 1:
+                self.flashinfer_graph_runner.record_decode_decomposition(len(parts))
+                start = 0
+                for part in parts:
+                    component_ids = seq_ids[start : start + part]
+                    component_cache_length = int(
+                        torch.max(
+                            decoding_start[component_ids] + self.block_length
+                        ).item()
+                    )
+                    self._decode_selected_batch(
+                        x,
+                        component_ids,
+                        decoding_start,
+                        component_cache_length,
+                        total_length,
+                        pos_ids,
+                        num_layers,
+                    )
+                    start += part
+                return
         decoding_x = x.select_seqs(seq_ids)
         decoding_block = gather_blocks(
             decoding_x.data, decoding_start[seq_ids], self.block_length

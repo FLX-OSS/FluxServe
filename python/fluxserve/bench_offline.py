@@ -380,14 +380,9 @@ def warmup_runner(runner, args, device, logger):
 
     graph_runner = getattr(runner, "flashinfer_graph_runner", None)
     if graph_runner is not None and use_decode_graph:
-        block_length = int(runner.block_length)
-        graph_runner.capture_decode_lengths(
+        graph_runner.capture_decode_batch_sizes(
             runner,
-            range(
-                block_length * 2,
-                int(runner.max_length) + 1,
-                block_length,
-            ),
+            batch_sizes=graph_runner.decompose_batch_size(args.mini_batch_size),
         )
 
     runner.runner_config.gen_length = original_gen_length
