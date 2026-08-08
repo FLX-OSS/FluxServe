@@ -346,7 +346,8 @@ async def send_request(
         generated_text = ""
         async with active_session.post(api_url, json=payload, headers=headers) as response:
             if response.status != 200:
-                output.error = f"HTTP {response.status}: {await response.text()}"
+                response_text = await response.text()
+                output.error = f"HTTP {response.status}: {response_text}"
                 return output
 
             decoder = SSEDecoder()
@@ -456,7 +457,10 @@ def summarize(
         for output in successes
     ]
     total_input = sum(input_tokens)
-    total_output = sum(completion_tokens)
+    # Throughput must reflect tokens actually emitted by the client-visible
+    # response.  Server-reported completion_tokens can be model-internal
+    # diffusion/block tokens and may substantially exceed generated text.
+    actual_output = sum(output.output_tokens for output in successes)
     all_latency_values = {
         "e2e": [output.e2e_latency * 1000 for output in successes],
         "queue": [output.queue_latency * 1000 for output in successes if output.queue_latency is not None],
@@ -472,10 +476,10 @@ def summarize(
         "completed": len(successes),
         "failed": len(failed),
         "total_input_tokens": total_input,
-        "total_output_tokens": total_output,
+        "max_output_tokens": actual_output,
         "request_throughput": len(successes) / duration_s if duration_s else 0.0,
-        "output_token_throughput": total_output / duration_s if duration_s else 0.0,
-        "total_token_throughput": (total_input + total_output) / duration_s if duration_s else 0.0,
+        "output_token_throughput": actual_output / duration_s if duration_s else 0.0,
+        "total_token_throughput": (total_input + actual_output) / duration_s if duration_s else 0.0,
         "input_lens": [output.prompt_len for output in outputs],
         "output_lens": [output.output_tokens for output in outputs],
         "start_times": [output.start_time for output in outputs],
