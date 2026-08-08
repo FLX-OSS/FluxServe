@@ -37,7 +37,10 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 self.runner_config.cuda_graph_capture_sizes,
                 self.runner_config.cuda_graph_log_callback,
                 self.model.model.config.num_hidden_layers,
-                decode_capture_batch_sizes=self.runner_config.supported_batch_sizes,
+                decode_capture_batch_sizes=(
+                    self.runner_config.cuda_graph_capture_batch_sizes
+                    or self.runner_config.supported_batch_sizes
+                ),
             )
             if self.enable_flashinfer_attention_graph
             else None
@@ -1085,6 +1088,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         pos_ids,
         num_layers,
     ):
+        actual_batch_size = len(seq_ids)
         # CUDA graphs have exact power-of-two batch shapes. Split irregular
         # batches instead of padding them: padded rows would still enter the
         # MoE router, experts, shared experts, and distributed collectives.
@@ -1097,7 +1101,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 len(seq_ids),
                 self.flashinfer_graph_runner.decode_capture_batch_sizes,
             )
-            if len(parts) > 1:
+            if self.runner_config.decode_cuda_graph_mode != "padded" and len(parts) > 1:
                 self.flashinfer_graph_runner.record_decode_decomposition(len(parts))
                 start = 0
                 for part in parts:
@@ -1157,7 +1161,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 position_ids=decoding_pos_ids,
                 forward_batch=forward_batch,
             )
-            logits = self.model._get_logits(hidden_states)[: len(seq_ids)]
+            logits = self.model._get_logits(hidden_states)[:actual_batch_size]
             output = None
         else:
             if self.flashinfer_graph_runner is not None:

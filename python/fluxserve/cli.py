@@ -135,6 +135,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--use-cuda-graph", action="store_true")
     serve.add_argument("--use-prefill-cuda-graph", action="store_true")
     serve.add_argument("--use-decode-cuda-graph", action="store_true")
+    serve.add_argument("--cuda-graph-decode-mode", choices=("decomposed", "padded"), default="decomposed")
+    serve.add_argument("--cuda-graph-capture-bs", "--cuda_graph_capture_bs", type=int, nargs="+", default=None, metavar="N")
     serve.add_argument(
         "--cuda-graph-capture-sizes",
         type=int,
@@ -301,6 +303,8 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             enable_cuda_graph=args.use_cuda_graph,
             enable_prefill_cuda_graph=args.use_prefill_cuda_graph,
             enable_decode_cuda_graph=args.use_decode_cuda_graph,
+            decode_cuda_graph_mode=args.cuda_graph_decode_mode,
+            cuda_graph_capture_batch_sizes=args.cuda_graph_capture_bs,
             cuda_graph_capture_sizes=graph_capture_sizes,
             attention_backend=args.attention_backend,
             flashinfer_decode_batch_mode=args.flashinfer_decode_batch_mode,

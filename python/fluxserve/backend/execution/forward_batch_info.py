@@ -136,6 +136,8 @@ class RunnerConfig:
     eos_id: int = 156892
     attention_backend: str = "sdpa"
     flashinfer_decode_batch_mode: str = "max_batch"
+    decode_cuda_graph_mode: str = "decomposed"
+    cuda_graph_capture_batch_sizes: Sequence[int] | None = None
     flashinfer_prefill_mode: str = "dense"
     flashinfer_cache_mode: str = "dense"
     kv_cache_layout: Literal["dense", "paged"] = "dense"
@@ -158,6 +160,8 @@ class RunnerConfig:
                 "flashinfer_decode_batch_mode must be one of 'default' or "
                 f"'max_batch', got {self.flashinfer_decode_batch_mode!r}"
             )
+        if self.decode_cuda_graph_mode not in {"decomposed", "padded"}:
+            raise ValueError("decode_cuda_graph_mode must be 'decomposed' or 'padded'")
         if self.flashinfer_prefill_mode not in {"dense", "ragged", "paged"}:
             raise ValueError(
                 "flashinfer_prefill_mode must be one of 'dense', 'ragged', or 'paged', "
@@ -229,6 +233,10 @@ class RunnerConfig:
         self.prefill_lengths = tuple(int(x) for x in self.prefill_lengths)
         self.cache_lengths = tuple(int(x) for x in self.cache_lengths)
         self.supported_batch_sizes = tuple(int(x) for x in self.supported_batch_sizes)
+        if self.cuda_graph_capture_batch_sizes is not None:
+            self.cuda_graph_capture_batch_sizes = tuple(sorted(set(int(x) for x in self.cuda_graph_capture_batch_sizes)))
+            if not self.cuda_graph_capture_batch_sizes or any(x <= 0 or x & (x - 1) for x in self.cuda_graph_capture_batch_sizes):
+                raise ValueError("cuda_graph_capture_batch_sizes must contain positive powers of two")
         self.cuda_graph_capture_sizes = tuple(
             sorted(set(int(x) for x in self.cuda_graph_capture_sizes))
         )

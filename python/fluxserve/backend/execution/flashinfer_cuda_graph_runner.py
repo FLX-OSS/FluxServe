@@ -302,30 +302,81 @@ class FlashInferCudaGraphRunner:
         position_ids: torch.Tensor,
         forward_batch: ForwardBatch,
     ) -> torch.Tensor:
-        batch_size = int(input_ids.shape[0])
+        actual_batch_size = int(input_ids.shape[0])
+        batch_size = actual_batch_size
+        if getattr(runner.runner_config, "decode_cuda_graph_mode", "decomposed") == "padded":
+            batch_size = next(
+                (size for size in self.decode_capture_batch_sizes if size >= actual_batch_size),
+                actual_batch_size,
+            )
         cache = runner.past_key_values
         key = (batch_size, cache.data.data_ptr(), input_ids.dtype)
         entry = self._decode_graphs.get(key)
         if entry is None:
             entry = self._capture_decode(runner, batch_size, key)
+        if batch_size != actual_batch_size:
+            # Use model mask tokens and dedicated dummy pages for padding. The
+            # padded rows are needed only for collective/graph shape and their
+            # outputs are discarded; they must not alias a live request's KV.
+            pad_rows = batch_size - actual_batch_size
+            dummy_ids = torch.full(
+                (pad_rows, input_ids.shape[1]), int(runner.decoder.mask_id),
+                dtype=input_ids.dtype, device=input_ids.device,
+            )
+            dummy_pos = torch.zeros(
+                (pad_rows, position_ids.shape[1]),
+                dtype=position_ids.dtype, device=position_ids.device,
+            )
+            input_ids = torch.cat((input_ids, dummy_ids), dim=0).contiguous()
+            position_ids = torch.cat((position_ids, dummy_pos), dim=0).contiguous()
+            kv_indptr = forward_batch.flashinfer_kv_indptr
+            kv_indices = forward_batch.flashinfer_paged_kv_indices
+            last_page_len = forward_batch.flashinfer_paged_kv_last_page_len
+            slots = forward_batch.flashinfer_slot_mapping.reshape(-1, forward_batch.flashinfer_slot_mapping.shape[-1])
+            # Build padded CSR metadata by repeating the last request's pages.
+            lengths = kv_indptr[1:] - kv_indptr[:-1]
+            pad_len = int(lengths[-1].item()) if lengths.numel() else 1
+            kv_indptr = torch.cat((kv_indptr, kv_indptr[-1] + torch.arange(1, batch_size - actual_batch_size + 1, device=kv_indptr.device, dtype=kv_indptr.dtype) * pad_len))
+            dummy_pages = torch.full(
+                (pad_rows * pad_len,), int(cache.dummy_page_id),
+                dtype=kv_indices.dtype, device=kv_indices.device,
+            )
+            kv_indices = torch.cat((kv_indices, dummy_pages))
+            last_page_len = torch.cat((last_page_len, torch.full(
+                (pad_rows,), int(cache.page_size), dtype=last_page_len.dtype,
+                device=last_page_len.device,
+            )))
+            dummy_slots = torch.arange(
+                int(cache.dummy_page_id) * int(cache.page_size),
+                int(cache.dummy_page_id) * int(cache.page_size) + pad_rows * slots.shape[1],
+                dtype=slots.dtype, device=slots.device,
+            ).view(pad_rows, slots.shape[1])
+            slots = torch.cat((slots, dummy_slots), dim=0)
+            padded_kv_indptr, padded_kv_indices = kv_indptr, kv_indices
+            padded_last_page_len, padded_slots = last_page_len, slots
+        else:
+            padded_kv_indptr = forward_batch.flashinfer_kv_indptr
+            padded_kv_indices = forward_batch.flashinfer_paged_kv_indices
+            padded_last_page_len = forward_batch.flashinfer_paged_kv_last_page_len
+            padded_slots = forward_batch.flashinfer_slot_mapping
         entry.input_ids.copy_(input_ids)
         entry.position_ids.copy_(position_ids)
-        actual_indices = forward_batch.flashinfer_paged_kv_indices
+        actual_indices = padded_kv_indices
         if actual_indices.numel() > entry.kv_indices.numel():
             raise RuntimeError(
                 "Dynamic decode metadata exceeds captured page capacity: "
                 f"actual={actual_indices.numel()}, capacity={entry.kv_indices.numel()}"
             )
-        entry.kv_indptr.copy_(forward_batch.flashinfer_kv_indptr)
+        entry.kv_indptr.copy_(padded_kv_indptr)
         entry.kv_indices.fill_(int(cache.dummy_page_id))
         entry.kv_indices[: actual_indices.numel()].copy_(actual_indices)
-        entry.last_page_len.copy_(forward_batch.flashinfer_paged_kv_last_page_len)
-        entry.slot_mapping.copy_(forward_batch.flashinfer_slot_mapping.reshape(-1))
+        entry.last_page_len.copy_(padded_last_page_len)
+        entry.slot_mapping.copy_(padded_slots.reshape(-1))
         entry.graph.replay()
         self.decode_replay_count += 1
         self.decode_component_replay_count += 1
         self._decode_replay_counts_by_bs[batch_size] += 1
-        return entry.hidden_states
+        return entry.hidden_states[:actual_batch_size]
 
     def run_decode_attention(self, q: torch.Tensor, paged_kv_cache) -> torch.Tensor:
         if not isinstance(self._active_entry, _DecodeGraphEntry):

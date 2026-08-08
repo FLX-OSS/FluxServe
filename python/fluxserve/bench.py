@@ -257,32 +257,12 @@ async def iter_requests(
     request_rate: float,
     burstiness: float,
 ) -> AsyncIterator[SampleRequest]:
-    if burstiness <= 0:
-        raise ValueError("--burstiness must be positive.")
     if request_rate <= 0:
         raise ValueError("--request-rate must be positive.")
 
-    delays = []
-    for _ in requests:
-        if request_rate == float("inf"):
-            delays.append(0.0)
-        elif burstiness == float("inf"):
-            delays.append(1.0 / request_rate)
-        else:
-            theta = 1.0 / (request_rate * burstiness)
-            delays.append(float(np.random.gamma(shape=burstiness, scale=theta)))
-
-    for i in range(1, len(delays)):
-        delays[i] += delays[i - 1]
-    if request_rate != float("inf") and delays and delays[-1] > 0:
-        scale = (len(requests) / request_rate) / delays[-1]
-        delays = [delay * scale for delay in delays]
-
-    start = time.perf_counter()
     for i, request in enumerate(requests):
-        sleep_s = start + delays[i] - time.perf_counter()
-        if sleep_s > 0:
-            await asyncio.sleep(sleep_s)
+        if i and request_rate != float("inf"):
+            await asyncio.sleep(float(np.random.exponential(1.0 / request_rate)))
         yield request
 
 
