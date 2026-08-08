@@ -14,10 +14,6 @@
 ### Engine Support
 - [ ] Model Parallelism
   - [ ] Pipeline Parallelism
-- [ ] Runtime Optimization
-  - [ ] CUDA Graph (WIP)
-    - [x] BS=1
-    - [ ] CUDA Graph Output Mismatch Fix
 - [ ] Cache Optimization
   - [ ] Prefix Cache (WIP)
 - [ ] MoE Optimization

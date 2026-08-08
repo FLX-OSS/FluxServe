@@ -15,6 +15,7 @@
         - [x] sgl-kernel
     - [x] Flux-Kernels
         - [x] RMSNorm
+    - [x] CUDA Graph
 - [x] Distributed Execution
     - [x] TP + EP (TP=EP)
     - [x] DP + EP (DP=EP)

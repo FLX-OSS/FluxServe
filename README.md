@@ -18,13 +18,23 @@ Its core features include:
 ## [Development Roadmap](docs/roadmap.md)
 
 ## Performance Results
-FluxServe achieves up to an average of 2.3x speedup against SGLang in batched inference. It also can sustain up to 40% more throughput when serving 100B LLaDA-2.0-Flash. Detailed benchmark guides can be found [here](docs/guides/benchmark.md).
 
+### Batched Inference
+FluxServe achieves up to 4.5x speedup against SGLang in offline batched inference on the GSM8K dataset. The results are reported using batch size of 16, output length of 2048 on 4 x GH200 with TP=EP=4.
+<table align="center">
+  <tr>
+      <img src="./assets/figures/batched_gsm8k.png" style="width: 100%; object-fit: contain;" />
+  </tr>
+</table>
+
+### Online Serving
+FluxServe also can sustain up to 40% more throughput when serving 100B LLaDA-2.0-Flash. Detailed benchmark guides can be found [here](docs/guides/benchmark.md).
 <table align="center">
   <tr>
       <img src="./assets/figures/results.png" style="width: 100%; object-fit: contain;" />
   </tr>
 </table>
+
 
 ## Acknowledgments
 We learned the system design and reused code from the following projects: [vllm](https://github.com/vllm-project/vllm), [SGLang](https://github.com/sgl-project/sglang), [TokenSpeed](https://github.com/lightseekorg/tokenspeed), and [dInfer](https://github.com/inclusionAI/dInfer).

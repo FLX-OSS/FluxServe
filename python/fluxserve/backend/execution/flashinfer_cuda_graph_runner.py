@@ -52,9 +52,20 @@ class FlashInferCudaGraphRunner:
         capture_sizes=DEFAULT_CAPTURE_SIZES,
         log_callback=None,
         num_layers: int | None = None,
+        decode_capture_batch_sizes=(1, 2, 4, 8),
     ):
         self.device = torch.device(device)
         self.capture_sizes = tuple(sorted(set(int(x) for x in capture_sizes)))
+        self.decode_capture_batch_sizes = tuple(
+            sorted(set(int(x) for x in decode_capture_batch_sizes))
+        )
+        if not self.decode_capture_batch_sizes or any(
+            size <= 0 or size & (size - 1)
+            for size in self.decode_capture_batch_sizes
+        ):
+            raise ValueError(
+                "decode_capture_batch_sizes must contain positive powers of two"
+            )
         self._log_callback = log_callback
         self._num_layers = int(num_layers) if num_layers is not None else None
         self._graphs: dict[tuple, _GraphEntry] = {}
@@ -72,12 +83,18 @@ class FlashInferCudaGraphRunner:
         self.decode_replay_count = 0
         self.decode_decomposed_plan_count = 0
         self.decode_component_replay_count = 0
-        self._decode_capture_counts_by_bs = {size: 0 for size in (1, 2, 4, 8)}
-        self._decode_replay_counts_by_bs = {size: 0 for size in (1, 2, 4, 8)}
+        self._decode_capture_counts_by_bs = {
+            size: 0 for size in self.decode_capture_batch_sizes
+        }
+        self._decode_replay_counts_by_bs = {
+            size: 0 for size in self.decode_capture_batch_sizes
+        }
         self.invalidation_count = 0
         self.prefill_fallback_count = 0
         self.decode_fallback_count = 0
         self.capture_time_s = 0.0
+        self.capture_memory_allocated_bytes = 0
+        self.capture_memory_reserved_bytes = 0
 
     def log(self, message: str, *args) -> None:
         if self._log_callback is not None:
@@ -85,10 +102,11 @@ class FlashInferCudaGraphRunner:
         else:
             logger.warning(message, *args)
 
-    def invalidate(self, reason: str = "unspecified") -> None:
+    def invalidate(self, reason: str = "unspecified", *, log: bool = True) -> None:
         had_graphs = bool(self._graphs or self._decode_graphs)
         if had_graphs:
             self.invalidation_count += 1
+        if had_graphs and log:
             self.log(
                 "Invalidating CUDA graphs: prefill=%d decode=%d reason=%s",
                 len(self._graphs), len(self._decode_graphs), reason,
@@ -107,14 +125,14 @@ class FlashInferCudaGraphRunner:
         self.prefill_fallback_count = 0
         self.decode_fallback_count = 0
 
-    def shutdown(self, process_group=None) -> None:
+    def shutdown(self, process_group=None, *, log: bool = True) -> None:
         """Release captured collectives before their NCCL process group."""
         import torch.distributed as dist
 
         torch.cuda.synchronize(self.device)
         if dist.is_available() and dist.is_initialized():
             dist.barrier(group=process_group)
-        self.invalidate()
+        self.invalidate(log=log)
         self._packed_masks.clear()
         self._workspace = None
         self._capture_stream = None
@@ -188,20 +206,22 @@ class FlashInferCudaGraphRunner:
 
     def can_run_decode(self, *, batch_size: int, q_len: int, kv_len: int) -> bool:
         return bool(
-            batch_size in (1, 2, 4, 8)
+            batch_size in self.decode_capture_batch_sizes
             and q_len == 64
             and kv_len >= q_len
             and kv_len % q_len == 0
         )
 
     @staticmethod
-    def decompose_batch_size(batch_size: int) -> tuple[int, ...]:
+    def decompose_batch_size(
+        batch_size: int, capture_batch_sizes=(1, 2, 4, 8)
+    ) -> tuple[int, ...]:
         """Decompose a batch into exact power-of-two graphs without padding."""
         if batch_size <= 0:
             return ()
         parts = []
         remaining = int(batch_size)
-        for bucket in (8, 4, 2, 1):
+        for bucket in reversed(tuple(capture_batch_sizes)):
             while remaining >= bucket:
                 parts.append(bucket)
                 remaining -= bucket
@@ -212,15 +232,38 @@ class FlashInferCudaGraphRunner:
         """Return graph sizes reachable up to the configured online limit."""
         if max_batch_size <= 0:
             return ()
-        return tuple(size for size in (1, 2, 4, 8) if size <= max_batch_size)
+        return tuple(
+            1 << power for power in range(int(max_batch_size).bit_length())
+        )
+
+    def record_capture_memory(self, allocated_before: int, reserved_before: int) -> None:
+        """Record and log allocator growth across an eager graph capture phase."""
+        torch.cuda.synchronize(self.device)
+        self.capture_memory_allocated_bytes = max(
+            0, int(torch.cuda.memory_allocated(self.device)) - int(allocated_before)
+        )
+        self.capture_memory_reserved_bytes = max(
+            0, int(torch.cuda.memory_reserved(self.device)) - int(reserved_before)
+        )
+        mib = 1024 * 1024
+        self.log(
+            "CUDA graph memory: allocated_delta=%d bytes (%.2f MiB), "
+            "reserved_delta=%d bytes (%.2f MiB)",
+            self.capture_memory_allocated_bytes,
+            self.capture_memory_allocated_bytes / mib,
+            self.capture_memory_reserved_bytes,
+            self.capture_memory_reserved_bytes / mib,
+        )
 
     def record_decode_decomposition(self, component_count: int) -> None:
         if int(component_count) > 1:
             self.decode_decomposed_plan_count += 1
 
-    def capture_decode_batch_sizes(self, runner, batch_sizes=(1, 2, 4, 8)) -> None:
+    def capture_decode_batch_sizes(self, runner, batch_sizes=None) -> None:
         started = time.perf_counter()
         cache = runner.past_key_values
+        if batch_sizes is None:
+            batch_sizes = self.decode_capture_batch_sizes
         for batch_size in sorted(set(map(int, batch_sizes)), reverse=True):
             key = (batch_size, cache.data.data_ptr(), torch.long)
             if key not in self._decode_graphs:
@@ -242,7 +285,7 @@ class FlashInferCudaGraphRunner:
             "memory_allocated_bytes": torch.cuda.memory_allocated(self.device),
             "memory_reserved_bytes": torch.cuda.memory_reserved(self.device),
         }
-        for batch_size in (1, 2, 4, 8):
+        for batch_size in self.decode_capture_batch_sizes:
             stats[f"decode_capture_bs_{batch_size}"] = (
                 self._decode_capture_counts_by_bs[batch_size]
             )

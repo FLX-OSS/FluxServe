@@ -237,6 +237,12 @@ def test_fluxserve_runner_decode_eligibility() -> None:
     assert not runner.can_run_decode(batch_size=1, q_len=64, kv_len=224)
     assert not runner.can_run_decode(batch_size=1, q_len=64, kv_len=32)
 
+    larger_runner = FlashInferCudaGraphRunner(
+        "cuda:0", decode_capture_batch_sizes=(1, 2, 4, 8, 16)
+    )
+    assert larger_runner.can_run_decode(batch_size=16, q_len=64, kv_len=256)
+    assert not larger_runner.can_run_decode(batch_size=32, q_len=64, kv_len=256)
+
 
 def test_fluxserve_runner_decomposes_decode_batches_without_padding() -> None:
     _require_cuda_and_flashinfer()
@@ -259,6 +265,19 @@ def test_fluxserve_runner_decomposes_decode_batches_without_padding() -> None:
         assert FlashInferCudaGraphRunner.decompose_batch_size(batch_size) == parts
         assert sum(parts) == batch_size
 
+    assert FlashInferCudaGraphRunner.decompose_batch_size(
+        12, (1, 2, 4, 8)
+    ) == (8, 4)
+    assert FlashInferCudaGraphRunner.decompose_batch_size(
+        16, (1, 2, 4, 8, 16)
+    ) == (16,)
+    assert FlashInferCudaGraphRunner.decompose_batch_size(
+        31, (1, 2, 4, 8, 16)
+    ) == (16, 8, 4, 2, 1)
+    assert FlashInferCudaGraphRunner.decompose_batch_size(
+        48, (1, 2, 4, 8, 16, 32)
+    ) == (32, 16)
+
 
 def test_fluxserve_runner_selects_reachable_online_decode_graphs() -> None:
     _require_cuda_and_flashinfer()
@@ -273,3 +292,7 @@ def test_fluxserve_runner_selects_reachable_online_decode_graphs() -> None:
     assert FlashInferCudaGraphRunner.capture_batch_sizes(6) == (1, 2, 4)
     assert FlashInferCudaGraphRunner.capture_batch_sizes(8) == (1, 2, 4, 8)
     assert FlashInferCudaGraphRunner.capture_batch_sizes(12) == (1, 2, 4, 8)
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(16) == (1, 2, 4, 8, 16)
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(32) == (
+        1, 2, 4, 8, 16, 32
+    )

@@ -37,6 +37,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 self.runner_config.cuda_graph_capture_sizes,
                 self.runner_config.cuda_graph_log_callback,
                 self.model.model.config.num_hidden_layers,
+                decode_capture_batch_sizes=self.runner_config.supported_batch_sizes,
             )
             if self.enable_flashinfer_attention_graph
             else None
@@ -51,7 +52,13 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             if self.runner_config.enable_decode_cuda_graph:
                 self.flashinfer_graph_runner.log(
                     "CUDA graph enabled: FlashInfer dynamic paged decode "
-                    "(batch_sizes=1,2,4,8, block_length=%d)",
+                    "(batch_sizes=%s, block_length=%d)",
+                    ",".join(
+                        map(
+                            str,
+                            self.flashinfer_graph_runner.decode_capture_batch_sizes,
+                        )
+                    ),
                     self.block_length,
                 )
 
@@ -70,9 +77,11 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             f"{self.server_args.max_num_seqs}"
         )
 
-    def shutdown_cuda_graphs(self) -> None:
+    def shutdown_cuda_graphs(self, *, log: bool = True) -> None:
         if self.flashinfer_graph_runner is not None:
-            self.flashinfer_graph_runner.shutdown(self.tp_group.device_group)
+            self.flashinfer_graph_runner.shutdown(
+                self.tp_group.device_group, log=log
+            )
 
     def _release_paged_slot(self, request_id: str) -> None:
         self._paged_request_slots.pop(request_id, None)
@@ -109,7 +118,8 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 head_dim=config.hidden_size // config.num_attention_heads,
                 page_size=int(self.runner_config.page_size),
                 reserve_dummy_page=max(
-                    8 if self.runner_config.enable_decode_cuda_graph else 0,
+                    max(self.runner_config.supported_batch_sizes)
+                    if self.runner_config.enable_decode_cuda_graph else 0,
                     max(self.runner_config.cuda_graph_capture_sizes)
                     // int(self.runner_config.page_size),
                 ),
@@ -189,7 +199,8 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             page_size=int(self.runner_config.page_size),
             num_pages=scheduler_pages,
             reserve_dummy_page=max(
-                8 if self.runner_config.enable_decode_cuda_graph else 0,
+                max(self.runner_config.supported_batch_sizes)
+                if self.runner_config.enable_decode_cuda_graph else 0,
                 max(self.runner_config.cuda_graph_capture_sizes)
                 // int(self.runner_config.page_size),
             ),
@@ -207,6 +218,10 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             raise RuntimeError("CUDA graph startup requires final scheduler_num_device_pages")
         started = time.perf_counter()
         self.ensure_paged_kv_cache(num_device_pages=num_pages)
+        # The scheduler KV pool is persistent serving state, not graph memory.
+        torch.cuda.synchronize(self.device)
+        allocated_before = torch.cuda.memory_allocated(self.device)
+        reserved_before = torch.cuda.memory_reserved(self.device)
         if self.runner_config.enable_prefill_cuda_graph:
             class _WarmupPrefill:
                 extend_prefix_lens = [0]
@@ -228,6 +243,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             )
             graph_runner.capture_decode_batch_sizes(self, decode_batch_sizes)
         graph_runner.capture_time_s = time.perf_counter() - started
+        graph_runner.record_capture_memory(allocated_before, reserved_before)
         stats = graph_runner.stats()
         graph_runner.log("CUDA graph online startup complete: %s", stats)
         graph_runner.reset_serving_counts()
@@ -1077,7 +1093,10 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             and self.runner_config.enable_decode_cuda_graph
             and self._use_flashinfer_paged_cache()
         ):
-            parts = self.flashinfer_graph_runner.decompose_batch_size(len(seq_ids))
+            parts = self.flashinfer_graph_runner.decompose_batch_size(
+                len(seq_ids),
+                self.flashinfer_graph_runner.decode_capture_batch_sizes,
+            )
             if len(parts) > 1:
                 self.flashinfer_graph_runner.record_decode_decomposition(len(parts))
                 start = 0

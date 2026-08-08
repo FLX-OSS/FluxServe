@@ -335,6 +335,14 @@ def warmup_runner(runner, args, device, logger):
         args.use_cuda_graph or args.use_prefill_cuda_graph
     )
     use_decode_graph = bool(args.use_cuda_graph or args.use_decode_cuda_graph)
+    graph_runner = getattr(runner, "flashinfer_graph_runner", None)
+    if graph_runner is not None and (use_prefill_graph or use_decode_graph):
+        # Allocate persistent KV storage before the baseline so the reported
+        # delta isolates graph capture rather than including the cache.
+        runner.past_key_values = runner.allocate_kv_cache(args.mini_batch_size)
+        torch.cuda.synchronize(device)
+        graph_allocated_before = torch.cuda.memory_allocated(device)
+        graph_reserved_before = torch.cuda.memory_reserved(device)
     warmup_prefill_shapes = args.attention_backend == "flex" or bool(
         use_prefill_graph
         and args.attention_backend == "flashinfer"
@@ -345,7 +353,6 @@ def warmup_runner(runner, args, device, logger):
     if warmup_prefill_shapes:
         warmup_shapes = []
         prefill_lengths = runner.prefill_lengths
-        graph_runner = getattr(runner, "flashinfer_graph_runner", None)
         if graph_runner is not None:
             by_bucket = {}
             for prefill_length in prefill_lengths:
@@ -378,11 +385,15 @@ def warmup_runner(runner, args, device, logger):
         runner.runner_config.gen_length = args.block_length
         runner.generate(warmup_ids)
 
-    graph_runner = getattr(runner, "flashinfer_graph_runner", None)
     if graph_runner is not None and use_decode_graph:
         graph_runner.capture_decode_batch_sizes(
             runner,
-            batch_sizes=graph_runner.decompose_batch_size(args.mini_batch_size),
+            batch_sizes=graph_runner.capture_batch_sizes(args.mini_batch_size),
+        )
+
+    if graph_runner is not None and (use_prefill_graph or use_decode_graph):
+        graph_runner.record_capture_memory(
+            graph_allocated_before, graph_reserved_before
         )
 
     runner.runner_config.gen_length = original_gen_length
@@ -534,8 +545,7 @@ def run_worker(args, *, init_method: str = "env://"):
             )
     finally:
         if runner is not None and hasattr(runner, "shutdown_cuda_graphs"):
-            logger.info(f"[Shutdown] rank={rank} releasing CUDA graphs")
-            runner.shutdown_cuda_graphs()
+            runner.shutdown_cuda_graphs(log=False)
         destroy_distributed()
 
 
