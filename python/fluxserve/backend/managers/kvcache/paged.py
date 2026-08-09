@@ -38,6 +38,7 @@ class PagedKVCache:
         head_dim: int,
         page_size: int,
         num_pages: int | None = None,
+        reserve_dummy_page: bool | int = False,
         dtype: torch.dtype,
         device: str | torch.device,
     ):
@@ -54,8 +55,15 @@ class PagedKVCache:
         self.page_size = int(page_size)
         self.pages_per_sequence = math.ceil(self.max_length / self.page_size)
         default_num_pages = self.batch_size * self.pages_per_sequence
+        self.num_dummy_pages = int(reserve_dummy_page)
+        self.dummy_page_id = (
+            (int(num_pages) if num_pages is not None else default_num_pages)
+            if self.num_dummy_pages
+            else -1
+        )
         self.uses_external_page_table = num_pages is not None
-        self.num_pages = int(num_pages) if num_pages is not None else default_num_pages
+        base_num_pages = int(num_pages) if num_pages is not None else default_num_pages
+        self.num_pages = base_num_pages + self.num_dummy_pages
         if self.num_pages <= 0:
             raise ValueError(f"num_pages must be positive, got {self.num_pages!r}")
         self.device = torch.device(device)
@@ -84,6 +92,8 @@ class PagedKVCache:
                 dtype=torch.long,
                 device=self.device,
             )
+        if self.num_dummy_pages:
+            self.data[:, :, self.dummy_page_id :].zero_()
 
     def set_page_table(self, seq_id: int, pages: list[int] | tuple[int, ...]) -> None:
         seq_id = int(seq_id)

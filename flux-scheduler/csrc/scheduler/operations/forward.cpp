@@ -443,7 +443,17 @@ Scheduler::newForwardOperation(std::vector<Request*> candidates) {
             if (auto ev = schedulePrefillFirstChunk(request, token_budget, config_.decode_input_tokens,
                                                     config_.disable_l2_cache, simulated_free)) {
                 std::vector<TreeNode*> loadback_diff = ev->GetLoadbackDiff();
-                push_op(applyEventAndGenerateOp(request, std::move(*ev)));
+                auto prefill_op = applyEventAndGenerateOp(request, std::move(*ev));
+                if (prefill_op.input_length > 0) {
+                    push_op(std::move(prefill_op));
+                } else {
+                    // A fully cached prompt has no query rows for paged
+                    // prefill. Transition directly to block decode so the
+                    // executor never receives a zero-length prefill row.
+                    if (auto decode_ev = scheduleDecode(request, simulated_free)) {
+                        push_op(applyEventAndGenerateOp(request, std::move(*decode_ev)));
+                    }
+                }
                 // will be empty when disable_l2_cache
                 if (!loadback_diff.empty()) {
                     cache_op_id op_id = kv_prefix_cache_.AllocateCacheOpId();

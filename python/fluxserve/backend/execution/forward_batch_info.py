@@ -117,6 +117,12 @@ class RunnerConfig:
     decoding_lengths: Sequence[int] = field(default_factory=tuple)
     supported_batch_sizes: Sequence[int] = field(default_factory=lambda: (1,))
     enable_cuda_graph: bool = False
+    enable_prefill_cuda_graph: bool = False
+    enable_decode_cuda_graph: bool = False
+    cuda_graph_capture_sizes: Sequence[int] = field(
+        default_factory=lambda: (64, 128, 256, 512, 1024)
+    )
+    cuda_graph_log_callback: Any = None
     enable_compile: bool = False
     use_cross_block: bool = False
     early_stop: bool = True
@@ -130,12 +136,20 @@ class RunnerConfig:
     eos_id: int = 156892
     attention_backend: str = "sdpa"
     flashinfer_decode_batch_mode: str = "max_batch"
+    decode_cuda_graph_mode: str = "decomposed"
+    cuda_graph_capture_batch_sizes: Sequence[int] | None = None
     flashinfer_prefill_mode: str = "dense"
     flashinfer_cache_mode: str = "dense"
     kv_cache_layout: Literal["dense", "paged"] = "dense"
     page_size: int | None = None
 
     def __post_init__(self):
+        if self.enable_cuda_graph:
+            self.enable_prefill_cuda_graph = True
+            self.enable_decode_cuda_graph = True
+        self.enable_cuda_graph = bool(
+            self.enable_prefill_cuda_graph or self.enable_decode_cuda_graph
+        )
         if self.attention_backend not in {"sdpa", "flex", "flashinfer"}:
             raise ValueError(
                 "attention_backend must be one of 'sdpa', 'flex', or 'flashinfer', "
@@ -146,6 +160,8 @@ class RunnerConfig:
                 "flashinfer_decode_batch_mode must be one of 'default' or "
                 f"'max_batch', got {self.flashinfer_decode_batch_mode!r}"
             )
+        if self.decode_cuda_graph_mode not in {"decomposed", "padded"}:
+            raise ValueError("decode_cuda_graph_mode must be 'decomposed' or 'padded'")
         if self.flashinfer_prefill_mode not in {"dense", "ragged", "paged"}:
             raise ValueError(
                 "flashinfer_prefill_mode must be one of 'dense', 'ragged', or 'paged', "
@@ -185,6 +201,18 @@ class RunnerConfig:
         if self.page_size is not None and self.page_size <= 0:
             raise ValueError(f"page_size must be positive, got {self.page_size!r}")
         if (
+            self.enable_cuda_graph
+            and self.page_size is not None
+            and any(
+                size % self.page_size != 0
+                for size in self.cuda_graph_capture_sizes
+            )
+        ):
+            raise ValueError(
+                "cuda_graph_capture_sizes must be multiples of page_size="
+                f"{self.page_size}, got {self.cuda_graph_capture_sizes}"
+            )
+        if (
             self.flashinfer_prefill_mode == "ragged"
             and self.attention_backend != "flashinfer"
         ):
@@ -205,6 +233,23 @@ class RunnerConfig:
         self.prefill_lengths = tuple(int(x) for x in self.prefill_lengths)
         self.cache_lengths = tuple(int(x) for x in self.cache_lengths)
         self.supported_batch_sizes = tuple(int(x) for x in self.supported_batch_sizes)
+        if self.cuda_graph_capture_batch_sizes is not None:
+            self.cuda_graph_capture_batch_sizes = tuple(sorted(set(int(x) for x in self.cuda_graph_capture_batch_sizes)))
+            if not self.cuda_graph_capture_batch_sizes or any(
+                x <= 0 or (x != 1 and x % 2 != 0)
+                for x in self.cuda_graph_capture_batch_sizes
+            ):
+                raise ValueError(
+                    "cuda_graph_capture_batch_sizes must contain batch size 1 "
+                    "or positive even batch sizes"
+                )
+        self.cuda_graph_capture_sizes = tuple(
+            sorted(set(int(x) for x in self.cuda_graph_capture_sizes))
+        )
+        if not self.cuda_graph_capture_sizes or any(
+            size <= 0 for size in self.cuda_graph_capture_sizes
+        ):
+            raise ValueError("cuda_graph_capture_sizes must contain positive lengths")
         decoding_lengths = tuple(int(x) for x in self.decoding_lengths)
         if not decoding_lengths:
             decoding_lengths = (int(self.block_length),)
@@ -326,6 +371,10 @@ class ForwardBatch:
     use_flashinfer_decode: bool = False
     use_flashinfer_paged_decode: bool = False
     use_flashinfer_paged_prefill: bool = False
+    flashinfer_cuda_graph_runner: Any = None
+    flashinfer_cuda_graph_dummy_page: int = -1
+    flashinfer_full_prefill_graph: bool = False
+    flashinfer_full_decode_graph: bool = False
 
 
 class PPProxyTensors:

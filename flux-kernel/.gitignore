@@ -1,3 +1,6 @@
 **/__pycache__/
 python/*.egg-info/
 python/flux_kernel/cuda/rmsnorm/objs/
+python/flux_kernel/cuda/activation/objs/
+python/flux_kernel/cuda/moe/objs/
+python/flux_kernel/cuda/rope/objs/

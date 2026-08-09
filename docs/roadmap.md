@@ -7,17 +7,14 @@
 - [ ] FP8
 - [ ] NVFP4
 
-
 ### Hardware Support
-- [ ] AMD GPU
+- [ ] AMD GPU ROCm
 
 ### Engine Support
 - [ ] Model Parallelism
   - [ ] Pipeline Parallelism
-- [ ] Runtime Optimization
-  - [ ] CUDA Graph
 - [ ] Cache Optimization
-  - [ ] Prefix Cache
+  - [ ] Prefix Cache (WIP)
 - [ ] MoE Optimization
   - [ ] DeepEP
   - [ ] EPLB
@@ -26,7 +23,6 @@
 
 ### Evaluation Support
 - [ ] [LM-Eval-Harness](https://github.com/EleutherAI/lm-evaluation-harness)
-
 
 ### PR Support
 - [ ] CI/CD Suites

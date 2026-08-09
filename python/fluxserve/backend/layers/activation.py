@@ -23,7 +23,6 @@
 """
 
 import logging
-import math
 from typing import Optional
 
 import torch
@@ -31,6 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from transformers import PretrainedConfig
+from flux_kernel.ops import silu_and_mul
 
 from fluxserve.backend.distributed import (
     divide,
@@ -46,9 +46,6 @@ from fluxserve.backend.utils.runtime_utils import (
 )
 
 _is_cuda = is_cuda()
-
-if _is_cuda:
-    from sgl_kernel import gelu_and_mul, gelu_tanh_and_mul, silu_and_mul
 
 logger = logging.getLogger(__name__)
 
@@ -66,51 +63,9 @@ class SiluAndMul(CustomOp):
         return out
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if _is_cuda and "silu_and_mul" in globals():
+        if _is_cuda:
             return self.forward_cuda(x)
         return self.forward_native(x)
-
-
-class GeluAndMul(CustomOp):
-    def __init__(self, approximate="tanh"):
-        super().__init__()
-        self.approximate = approximate
-
-    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
-        d = x.shape[-1] // 2
-        output_shape = x.shape[:-1] + (d,)
-        out = torch.empty(output_shape, dtype=x.dtype, device=x.device)
-        if self.approximate == "tanh":
-            gelu_tanh_and_mul(x, out)
-        elif self.approximate == "none":
-            gelu_and_mul(x, out)
-        else:
-            raise RuntimeError("GeluAndMul only support tanh or none")
-        return out
-
-    def forward_native(self, x: torch.Tensor) -> torch.Tensor:
-        d = x.shape[-1] // 2
-        return F.gelu(x[..., :d], approximate=self.approximate) * x[..., d:]
-
-    def forward_cuda(self, x: torch.Tensor) -> torch.Tensor:
-        return self._forward_impl(x)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if _is_cuda and "gelu_and_mul" in globals():
-            return self.forward_cuda(x)
-        return self.forward_native(x)
-
-
-class NewGELU(CustomOp):
-    def forward_native(self, x: torch.Tensor) -> torch.Tensor:
-        c = math.sqrt(2.0 / math.pi)
-        return 0.5 * x * (1.0 + torch.tanh(c * (x + 0.044715 * torch.pow(x, 3.0))))
-
-    def forward_cuda(self, x: torch.Tensor) -> torch.Tensor:
-        return self.forward_native(x)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.forward_cuda(x) if _is_cuda else self.forward_native(x)
 
 
 class ReLU2(nn.Module):
@@ -288,9 +243,6 @@ class ScaledActivation(nn.Module):
 
 
 _ACTIVATION_REGISTRY = {
-    "gelu": nn.GELU(),
-    "gelu_pytorch_tanh": nn.GELU(approximate="tanh"),
-    "gelu_new": NewGELU(),
     "relu2": ReLU2(),
     "xielu": XIELU(),
 }

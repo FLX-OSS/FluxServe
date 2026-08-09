@@ -31,7 +31,7 @@ class ScheduledBatch:
     request_ids: list[str]
 
 
-class FifoSchedulerAdapter:
+class DefaultSchedulerAdapter:
     def __init__(self, max_batch_size: int):
         self.max_batch_size = max_batch_size
         self._queue: list[str] = []
@@ -58,7 +58,7 @@ class FifoSchedulerAdapter:
         self._queue = [rid for rid in self._queue if rid != request_id]
 
 
-class FluxSchedulerAdapter(FifoSchedulerAdapter):
+class FluxSchedulerAdapter(DefaultSchedulerAdapter):
     """Thin runtime wrapper around flux_scheduler.
 
     The current online milestone executes whole requests through the existing
@@ -80,7 +80,7 @@ class FluxSchedulerAdapter(FifoSchedulerAdapter):
         except ImportError as exc:
             raise RuntimeError(
                 "flux_scheduler is not installed. Install tests/flux-scheduler "
-                "or use FifoSchedulerAdapter for tests."
+                "or use DefaultSchedulerAdapter for tests."
             ) from exc
 
         cfg = SchedulerConfig()
@@ -115,6 +115,7 @@ class PagedSchedulerAdapter:
         max_scheduled_tokens: int,
         page_size: int,
         num_device_pages: int,
+        max_model_len: int,
     ):
         try:
             from flux_scheduler import (
@@ -142,6 +143,8 @@ class PagedSchedulerAdapter:
         self._execution_event_cls = ExecutionEvent
         self._forward_event = ForwardEvent
         self._scheduler = Scheduler(cfg)
+        self.page_size = int(page_size)
+        self.max_model_len = int(max_model_len)
         self._active: set[str] = set()
 
     def submit(self, requests: Iterable[RequestState]) -> None:
@@ -153,6 +156,12 @@ class PagedSchedulerAdapter:
             spec = self._request_spec_cls()
             spec.request_id = req.rid
             spec.tokens = list(req.input_ids)
+            spec.prefill_length = req.aligned_prefill_length(self.page_size)
+            if spec.prefill_length > self.max_model_len:
+                raise ValueError(
+                    f"aligned prefill length {spec.prefill_length} exceeds "
+                    f"max_model_len={self.max_model_len}"
+                )
             specs.append(spec)
         if specs:
             self._scheduler.submit_requests(specs)
@@ -203,7 +212,3 @@ class PagedSchedulerAdapter:
         event.add_event(ev)
         self._scheduler.advance(event)
         self._active.discard(request_id)
-
-
-# Compatibility for integrations importing the pre-rename class directly.
-CppPlanSchedulerAdapter = PagedSchedulerAdapter

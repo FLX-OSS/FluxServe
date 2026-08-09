@@ -39,6 +39,8 @@ import aiohttp
 import numpy as np
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
+from fluxserve.prompt_utils import render_openai_messages
+
 
 DEFAULT_TIMEOUT_SEC = 60 * 60
 SUPPORTED_METRICS = ("E2E", "QUEUE", "EXECUTION", "HTTP_OVERHEAD")
@@ -208,11 +210,9 @@ def load_jsonl_requests(
         if isinstance(output_len, bool) or not isinstance(output_len, int) or output_len <= 0:
             raise ValueError(f"max_tokens in {dataset}:{line_number} must be a positive integer.")
         body["max_tokens"] = output_len
-        input_ids = tokenizer.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-        )
+        # Measure the exact prompt sent through the online server.  This must
+        # stay aligned with bench_offline and the chat endpoint.
+        input_ids = tokenizer(render_openai_messages(messages))["input_ids"]
         requests.append(
             SampleRequest(
                 messages=messages,
@@ -257,32 +257,12 @@ async def iter_requests(
     request_rate: float,
     burstiness: float,
 ) -> AsyncIterator[SampleRequest]:
-    if burstiness <= 0:
-        raise ValueError("--burstiness must be positive.")
     if request_rate <= 0:
         raise ValueError("--request-rate must be positive.")
 
-    delays = []
-    for _ in requests:
-        if request_rate == float("inf"):
-            delays.append(0.0)
-        elif burstiness == float("inf"):
-            delays.append(1.0 / request_rate)
-        else:
-            theta = 1.0 / (request_rate * burstiness)
-            delays.append(float(np.random.gamma(shape=burstiness, scale=theta)))
-
-    for i in range(1, len(delays)):
-        delays[i] += delays[i - 1]
-    if request_rate != float("inf") and delays and delays[-1] > 0:
-        scale = (len(requests) / request_rate) / delays[-1]
-        delays = [delay * scale for delay in delays]
-
-    start = time.perf_counter()
     for i, request in enumerate(requests):
-        sleep_s = start + delays[i] - time.perf_counter()
-        if sleep_s > 0:
-            await asyncio.sleep(sleep_s)
+        if i and request_rate != float("inf"):
+            await asyncio.sleep(float(np.random.exponential(1.0 / request_rate)))
         yield request
 
 
@@ -346,7 +326,8 @@ async def send_request(
         generated_text = ""
         async with active_session.post(api_url, json=payload, headers=headers) as response:
             if response.status != 200:
-                output.error = f"HTTP {response.status}: {await response.text()}"
+                response_text = await response.text()
+                output.error = f"HTTP {response.status}: {response_text}"
                 return output
 
             decoder = SSEDecoder()
@@ -456,7 +437,14 @@ def summarize(
         for output in successes
     ]
     total_input = sum(input_tokens)
-    total_output = sum(completion_tokens)
+    # Throughput must reflect tokens actually emitted by the client-visible
+    # response.  Server-reported completion_tokens can be model-internal
+    # diffusion/block tokens and may substantially exceed generated text.
+    actual_output = sum(output.output_tokens for output in successes)
+    arrival_times = [output.start_time for output in successes]
+    arrival_window_s = (
+        max(arrival_times) - min(arrival_times) if len(arrival_times) >= 2 else 0.0
+    )
     all_latency_values = {
         "e2e": [output.e2e_latency * 1000 for output in successes],
         "queue": [output.queue_latency * 1000 for output in successes if output.queue_latency is not None],
@@ -472,10 +460,14 @@ def summarize(
         "completed": len(successes),
         "failed": len(failed),
         "total_input_tokens": total_input,
-        "total_output_tokens": total_output,
+        "max_output_tokens": actual_output,
         "request_throughput": len(successes) / duration_s if duration_s else 0.0,
-        "output_token_throughput": total_output / duration_s if duration_s else 0.0,
-        "total_token_throughput": (total_input + total_output) / duration_s if duration_s else 0.0,
+        "input_token_throughput": (
+            total_input / arrival_window_s if arrival_window_s > 0 else 0.0
+        ),
+        "input_arrival_window_s": arrival_window_s,
+        "output_token_throughput": actual_output / duration_s if duration_s else 0.0,
+        "total_token_throughput": (total_input + actual_output) / duration_s if duration_s else 0.0,
         "input_lens": [output.prompt_len for output in outputs],
         "output_lens": [output.output_tokens for output in outputs],
         "start_times": [output.start_time for output in outputs],
@@ -606,6 +598,7 @@ async def run_serving_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     _print_metric("Failed requests:", result["failed"])
     _print_metric("Benchmark duration (s):", result["duration"], 2)
     _print_metric("Request throughput (req/s):", result["request_throughput"], 2)
+    _print_metric("Input token throughput (tok/s):", result["input_token_throughput"], 2)
     _print_metric("Output token throughput (tok/s):", result["output_token_throughput"], 2)
     _print_metric("Total token throughput (tok/s):", result["total_token_throughput"], 2)
     for selected_metric in args.metrics:

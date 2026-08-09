@@ -50,12 +50,6 @@ class MoeRunner:
 
         if runner_backend.is_triton():
             self.runner_core = TritonRunnerCore(config)
-        elif runner_backend.is_deep_gemm():
-            from fluxserve.backend.layers.moe.moe_runner.deep_gemm import (
-                DeepGemmRunnerCore,
-            )
-
-            self.runner_core = DeepGemmRunnerCore(config)
         else:
             raise NotImplementedError(f"Unsupported runner backend: {runner_backend}")
 

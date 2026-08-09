@@ -26,8 +26,6 @@ from fluxserve.backend.configs.model_config import ModelConfig
 class ServerArgs:
     model_name: str = ""
     model_config: ModelConfig = None
-    quantization: str = "auto"
-    modelopt_quant: str = ""
     device: str = "cuda"
     enable_dp_attention: bool = False
     trust_remote_code: bool = True
@@ -43,7 +41,6 @@ class ServerArgs:
     enable_two_batch_overlap: bool = False
     enable_single_batch_overlap: bool = False
     tbo_token_distribution_threshold: float = 0.48
-    disable_flashinfer_cutlass_moe_fp4_allgather: bool = False
     enable_cudagraph_gc: bool = False
     enable_dp_lm_head: bool = False
     enable_fp32_lm_head: bool = False
@@ -55,14 +52,17 @@ class ServerArgs:
     speculative_algorithm: str | None = None
     host: str = "0.0.0.0"
     port: int = 8000
+    apply_template: bool = False
     max_num_seqs: int = 8
     max_scheduled_tokens: int = 512
     max_model_len: int = 2048
     stream_interval: int = 1
     enable_prefix_caching: bool = False
-    scheduler_policy: str = "fifo"
+    scheduler_policy: str = "default"
     scheduler_page_size: int | None = None
     scheduler_num_device_pages: int = 0
+    gpu_memory_utilization: float = 0.90
+    gpu_memory_safety_reserve: float = 0.05
 
 
 _GLOBAL_SERVER_ARGS = ServerArgs()

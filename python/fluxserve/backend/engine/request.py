@@ -75,6 +75,9 @@ class RequestState:
     def completion_token_count(self) -> int:
         return len(self.output_ids)
 
+    def aligned_prefill_length(self, block_length: int) -> int:
+        return (len(self.input_ids) // int(block_length)) * int(block_length)
+
     @property
     def queue_latency_s(self) -> float | None:
         if self.queued_time is None or self.scheduled_time is None:

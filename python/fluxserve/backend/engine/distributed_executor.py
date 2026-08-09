@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 _CMD_GENERATE = "generate"
 _CMD_FORWARD_PLAN = "forward_plan"
 _CMD_RELEASE_REQUESTS = "release_requests"
+_CMD_STARTUP = "startup"
 _CMD_SHUTDOWN = "shutdown"
 
 
@@ -57,6 +58,16 @@ class DistributedGenerationExecutor:
     def __init__(self, base_executor: GenerationExecutor, context: DistributedContext):
         self.base_executor = base_executor
         self.context = context
+
+    async def startup(self) -> dict[str, int | float]:
+        if self.context.is_distributed:
+            _broadcast_command({"kind": _CMD_STARTUP})
+        startup = getattr(self.base_executor, "startup", None)
+        return await startup() if startup is not None else {}
+
+    def cuda_graph_stats(self) -> dict[str, int | float]:
+        stats = getattr(self.base_executor, "cuda_graph_stats", None)
+        return stats() if stats is not None else {}
 
     async def execute_batch(self, requests: list[RequestState]) -> list[ExecutionResult]:
         if not self.context.is_distributed:
@@ -95,8 +106,16 @@ class DistributedGenerationExecutor:
             command = _receive_command()
             kind = command.get("kind")
             if kind == _CMD_SHUTDOWN:
+                shutdown = getattr(self.base_executor, "shutdown", None)
+                if shutdown is not None:
+                    await shutdown()
                 logger.info("distributed worker rank=%s received shutdown", self.context.rank)
                 return
+            if kind == _CMD_STARTUP:
+                startup = getattr(self.base_executor, "startup", None)
+                if startup is not None:
+                    await startup()
+                continue
             if kind == _CMD_FORWARD_PLAN:
                 op = _forward_plan_from_payload(command["plan"])
                 states = [_state_from_payload(item) for item in command["requests"]]
@@ -114,9 +133,12 @@ class DistributedGenerationExecutor:
             requests = [_state_from_payload(item) for item in command["requests"]]
             await self.base_executor.execute_batch(requests)
 
-    def shutdown_workers(self) -> None:
+    async def shutdown_workers(self) -> None:
         if self.context.is_distributed and self.context.is_rank0 and dist.is_initialized():
             _broadcast_command({"kind": _CMD_SHUTDOWN})
+        shutdown = getattr(self.base_executor, "shutdown", None)
+        if shutdown is not None:
+            await shutdown()
 
 
 def _broadcast_command(command: dict[str, Any]) -> None:

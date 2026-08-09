@@ -30,7 +30,7 @@ from fluxserve.backend.engine.executor import GenerationExecutor
 from fluxserve.backend.engine.io_struct import GenerateReqInput, GenerateReqOutput
 from fluxserve.backend.engine.processor import InputProcessor, OutputProcessor
 from fluxserve.backend.engine.request import RequestState
-from fluxserve.backend.engine.scheduler_adapter import FifoSchedulerAdapter
+from fluxserve.backend.engine.scheduler_adapter import DefaultSchedulerAdapter
 from fluxserve.backend.metrics.engine import EngineMetrics
 from fluxserve.backend.utils.server_args import ServerArgs
 
@@ -55,7 +55,11 @@ class AsyncLLM:
                 trust_remote_code=server_args.trust_remote_code,
             )
         self.tokenizer = tokenizer
-        self.scheduler = scheduler or FifoSchedulerAdapter(server_args.max_num_seqs)
+        self.scheduler = (
+            DefaultSchedulerAdapter(server_args.max_num_seqs)
+            if scheduler is None
+            else scheduler
+        )
         self.input_processor = InputProcessor(server_args, self.tokenizer)
         self.output_processor = OutputProcessor()
         self.metrics = EngineMetrics()
@@ -81,6 +85,11 @@ class AsyncLLM:
     async def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(self._run_loop())
+
+    async def startup_executor(self) -> None:
+        startup = getattr(self.executor, "startup", None)
+        if startup is not None:
+            await self._execute(startup)
 
     async def shutdown(self) -> None:
         self._closed = True
@@ -132,7 +141,11 @@ class AsyncLLM:
             await state.queue.put(output)
 
     def get_metrics_snapshot(self) -> dict[str, int | float]:
-        return self.metrics.snapshot()
+        snapshot = self.metrics.snapshot()
+        stats = getattr(self.executor, "cuda_graph_stats", None)
+        if stats is not None:
+            snapshot.update({f"cuda_graph_{k}": v for k, v in stats().items()})
+        return snapshot
 
     async def _collect_one(self, state: RequestState) -> GenerateReqOutput:
         output = None
@@ -277,8 +290,9 @@ class AsyncLLM:
                 result.text,
                 result.finish_reason if result.finished else None,
             )
-            if result.token_ids:
+            if result.decode_block_completed:
                 state.mark_decode_block_done()
+            if result.token_ids:
                 token_results[result.rid] = result.token_ids
 
             if result.finished:

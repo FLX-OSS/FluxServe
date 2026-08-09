@@ -3,7 +3,6 @@
 ### Prerequisites
 
 - NVIDIA GPUs with compute capability 9.0+
-- Docker with GPU support
 
 ### Option 1: Run Docker Environment (Recommended)
 
@@ -29,12 +28,6 @@ git clone https://github.com/FLX-OSS/FluxServe
 cd FluxServe
 ```
 
-Install the Python runtime:
-
-```bash
-pip install -e .
-```
-
 Install the flux-kernel package:
 
 ```bash
@@ -45,6 +38,12 @@ Install the flux-scheduler package:
 
 ```bash
 pip install -e flux-scheduler
+```
+
+Install the Python runtime:
+
+```bash
+pip install -e .
 ```
 
 Launch FluxServe engine:
@@ -58,7 +57,6 @@ python -m fluxserve.cli serve \
   --ep-size 1 \
   --dp-size 1
 ```
-
 
 ### Option 2: Run UV Environment
 

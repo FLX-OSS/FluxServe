@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from collections.abc import AsyncIterator
 
 from fluxserve.backend.engine import AsyncLLM, GenerateReqInput
+from fluxserve.prompt_utils import render_openai_messages
 
 
 @dataclass
@@ -134,17 +135,16 @@ def _server_timing_payload(
     return payload
 
 
-def _messages_to_prompt(messages, tokenizer) -> str:
-    if hasattr(tokenizer, "apply_chat_template"):
-        try:
-            return tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-        except Exception:
-            pass
-    return "\n".join(f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages) + "\nassistant:"
+def _messages_to_prompt(messages, tokenizer, *, apply_template: bool = False) -> str:
+    if apply_template:
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    # This default keeps online chat requests byte-for-byte equivalent to
+    # bench_offline's LLaDA-compatible prompt format.
+    return render_openai_messages(messages)
 
 
 def create_app(engine: AsyncLLM):
@@ -159,6 +159,7 @@ def create_app(engine: AsyncLLM):
 
     @app.on_event("startup")
     async def _startup():
+        await engine.startup_executor()
         await engine.start()
 
     @app.on_event("shutdown")
@@ -168,6 +169,10 @@ def create_app(engine: AsyncLLM):
     @app.get("/health")
     async def health():
         return {"status": "ok"}
+
+    @app.get("/metrics")
+    async def metrics():
+        return engine.get_metrics_snapshot()
 
     async def stream_completion(
         req: GenerateReqInput,
@@ -290,7 +295,11 @@ def create_app(engine: AsyncLLM):
         messages = body.get("messages")
         if not isinstance(messages, list):
             return JSONResponse({"error": "messages must be a list"}, status_code=400)
-        prompt = _messages_to_prompt(messages, engine.tokenizer)
+        prompt = _messages_to_prompt(
+            messages,
+            engine.tokenizer,
+            apply_template=bool(engine.server_args.apply_template),
+        )
         stream = bool(body.get("stream", False))
         model = body.get("model", engine.server_args.model_name)
         params = {

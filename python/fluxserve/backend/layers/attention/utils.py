@@ -19,12 +19,26 @@
 # SOFTWARE.
 
 import math
+import os
 from typing import Any, Optional
 
 import torch
 
 
 _FLASHINFER_STATES: dict[tuple[str, int, int, str], Any] = {}
+
+# FlashInfer's planning workspace is shared by the wrappers on each device.
+# Keep this configurable because larger online batches may require more than
+# the historical 128 MiB allocation (TokenSpeed defaults to 384 MiB).
+DEFAULT_FLASHINFER_WORKSPACE_SIZE = 384 * 1024 * 1024
+
+
+def get_flashinfer_workspace_size() -> int:
+    """Return the per-device FlashInfer workspace size in bytes."""
+    value = int(os.environ.get("FLASHINFER_WORKSPACE_SIZE", DEFAULT_FLASHINFER_WORKSPACE_SIZE))
+    if value <= 0:
+        raise ValueError(f"FLASHINFER_WORKSPACE_SIZE must be positive, got {value}")
+    return value
 
 
 def _require_flashinfer_dllm():
@@ -139,12 +153,13 @@ class FlashInferDLLMBlockExtendState:
         *,
         block_length: int,
         backend: str = "auto",
-        workspace_mb: int = 128,
+        workspace_mb: int | None = None,
     ):
         self.device = torch.device(device)
         self.block_length = int(block_length)
+        workspace_bytes = get_flashinfer_workspace_size() if workspace_mb is None else int(workspace_mb) * 1024 * 1024
         self.workspace = torch.empty(
-            workspace_mb * 1024 * 1024,
+            workspace_bytes,
             dtype=torch.uint8,
             device=self.device,
         )
@@ -210,12 +225,13 @@ class FlashInferPagedBlockExtendState:
         self,
         device: torch.device,
         *,
-        workspace_mb: int = 128,
+        workspace_mb: int | None = None,
         backend: str = "auto",
     ):
         self.device = torch.device(device)
+        workspace_bytes = get_flashinfer_workspace_size() if workspace_mb is None else int(workspace_mb) * 1024 * 1024
         self.workspace = torch.empty(
-            workspace_mb * 1024 * 1024,
+            workspace_bytes,
             dtype=torch.uint8,
             device=self.device,
         )

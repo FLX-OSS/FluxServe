@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from fluxserve.backend.utils.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
+SYNC_TOKEN_IDS_ACROSS_TP = get_bool_env_var("SYNC_TOKEN_IDS_ACROSS_TP")
 
 if TYPE_CHECKING:
     from fluxserve.backend.execution.forward_batch_info import ForwardBatch
@@ -255,7 +256,6 @@ def initialize_dp_attention(
     global _ATTN_TP_GROUP, _ATTN_TP_RANK, _ATTN_TP_SIZE, _ATTN_DP_RANK, _ATTN_DP_SIZE
     global _LOCAL_ATTN_DP_SIZE, _LOCAL_ATTN_DP_RANK, _ENABLE_DP_ATTENTION_FLAG
 
-    from fluxserve.backend.layers.sampler import SYNC_TOKEN_IDS_ACROSS_TP
     from fluxserve.backend.managers.schedule_batch import refresh_global_server_args_dict
     from fluxserve.backend.utils.server_args import set_global_server_args_for_scheduler
 

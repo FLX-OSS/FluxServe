@@ -20,6 +20,7 @@
 
 import functools
 import importlib
+import logging
 import os
 import warnings
 
@@ -28,6 +29,8 @@ from typing import Any, Callable, List, Optional, Tuple
 
 import torch
 from torch.library import Library
+
+logger = logging.getLogger(__name__)
 
 
 fluxserve_lib = Library("fluxserve", "FRAGMENT")
@@ -174,6 +177,33 @@ def get_available_gpu_memory(device: str = "cuda", gpu_id: int = 0, empty_cache:
     return free / (1024**3)
 
 
+def profile_paged_kv_pages(*, runner, page_size: int, utilization: float, safety_reserve: float) -> int:
+    if not (0.0 <= utilization < 1.0 and 0.0 <= safety_reserve < 1.0):
+        raise ValueError("GPU memory utilization and safety reserve must be in [0, 1).")
+    if utilization <= safety_reserve:
+        raise ValueError("gpu_memory_utilization must exceed gpu_memory_safety_reserve")
+    config = runner.model.model.config
+    layers = int(config.num_hidden_layers)
+    from fluxserve.backend.layers.dp_attention import get_attention_tp_size
+    local_heads = max(1, int(config.num_key_value_heads) // get_attention_tp_size())
+    head_dim = int(config.hidden_size) // int(config.num_attention_heads)
+    dtype = torch.bfloat16
+    bytes_per_page = 2 * layers * local_heads * head_dim * int(page_size) * torch.tensor([], dtype=dtype).element_size()
+    total = int(torch.cuda.get_device_properties(runner.device).total_memory)
+    available = int(get_available_gpu_memory(runner.device, runner.gpu_id) * (1024**3))
+    budget = available - int(total * (1.0 - utilization)) - int(total * safety_reserve)
+    dummy = max(
+        max(runner.supported_batch_sizes) if runner.runner_config.enable_decode_cuda_graph else 0,
+        max(runner.runner_config.cuda_graph_capture_sizes) // int(page_size),
+    )
+    usable = budget // bytes_per_page - dummy
+    if usable < 1:
+        raise RuntimeError(f"insufficient GPU memory for paged KV cache: budget={budget}, bytes_per_page={bytes_per_page}")
+    pages = int(usable + dummy)
+    logger.info("Profiled paged KV cache: pages=%d usable=%d bytes/page=%d budget=%d", pages, usable, bytes_per_page, budget)
+    return pages
+
+
 def is_cpu() -> bool:
     return not torch.cuda.is_available()
 
@@ -195,15 +225,6 @@ def is_npu() -> bool:
 
 
 def is_xpu() -> bool:
-    return False
-
-
-def cpu_has_amx_support() -> bool:
-    return False
-
-
-def use_intel_amx_backend(*args, **kwargs) -> bool:
-    del args, kwargs
     return False
 
 
@@ -291,11 +312,6 @@ def update_param(param, new_param):
 
 def dispose_tensor(x: torch.Tensor):
     x.set_(torch.empty((0,), device=x.device, dtype=x.dtype))
-
-
-def deep_gemm_fp8_fp8_bf16_nt(*args, **kwargs):
-    del args, kwargs
-    raise NotImplementedError("FluxServe deep_gemm custom op has not been extracted.")
 
 
 def inplace_all_reduce(*args, **kwargs):

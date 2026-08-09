@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, List, Optional
 
 import torch
 import triton.language as tl
+from flux_kernel.ops import moe_align_block_size as sgl_moe_align_block_size
+from flux_kernel.ops import silu_and_mul
 
 from fluxserve.backend.layers.moe.moe_runner.base import (
     MoeQuantInfo,
@@ -50,14 +52,6 @@ if TYPE_CHECKING:
 
 _is_cuda = is_cuda()
 _MOE_PADDING_SIZE = 128 if bool(int(os.getenv("SGLANG_MOE_PADDING", "0"))) else 0
-
-
-if _is_cuda:
-    from sgl_kernel import gelu_and_mul, silu_and_mul
-
-
-if _is_cuda:
-    from sgl_kernel import moe_align_block_size as sgl_moe_align_block_size
 
 
 @dataclass
@@ -200,31 +194,21 @@ class TritonRunnerCore(MoeRunnerCore):
             dtype=hidden_states.dtype,
         )
 
-        if activation == "silu":
-            if gemm1_alpha is not None:
-                assert gemm1_limit is not None
-                intermediate_cache2 = swiglu_with_alpha_and_limit(
-                    intermediate_cache1.view(-1, N),
-                    gemm1_alpha,
-                    gemm1_limit,
-                )
-            elif _is_cuda:
-                silu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
-            else:
-                vllm_ops.silu_and_mul(
-                    intermediate_cache2, intermediate_cache1.view(-1, N)
-                )
-        elif activation == "gelu":
-            assert gemm1_alpha is None, "gemm1_alpha is not supported for gelu"
-            assert gemm1_limit is None, "gemm1_limit is not supported for gelu"
-            if _is_cuda:
-                gelu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
-            else:
-                vllm_ops.gelu_and_mul(
-                    intermediate_cache2, intermediate_cache1.view(-1, N)
-                )
-        else:
+        if activation != "silu":
             raise ValueError(f"Unsupported activation: {activation=}")
+        if gemm1_alpha is not None:
+            assert gemm1_limit is not None
+            intermediate_cache2 = swiglu_with_alpha_and_limit(
+                intermediate_cache1.view(-1, N),
+                gemm1_alpha,
+                gemm1_limit,
+            )
+        elif _is_cuda:
+            silu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
+        else:
+            vllm_ops.silu_and_mul(
+                intermediate_cache2, intermediate_cache1.view(-1, N)
+            )
 
         intermediate_cache3 = torch.empty(
             (M, topk_ids.shape[1], w2.shape[1]),

@@ -35,8 +35,10 @@ public:
         std::int32_t size;
     };
 
-    TokenContainer(const std::vector<std::int32_t>& new_tokens)
-        : tokens_{new_tokens}, num_prefill_tokens_(new_tokens.size()){};
+    TokenContainer(const std::vector<std::int32_t>& new_tokens, std::int32_t num_prefill_tokens = -1)
+        : tokens_{new_tokens},
+          num_prefill_tokens_(num_prefill_tokens < 0 ? static_cast<std::int32_t>(new_tokens.size())
+                                                     : num_prefill_tokens){};
 
     TokenContainer(const TokenContainer&) = delete;
     TokenContainer& operator=(const TokenContainer&) = delete;

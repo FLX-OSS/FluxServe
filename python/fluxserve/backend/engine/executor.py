@@ -44,6 +44,7 @@ class ForwardStepResult:
     finished: bool = False
     finish_reason: str | None = None
     reserve_tokens: int = 0
+    decode_block_completed: bool = False
 
 
 class GenerationExecutor(Protocol):
@@ -62,6 +63,19 @@ class BlockDiffusionExecutor:
     def __init__(self, runner, tokenizer):
         self.runner = runner
         self.tokenizer = tokenizer
+
+    async def startup(self) -> dict[str, int | float]:
+        prepare = getattr(self.runner, "prepare_online_cuda_graphs", None)
+        return prepare() if prepare is not None else {}
+
+    async def shutdown(self) -> None:
+        shutdown = getattr(self.runner, "shutdown_cuda_graphs", None)
+        if shutdown is not None:
+            shutdown()
+
+    def cuda_graph_stats(self) -> dict[str, int | float]:
+        stats = getattr(self.runner, "cuda_graph_stats", None)
+        return stats() if stats is not None else {}
 
     async def execute_batch(self, requests: list[RequestState]) -> list[ExecutionResult]:
         if not requests:

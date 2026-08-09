@@ -29,10 +29,14 @@ namespace flux {
 
 Request::Request(const RequestSpec& spec, std::int32_t page_size)
     : id_{spec.request_id},
-      token_container_{spec.tokens},
+      token_container_{spec.tokens, spec.prefill_length},
       page_size_{page_size},
       state_{fsm::State{fsm::Submitted{&token_container_, page_size}}},
-      storage_info_{spec.rolling_hashes, spec.storage_hit_pages} {}
+      storage_info_{spec.rolling_hashes, spec.storage_hit_pages} {
+    if (spec.prefill_length < -1 || spec.prefill_length > static_cast<std::int32_t>(spec.tokens.size())) {
+        throw std::invalid_argument("RequestSpec.prefill_length must be -1 or within the prompt token range");
+    }
+}
 
 PrefillInfo Request::GetPrefillInfo() const {
     return std::visit(Overloaded{

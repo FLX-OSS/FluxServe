@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+from flux_kernel.ops import apply_rope_with_cos_sin_cache_inplace
 
 from fluxserve.backend.utils.runtime_utils import CustomOp
 from fluxserve.backend.utils.runtime_utils import (
@@ -34,11 +35,6 @@ from fluxserve.backend.utils.runtime_utils import (
 )
 
 _is_cuda = is_cuda()
-
-if _is_cuda:
-    from sgl_kernel import FusedSetKVBufferArg, apply_rope_with_cos_sin_cache_inplace
-else:
-    FusedSetKVBufferArg = None
 
 
 def _rotate_neox(x: torch.Tensor) -> torch.Tensor:
@@ -150,7 +146,7 @@ class RotaryEmbedding(CustomOp):
         query: torch.Tensor,
         key: torch.Tensor,
         offsets: Optional[torch.Tensor] = None,
-        fused_set_kv_buffer_arg: Optional[FusedSetKVBufferArg] = None,
+        fused_set_kv_buffer_arg: Optional[Any] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """A PyTorch-native implementation of forward()."""
         assert (
@@ -185,8 +181,10 @@ class RotaryEmbedding(CustomOp):
         query: torch.Tensor,
         key: torch.Tensor,
         offsets: Optional[torch.Tensor] = None,
-        fused_set_kv_buffer_arg: Optional[FusedSetKVBufferArg] = None,
+        fused_set_kv_buffer_arg: Optional[Any] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if fused_set_kv_buffer_arg is not None:
+            raise NotImplementedError("fused KV-cache scatter is not supported")
         if _is_cuda and (self.head_size in [64, 128, 256, 512]):
             if self.cos_sin_cache.device != query.device:
                 self.cos_sin_cache = self.cos_sin_cache.to(query.device)
@@ -197,17 +195,8 @@ class RotaryEmbedding(CustomOp):
                 head_size=self.head_size,
                 cos_sin_cache=self.cos_sin_cache,
                 is_neox=self.is_neox_style,
-                # Compatible with old sgl-kernel
-                **(
-                    dict(fused_set_kv_buffer_arg=fused_set_kv_buffer_arg)
-                    if fused_set_kv_buffer_arg is not None
-                    else {}
-                ),
             )
         else:
-            assert (
-                fused_set_kv_buffer_arg is None
-            ), "save kv cache is not supported for vllm_rotary_embedding."
             if getattr(self, "vllm_rotary_embedding", None) is None:
                 return self.forward_native(positions, query, key, offsets, None)
             self.cos_sin_cache = self.cos_sin_cache.to(query.device, dtype=query.dtype)
@@ -227,9 +216,9 @@ class RotaryEmbedding(CustomOp):
         query: torch.Tensor,
         key: torch.Tensor,
         offsets: Optional[torch.Tensor] = None,
-        fused_set_kv_buffer_arg: Optional[FusedSetKVBufferArg] = None,
+        fused_set_kv_buffer_arg: Optional[Any] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if _is_cuda and "apply_rope_with_cos_sin_cache_inplace" in globals():
+        if _is_cuda:
             return self.forward_cuda(
                 positions, query, key, offsets, fused_set_kv_buffer_arg
             )
@@ -1014,7 +1003,7 @@ class MRotaryEmbedding(RotaryEmbedding):
         positions: torch.Tensor,
         query: torch.Tensor,
         key: torch.Tensor,
-        fused_set_kv_buffer_arg: Optional[FusedSetKVBufferArg] = None,
+        fused_set_kv_buffer_arg: Optional[Any] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """PyTorch-native implementation equivalent to forward().
 

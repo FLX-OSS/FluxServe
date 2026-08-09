@@ -25,22 +25,37 @@ manager/dist/*
 !manager/dist/.gitkeep
 .chglog
 
+# kernel related
+**/profiling/
+*.ncu-rep
 *.nsys-rep
 *.sqlite
 
 
 # GH200 related
+**/debug/
 **/gh200/
 **/openai/
 **/scripts/
+*.def
 
+# foundry related
+**/foundry/
 
 # docker commands
 **/commands/
+!docker/commands/
+docker/commands/*
+docker/run_apptainer.sh
+!docker/commands/start_foundry_docker.sh
 
 # experimental runs
 **/runs/
+**/tp*/
 
+# tools
+**/tools/
+**/*_audit.**
 
 # mysql
 mysql
@@ -99,3 +114,5 @@ test/e2e/v1/*.log
 test/e2e/*.log
 # Exclude build artifacts
 bin/
+.sgl-kernel-audit/
+.sgl-kernel-benchmarks/
