@@ -7,9 +7,8 @@
 - [ ] FP8
 - [ ] NVFP4
 
-
 ### Hardware Support
-- [ ] AMD GPU
+- [ ] AMD GPU ROCm
 
 ### Engine Support
 - [ ] Model Parallelism

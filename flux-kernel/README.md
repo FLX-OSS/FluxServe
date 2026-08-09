@@ -23,9 +23,3 @@ from flux_kernel import (
     silu_and_mul,
 )
 ```
-
-The activation, MoE, alignment, and cached-RoPE APIs use a focused native CUDA
-library compiled for SM90. The implementations are adapted from SGL Kernel
-0.3.15 at commit `8c9670375`, but the installed package does not import or link
-against `sgl-kernel`. Cached RoPE supports in-place and separate Q/K outputs;
-fused KV-cache scatter is not yet supported.

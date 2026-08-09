@@ -25,6 +25,9 @@ manager/dist/*
 !manager/dist/.gitkeep
 .chglog
 
+# kernel related
+**/profiling/
+*.ncu-rep
 *.nsys-rep
 *.sqlite
 
