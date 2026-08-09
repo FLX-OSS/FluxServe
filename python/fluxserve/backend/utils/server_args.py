@@ -61,6 +61,8 @@ class ServerArgs:
     scheduler_policy: str = "default"
     scheduler_page_size: int | None = None
     scheduler_num_device_pages: int = 0
+    gpu_memory_utilization: float = 0.90
+    gpu_memory_safety_reserve: float = 0.05
 
 
 _GLOBAL_SERVER_ARGS = ServerArgs()

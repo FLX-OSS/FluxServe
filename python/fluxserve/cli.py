@@ -54,6 +54,7 @@ from fluxserve.backend.execution.runners import (
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
 from fluxserve.backend.layers.moe.utils import initialize_moe_config
 from fluxserve.backend.utils.runtime_utils import require_nvidia_cuda
+from fluxserve.backend.utils.runtime_utils import profile_paged_kv_pages
 from fluxserve.backend.utils.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
         default="default",
     )
     serve.add_argument("--scheduler-num-device-pages", type=int, default=0)
+    serve.add_argument("--gpu-memory-utilization", type=float, default=0.90)
+    serve.add_argument("--gpu-memory-safety-reserve", type=float, default=0.05)
     serve.add_argument("--block-length", type=int, default=64)
     serve.add_argument("--prefilling-limit", type=int, default=128)
     serve.add_argument("--mini-batch-size", type=int, default=4)
@@ -225,6 +228,8 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         scheduler_policy=args.scheduler_policy,
         scheduler_page_size=args.page_size or args.block_length,
         scheduler_num_device_pages=args.scheduler_num_device_pages,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        gpu_memory_safety_reserve=args.gpu_memory_safety_reserve,
         trust_remote_code=args.trust_remote_code,
         tp_size=args.tp_size,
         dp_size=args.dp_size,
@@ -271,12 +276,6 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
                     "divisible by block_length"
                 )
             num_device_pages = int(args.scheduler_num_device_pages)
-            if num_device_pages <= 0:
-                num_device_pages = (
-                    args.max_num_seqs
-                    * ((args.max_model_len + page_size - 1) // page_size + 2)
-                    + 1
-                )
             server_args.scheduler_num_device_pages = num_device_pages
 
         graph_capture_sizes = tuple(
@@ -327,6 +326,11 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             runner_config=runner_config,
             device=args.device,
         )
+        if args.scheduler_policy == "paged" and int(server_args.scheduler_num_device_pages) <= 0:
+            server_args.scheduler_num_device_pages = profile_paged_kv_pages(
+                runner=runner, page_size=int(args.page_size or args.block_length),
+                utilization=server_args.gpu_memory_utilization,
+                safety_reserve=server_args.gpu_memory_safety_reserve)
         base_executor = BlockDiffusionExecutor(runner=runner, tokenizer=tokenizer)
         executor = DistributedGenerationExecutor(base_executor, context)
         if context.is_rank0:
