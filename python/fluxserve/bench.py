@@ -441,6 +441,10 @@ def summarize(
     # response.  Server-reported completion_tokens can be model-internal
     # diffusion/block tokens and may substantially exceed generated text.
     actual_output = sum(output.output_tokens for output in successes)
+    arrival_times = [output.start_time for output in successes]
+    arrival_window_s = (
+        max(arrival_times) - min(arrival_times) if len(arrival_times) >= 2 else 0.0
+    )
     all_latency_values = {
         "e2e": [output.e2e_latency * 1000 for output in successes],
         "queue": [output.queue_latency * 1000 for output in successes if output.queue_latency is not None],
@@ -458,6 +462,10 @@ def summarize(
         "total_input_tokens": total_input,
         "max_output_tokens": actual_output,
         "request_throughput": len(successes) / duration_s if duration_s else 0.0,
+        "input_token_throughput": (
+            total_input / arrival_window_s if arrival_window_s > 0 else 0.0
+        ),
+        "input_arrival_window_s": arrival_window_s,
         "output_token_throughput": actual_output / duration_s if duration_s else 0.0,
         "total_token_throughput": (total_input + actual_output) / duration_s if duration_s else 0.0,
         "input_lens": [output.prompt_len for output in outputs],
@@ -590,6 +598,7 @@ async def run_serving_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     _print_metric("Failed requests:", result["failed"])
     _print_metric("Benchmark duration (s):", result["duration"], 2)
     _print_metric("Request throughput (req/s):", result["request_throughput"], 2)
+    _print_metric("Input token throughput (tok/s):", result["input_token_throughput"], 2)
     _print_metric("Output token throughput (tok/s):", result["output_token_throughput"], 2)
     _print_metric("Total token throughput (tok/s):", result["total_token_throughput"], 2)
     for selected_metric in args.metrics:
