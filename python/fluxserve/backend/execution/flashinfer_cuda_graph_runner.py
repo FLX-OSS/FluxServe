@@ -518,7 +518,9 @@ class FlashInferCudaGraphRunner:
             self._active_entry = None
         self._decode_graphs[key] = entry
         self.decode_capture_count += 1
-        self._decode_capture_counts_by_bs[batch_size] += 1
+        self._decode_capture_counts_by_bs[batch_size] = (
+            self._decode_capture_counts_by_bs.get(batch_size, 0) + 1
+        )
         self.log(
             "CUDA graph captured: dynamic paged decode batch_size=%d layers=%d",
             batch_size, cache.num_layers,
