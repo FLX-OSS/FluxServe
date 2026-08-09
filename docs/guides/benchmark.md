@@ -9,7 +9,10 @@ python -m fluxserve.cli bench_offline \
   --ep-size 1 \
   --batch-size 4 \
   --gen-len 512 \
-  --block-length 64
+  --block-length 64 \
+  --use-decode-cuda-graph \
+  --cuda-graph-decode-mode padded \
+  --cuda-graph-capture-bs 1 2 4 
 ```
 
 ## Online Benchmark
@@ -31,7 +34,10 @@ python -m fluxserve.cli serve \
   --parallel-decoding threshold \
   --attention-backend flashinfer \
   --kv-cache-layout paged \
-  --scheduler-policy paged
+  --scheduler-policy paged \
+  --use-decode-cuda-graph \
+  --cuda-graph-decode-mode padded \
+  --cuda-graph-capture-bs 1 2 4 
 ```
 
 2. Check server health
@@ -48,9 +54,4 @@ python -m fluxserve.cli serve \
   --request-rate 1 \
   --max-concurrency 32 \
   --metric-percentiles 50,90,99 \
-  --metrics E2E
 ```
-
-`E2E` is always required and is the only metric reported by default. Add
-`QUEUE`, `EXECUTION`, or `HTTP_OVERHEAD` to `--metrics` to include those
-statistics in terminal and saved JSON output.

@@ -9,29 +9,25 @@
 
 Its core features include:
 
-- **Block Causal Attention**: Provides efficient attention runtime with a block-casual attention mechanism suitable for AR diffusion in real-world scenarios, including *varlen prefill* and *varlen block-deocde*.
+- **Block Causal Attention**: Provides efficient attention runtime with a block-casual attention mechanism suitable for AR diffusion in real-world scenarios, including *varlen prefill* and *varlen block-deocde* with CUDA graph support.
 - **Dynamic Scheduler**: Provides scheduler with efficient C++ control plane and Python execution plane with fine-grained block-level request management suitable for block diffusion models.
-- **Multi-GPU Serving**: Provides tensor paralllel (TP), data parallel (DP) and expert parallel (EP) support for large-scale model, such as llada-2-flash.
+- **Multi-GPU Serving**: Provides tensor paralllel (TP), data parallel (DP) and expert parallel (EP) support for large-scale models.
 
 ## [Getting Started](docs/guides/getting_started.md)
 
 ## [Development Roadmap](docs/roadmap.md)
 
 ## Performance Results
+On GSM8K dataset, FluxServe reaches **960 output tokens/s** with LLaDA-2.0-mini (TP1/EP1) and **520 output tokens/s** with LLaDA-2.0-flash (TP4/EP4), offering up to 60% more throughput compared to SGLang-dLLM.
 
-### Batched Inference
-FluxServe achieves up to 4.5x speedup against SGLang in offline batched inference on the GSM8K dataset. The results are reported using batch size of 16, output length of 2048 on 4 x GH200 with TP=EP=4.
-<table align="center">
+<table>
   <tr>
-      <img src="./assets/figures/batched_gsm8k.png" style="width: 100%; object-fit: contain;" />
-  </tr>
-</table>
-
-### Online Serving
-FluxServe also can sustain up to 40% more throughput when serving 100B LLaDA-2.0-Flash. Detailed benchmark guides can be found [here](docs/guides/benchmark.md).
-<table align="center">
-  <tr>
-      <img src="./assets/figures/results.png" style="width: 100%; object-fit: contain;" />
+    <td align="center" width="50%">
+      <img src="./assets/figures/online_gsm8k_mini.png" alt="Online GSM8K throughput for LLaDA-2.0-mini" width="100%" />
+    </td>
+    <td align="center" width="50%">
+      <img src="./assets/figures/online_gsm8k_flash.png" alt="Online GSM8K throughput for LLaDA-2.0-flash" width="100%" />
+    </td>
   </tr>
 </table>
 
