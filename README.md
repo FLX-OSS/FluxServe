@@ -20,13 +20,7 @@ Its core features include:
 ## Performance Results
 On GSM8K dataset, FluxServe reaches **960 output tokens/s** with LLaDA-2.0-mini (TP1/EP1) and **520 output tokens/s** with LLaDA-2.0-flash (TP4/EP4), offering up to 60% more throughput compared to SGLang-dLLM.
 
-<table align="center">
-  <tr>
-    <td align="center" width="100%">
-      <img src="./assets/figures/result.png" style="width: 960px; object-fit: contain;" />
-    </td>
-  </tr>
-</table>
+<img src="./assets/figures/result.png" alt="FluxServe vs. SGLang-dLLM on LLaDA-2.0-mini/flash" width="960px" margin="10px"></img>
 
 ## Acknowledgments
 We learned the system design and reused code from the following projects: [vllm](https://github.com/vllm-project/vllm), [SGLang](https://github.com/sgl-project/sglang), [TokenSpeed](https://github.com/lightseekorg/tokenspeed), and [dInfer](https://github.com/inclusionAI/dInfer).
