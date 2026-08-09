@@ -1152,6 +1152,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 batch_size=len(seq_ids),
                 q_len=self.block_length,
                 kv_len=current_cache_length,
+                mode=self.runner_config.decode_cuda_graph_mode,
             )
         )
         if use_decode_graph:

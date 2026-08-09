@@ -204,9 +204,34 @@ class FlashInferCudaGraphRunner:
             q, paged_kv_cache, enable_pdl=False
         )
 
-    def can_run_decode(self, *, batch_size: int, q_len: int, kv_len: int) -> bool:
+    def decode_graph_bucket(
+        self, batch_size: int, mode: str = "decomposed"
+    ) -> int | None:
+        if mode == "padded":
+            return next(
+                (
+                    size
+                    for size in self.decode_capture_batch_sizes
+                    if size >= int(batch_size)
+                ),
+                None,
+            )
+        return (
+            int(batch_size)
+            if int(batch_size) in self.decode_capture_batch_sizes
+            else None
+        )
+
+    def can_run_decode(
+        self,
+        *,
+        batch_size: int,
+        q_len: int,
+        kv_len: int,
+        mode: str = "decomposed",
+    ) -> bool:
         return bool(
-            batch_size in self.decode_capture_batch_sizes
+            self.decode_graph_bucket(batch_size, mode) is not None
             and q_len == 64
             and kv_len >= q_len
             and kv_len % q_len == 0
@@ -304,11 +329,14 @@ class FlashInferCudaGraphRunner:
     ) -> torch.Tensor:
         actual_batch_size = int(input_ids.shape[0])
         batch_size = actual_batch_size
-        if getattr(runner.runner_config, "decode_cuda_graph_mode", "decomposed") == "padded":
-            batch_size = next(
-                (size for size in self.decode_capture_batch_sizes if size >= actual_batch_size),
-                actual_batch_size,
+        mode = getattr(runner.runner_config, "decode_cuda_graph_mode", "decomposed")
+        graph_bucket = self.decode_graph_bucket(actual_batch_size, mode)
+        if graph_bucket is None:
+            raise RuntimeError(
+                f"No decode CUDA graph bucket for batch_size={actual_batch_size}, "
+                f"mode={mode!r}"
             )
+        batch_size = graph_bucket
         cache = runner.past_key_values
         key = (batch_size, cache.data.data_ptr(), input_ids.dtype)
         entry = self._decode_graphs.get(key)
