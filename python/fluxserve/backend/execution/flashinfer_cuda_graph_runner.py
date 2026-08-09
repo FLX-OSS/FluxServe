@@ -52,7 +52,7 @@ class FlashInferCudaGraphRunner:
         capture_sizes=DEFAULT_CAPTURE_SIZES,
         log_callback=None,
         num_layers: int | None = None,
-        decode_capture_batch_sizes=(1, 2, 4, 8),
+        decode_capture_batch_sizes=(1, 2, 4, 6, 8),
     ):
         self.device = torch.device(device)
         self.capture_sizes = tuple(sorted(set(int(x) for x in capture_sizes)))
@@ -60,11 +60,12 @@ class FlashInferCudaGraphRunner:
             sorted(set(int(x) for x in decode_capture_batch_sizes))
         )
         if not self.decode_capture_batch_sizes or any(
-            size <= 0 or size & (size - 1)
+            size <= 0 or (size != 1 and size % 2 != 0)
             for size in self.decode_capture_batch_sizes
         ):
             raise ValueError(
-                "decode_capture_batch_sizes must contain positive powers of two"
+                "decode_capture_batch_sizes must contain batch size 1 or "
+                "positive even batch sizes"
             )
         self._log_callback = log_callback
         self._num_layers = int(num_layers) if num_layers is not None else None
@@ -254,12 +255,10 @@ class FlashInferCudaGraphRunner:
 
     @staticmethod
     def capture_batch_sizes(max_batch_size: int) -> tuple[int, ...]:
-        """Return graph sizes reachable up to the configured online limit."""
+        """Return batch size 1 and all even graph sizes up to the limit."""
         if max_batch_size <= 0:
             return ()
-        return tuple(
-            1 << power for power in range(int(max_batch_size).bit_length())
-        )
+        return (1, *range(2, int(max_batch_size) + 1, 2))
 
     def record_capture_memory(self, allocated_before: int, reserved_before: int) -> None:
         """Record and log allocator growth across an eager graph capture phase."""

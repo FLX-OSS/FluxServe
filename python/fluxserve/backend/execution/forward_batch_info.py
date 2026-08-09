@@ -235,8 +235,14 @@ class RunnerConfig:
         self.supported_batch_sizes = tuple(int(x) for x in self.supported_batch_sizes)
         if self.cuda_graph_capture_batch_sizes is not None:
             self.cuda_graph_capture_batch_sizes = tuple(sorted(set(int(x) for x in self.cuda_graph_capture_batch_sizes)))
-            if not self.cuda_graph_capture_batch_sizes or any(x <= 0 or x & (x - 1) for x in self.cuda_graph_capture_batch_sizes):
-                raise ValueError("cuda_graph_capture_batch_sizes must contain positive powers of two")
+            if not self.cuda_graph_capture_batch_sizes or any(
+                x <= 0 or (x != 1 and x % 2 != 0)
+                for x in self.cuda_graph_capture_batch_sizes
+            ):
+                raise ValueError(
+                    "cuda_graph_capture_batch_sizes must contain batch size 1 "
+                    "or positive even batch sizes"
+                )
         self.cuda_graph_capture_sizes = tuple(
             sorted(set(int(x) for x in self.cuda_graph_capture_sizes))
         )

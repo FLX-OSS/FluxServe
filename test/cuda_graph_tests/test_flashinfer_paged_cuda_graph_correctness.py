@@ -289,10 +289,8 @@ def test_fluxserve_runner_selects_reachable_online_decode_graphs() -> None:
     assert FlashInferCudaGraphRunner.capture_batch_sizes(1) == (1,)
     assert FlashInferCudaGraphRunner.capture_batch_sizes(3) == (1, 2)
     assert FlashInferCudaGraphRunner.capture_batch_sizes(4) == (1, 2, 4)
-    assert FlashInferCudaGraphRunner.capture_batch_sizes(6) == (1, 2, 4)
-    assert FlashInferCudaGraphRunner.capture_batch_sizes(8) == (1, 2, 4, 8)
-    assert FlashInferCudaGraphRunner.capture_batch_sizes(12) == (1, 2, 4, 8)
-    assert FlashInferCudaGraphRunner.capture_batch_sizes(16) == (1, 2, 4, 8, 16)
-    assert FlashInferCudaGraphRunner.capture_batch_sizes(32) == (
-        1, 2, 4, 8, 16, 32
-    )
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(6) == (1, 2, 4, 6)
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(8) == (1, 2, 4, 6, 8)
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(12) == (1, 2, 4, 6, 8, 10, 12)
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(16) == tuple([1, *range(2, 17, 2)])
+    assert FlashInferCudaGraphRunner.capture_batch_sizes(32) == tuple([1, *range(2, 33, 2)])
