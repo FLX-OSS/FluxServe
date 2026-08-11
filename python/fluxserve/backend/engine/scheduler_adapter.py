@@ -52,6 +52,10 @@ class DefaultSchedulerAdapter:
 
     def finish(self, request_id: str) -> None:
         self._active.discard(request_id)
+        # A request may be finished before its queued batch is consumed.
+        # Remove the stale entry so a later resubmission starts a fresh FIFO
+        # position instead of scheduling the completed request again.
+        self._queue = [rid for rid in self._queue if rid != request_id]
 
     def abort(self, request_id: str) -> None:
         self.finish(request_id)
