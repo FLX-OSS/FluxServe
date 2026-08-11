@@ -54,7 +54,6 @@ manager/dist/*
 **/commands/
 !docker/commands/
 docker/commands/*
-docker/run_apptainer.sh
 !docker/commands/start_foundry_docker.sh
 
 # experimental runs

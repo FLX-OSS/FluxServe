@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # Keep this script identical between local development and GitHub Actions.
+# Run it after activating the virtual environment containing FluxServe.
 # It intentionally runs only tests that do not require a CUDA device.
 
 python -m pytest -q \

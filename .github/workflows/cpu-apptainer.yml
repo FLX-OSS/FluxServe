@@ -19,7 +19,7 @@ jobs:
 
       - name: Install and run tests in Apptainer
         run: |
-          ./docker/run_apptainer.sh /bin/bash --noprofile --norc -c '
+          bash docker/run_apptainer.sh /bin/bash --noprofile --norc -c '
             python -m pip install -e .
             python -m pip install pytest
             bash test/ci_cpu.sh
