@@ -1,0 +1,26 @@
+name: CPU checks (Apptainer)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-tests:
+    name: CPU / unit tests / Apptainer
+    # This must be a self-hosted runner where Apptainer and the SIF image exist.
+    runs-on: [self-hosted, linux, fluxserve-cpu]
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Install and run tests in Apptainer
+        run: |
+          ./docker/run_apptainer.sh /bin/bash --noprofile --norc -c '
+            python -m pip install -e .
+            python -m pip install pytest
+            bash test/ci_cpu.sh
+          '
