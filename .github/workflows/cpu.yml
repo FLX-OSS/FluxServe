@@ -1,0 +1,32 @@
+name: CPU checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-tests:
+    name: CPU / unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install CPU test dependencies
+        run: python -m pip install pytest
+
+      - name: Run CPU checks
+        run: bash test/ci_cpu.sh
