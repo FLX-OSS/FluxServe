@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-IMAGE="${APPTAINER_IMAGE:-/projects/bekz/yzhao25/sglang-h200.sif}"
+IMAGE="${APPTAINER_IMAGE:-/projects/bekz/yzhao25/sglang-gh200.sif}"
 HF_BIND="${HF_BIND:-/work/nvme/bekz/yzhao25/huggingface:/mnt/huggingface}"
 H200_CC="${CC:-/usr/bin/cc}"
 H200_CXX="${CXX:-/usr/bin/g++}"

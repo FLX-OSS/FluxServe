@@ -36,6 +36,9 @@ manager/dist/*
 # dataset related
 **/swebench_pro/
 **/swebench_pro.jsonl
+**/agentic_dataset_flash.json
+**/agentic_dataset.sh
+**/build_swe_smith_dataset.py
 
 # GH200 related
 **/debug/
@@ -60,9 +63,16 @@ docker/commands/*
 **/runs/
 **/tp*/
 
+# evalscope
+**/outputs/
+**/agentic_bench.sh
+**/mbpp_batched_bench.sh
+**/gsm8k_batched_bench.sh
+
 # tools
 **/tools/
 **/*_audit.**
+**.jinja
 
 # mysql
 mysql

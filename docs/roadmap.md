@@ -23,6 +23,8 @@
 
 ### Evaluation Support
 - [ ] [LM-Eval-Harness](https://github.com/EleutherAI/lm-evaluation-harness)
+- [ ] [EvalScope](https://github.com/modelscope/evalscope)
+
 
 ### PR Support
 - [ ] CI/CD Suites
