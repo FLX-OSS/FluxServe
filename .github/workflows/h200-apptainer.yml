@@ -1,0 +1,24 @@
+name: H200 Checks (Apptainer)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gpu-tests:
+    name: GPU / HumanEval tests / Apptainer
+    # This must be a self-hosted runner where Apptainer and the SIF image exist.
+    runs-on: [self-hosted, linux, fluxserve-h200]
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Install and run tests in Apptainer
+        run: |
+          bash /u/yzhao25/FluxServe/test/benchmark/fluxserve/apptainer/run_humaneval.sh
+          bash /u/yzhao25/FluxServe/test/benchmark/sglang/apptainer/run_humaneval.sh
+
