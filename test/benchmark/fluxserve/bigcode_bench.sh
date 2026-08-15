@@ -2,12 +2,11 @@
 
 set -euo pipefail
 
-export PYTHONNOUSERSITE=1
+export CUDA_VISIBLE_DEVICES=0
 
 # Install EvalScope
 EVALSCOPE_COMMIT=acd09b44384d53174768bb1063f675420f76fae9
-python3 -m venv /tmp/evalscope-venv
-/tmp/evalscope-venv/bin/pip install "evalscope[perf] @ git+https://github.com/modelscope/evalscope.git@${EVALSCOPE_COMMIT}"
+python3 -m pip install "evalscope[perf] @ git+https://github.com/modelscope/evalscope.git@${EVALSCOPE_COMMIT}"
 
 CONFIGS=(
     tp1_ep1_mini
@@ -20,14 +19,14 @@ MODELS=(
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATASET_PATH="${SCRIPT_DIR}/../../../data/openai/gsm8k_openai.jsonl"
+DATASET_PATH="${SCRIPT_DIR}/../../../data/openai/bigcodebench.jsonl"
 OUTPUTS_DIR="${SCRIPT_DIR}/outputs/$(date +%Y%m%d_%H%M%S)"
 SERVER_PID=
 SERVER_LOG=
 
 stop_server() {
     if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
-        echo "Stopping SGLang (pgid $SERVER_PID)..."
+        echo "Stopping FluxServe (pgid $SERVER_PID)..."
         kill -TERM -"$SERVER_PID" 2>/dev/null || true
         wait "$SERVER_PID" 2>/dev/null || true
     fi
@@ -75,7 +74,7 @@ for i in "${!CONFIGS[@]}"; do
     SERVER_PID=$!
     wait_for_ready
 
-    /tmp/evalscope-venv/bin/python -m evalscope.cli.cli perf \
+    python3 -m evalscope.cli.cli perf \
         --model "$MODEL" \
         --url http://127.0.0.1:8000/v1/chat/completions \
         --api openai \
@@ -85,6 +84,7 @@ for i in "${!CONFIGS[@]}"; do
         --max-tokens 2048 \
         --no-stream \
         --parallel 16 \
+        --number 1000 \
         --rate 16 \
         --name "$CONFIG" \
         --outputs-dir "$OUTPUTS_DIR" \

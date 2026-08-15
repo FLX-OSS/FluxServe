@@ -18,8 +18,6 @@ Its core features include:
 ## [Development Roadmap](docs/roadmap.md)
 
 ## Performance Results
-On GSM8K dataset, FluxServe reaches **960 output tokens/s** with LLaDA-2.0-mini (TP1/EP1) and **520 output tokens/s** with LLaDA-2.0-flash (TP4/EP4), offering up to 60% more throughput compared to SGLang-dLLM.
-
 <img src="./assets/figures/result.png" alt="FluxServe vs. SGLang-dLLM on LLaDA-2.0-mini/flash" width="960px" margin="10px"></img>
 
 ## Acknowledgments

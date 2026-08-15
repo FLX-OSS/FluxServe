@@ -20,7 +20,7 @@ MODELS=(
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATASET_PATH="${SCRIPT_DIR}/../../../data/openai/gsm8k_openai.jsonl"
+DATASET_PATH="${SCRIPT_DIR}/../../../data/openai/bigcodebench.jsonl"
 OUTPUTS_DIR="${SCRIPT_DIR}/outputs/$(date +%Y%m%d_%H%M%S)"
 SERVER_PID=
 SERVER_LOG=

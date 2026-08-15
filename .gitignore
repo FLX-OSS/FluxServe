@@ -27,6 +27,9 @@ manager/dist/*
 !manager/dist/.gitkeep
 .chglog
 
+# docs related
+**/dynamic-scheduling.md
+
 # kernel related
 **/profiling/
 *.ncu-rep
@@ -39,6 +42,7 @@ manager/dist/*
 **/agentic_dataset_flash.json
 **/agentic_dataset.sh
 **/build_swe_smith_dataset.py
+**.parquet
 
 # GH200 related
 **/debug/
@@ -68,6 +72,13 @@ docker/commands/*
 **/agentic_bench.sh
 **/mbpp_batched_bench.sh
 **/gsm8k_batched_bench.sh
+**/alpaca_bench_batched.sh
+**/bigcode_bench_batched.sh
+**/bigcode_batched_bench.sh
+**/long_bench.sh
+
+
+
 
 # tools
 **/tools/

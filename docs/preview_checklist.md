@@ -32,6 +32,15 @@
 - [x] UV build
 
 
+## Eval Support
+- [x] [EvalScope-Perf](https://github.com/modelscope/evalscope)
+
+
+### PR Support
+- [ ] CI/CD Suites
+
+
+
 ## Performance Results
 - [x] Offline Benchmark
 - [x] Online Benchmark
