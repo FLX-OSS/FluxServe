@@ -2,8 +2,9 @@
 
 set -euo pipefail
 
+VENV_PYTHON="${FLUXSERVE_VENV:-${HOME}/.venvs/fluxserve}/bin/python"
 
-exec python3 -m fluxserve.cli serve \
+exec "${VENV_PYTHON}" -m fluxserve.cli serve \
     --model inclusionAI/LLaDA2.0-mini \
     --host 127.0.0.1 \
     --port 8000 \

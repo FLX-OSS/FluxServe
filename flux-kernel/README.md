@@ -11,6 +11,15 @@ pip install -e flux-kernel/python/ --no-build-isolation
 The install builds CUDA RMSNorm shared library by default.
 Set `FLUX_KERNEL_SKIP_CUDA_BUILD=1` to skip native CUDA compilation.
 
+Native builds detect the current GPU when available and otherwise build the
+toolkit-supported defaults, including B200 `sm_100a`. To select architectures
+explicitly, use either Flux Kernel or Torch notation:
+
+```bash
+FLUX_KERNEL_CUDA_ARCH=90,100a pip install -e python/ --no-build-isolation
+TORCH_CUDA_ARCH_LIST="9.0;10.0a" pip install -e python/ --no-build-isolation
+```
+
 The public APIs are exposed from both `flux_kernel` and `flux_kernel.ops`:
 
 ```python

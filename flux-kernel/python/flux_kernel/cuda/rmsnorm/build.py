@@ -31,6 +31,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from flux_kernel.cuda.build import resolve_cuda_arches
+
 
 ROOT = Path(__file__).resolve().parent
 CSRC_DIR = ROOT / "csrc"
@@ -183,42 +185,18 @@ def _resolve_cuda_lib_flags() -> list[str]:
     return flags
 
 
-def _normalize_cuda_arch(arch: str) -> str:
-    has_suffix = arch.endswith("a")
-    arch_clean = arch.rstrip("a")
-    if "." in arch_clean:
-        major_s, minor_s = arch_clean.split(".", 1)
-        major = int(major_s)
-        minor = int(minor_s)
-    else:
-        major = int(arch_clean[:-1])
-        minor = int(arch_clean[-1])
-    suffix = "a" if has_suffix or major >= 9 else ""
-    return f"{major}{minor}{suffix}"
-
-
 def _detect_cuda_archs() -> list[str]:
-    arch_list = os.environ.get("FLASHINFER_CUDA_ARCH_LIST", "").strip()
-    if arch_list:
-        return sorted({_normalize_cuda_arch(arch) for arch in arch_list.split()})
-
-    direct = (
-        os.environ.get("FLUXSERVE_RMSNORM_CUDA_ARCH", "").strip()
-        or os.environ.get("TOKENSPEED_CUDA_ARCH", "").strip()
+    return list(
+        resolve_cuda_arches(
+            ("90", "100a"),
+            nvcc=_nvcc(),
+            legacy_env_names=(
+                "FLASHINFER_CUDA_ARCH_LIST",
+                "FLUXSERVE_RMSNORM_CUDA_ARCH",
+                "TOKENSPEED_CUDA_ARCH",
+            ),
+        )
     )
-    if direct:
-        return [_normalize_cuda_arch(direct)]
-
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            major, minor = torch.cuda.get_device_capability()
-            return [_normalize_cuda_arch(f"{major}{minor}")]
-    except Exception:
-        pass
-
-    return ["100a"]
 
 
 def _build_signature() -> str:
@@ -279,10 +257,16 @@ def build_rmsnorm_fused_parallel(*, force: bool = False, verbose: bool = False) 
     _prepare_cuda_toolchain_env()
     OBJS_DIR.mkdir(parents=True, exist_ok=True)
 
+    arches = _detect_cuda_archs()
     arch_flags = [
         f"-gencode=arch=compute_{arch},code=sm_{arch}"
-        for arch in _detect_cuda_archs()
+        for arch in arches
     ]
+    if verbose:
+        print(
+            "Building flux-kernel rmsnorm_fused_parallel for: "
+            + ", ".join(f"sm_{arch}" for arch in arches)
+        )
     nvcc_flags = [
         "-std=c++17",
         "-O2",

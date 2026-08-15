@@ -58,7 +58,7 @@ python -m fluxserve.cli serve \
   --dp-size 1
 ```
 
-### Option 2: Run UV Environment
+### Option 2: Run UV Environment (Deprecated)
 
 For host prerequisites, CUDA architecture selection, and troubleshooting, see
 [Building FluxServe with uv](uv_build.md).

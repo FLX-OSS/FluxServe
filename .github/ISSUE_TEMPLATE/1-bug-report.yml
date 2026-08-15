@@ -1,0 +1,37 @@
+name: 🐞 Bug report
+description: Report a reproducible issue
+title: "[Bug] "
+labels: ['Bug']
+
+body:
+- type: checkboxes
+  attributes:
+    label: Checklist
+    options:
+    - label: "I searched existing issues before filing this report."
+      required: true
+    - label: "I am running on a supported GPU — NVIDIA: H100, H200, GH200, B200, B300, GB200, GB300 (Other hardware is not supported and issues will be closed.)"
+      required: true
+    - label: "NVIDIA users: I am using CUDA 12.9 and CUDA driver ≥ 580 (recommended). If not, we may not be able to reproduce the issue."
+- type: textarea
+  attributes:
+    label: Summary
+    description: What is the problem? Describe what you observed and what you expected.
+  validations:
+    required: true
+- type: textarea
+  attributes:
+    label: Reproduction
+    description: Provide the server launch command and a minimal client command or script to reproduce the issue.
+    placeholder: |
+      Server:
+      ```bash
+
+      ```
+
+      Client (minimal reproduction):
+      ```bash
+
+      ```
+  validations:
+    required: true

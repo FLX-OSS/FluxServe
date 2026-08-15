@@ -1,0 +1,32 @@
+name: 🚀 Feature request
+description: Propose a concrete improvement to FluxServe
+title: "[Feature] "
+
+body:
+- type: checkboxes
+  attributes:
+    label: Checklist
+    options:
+    - label: "I searched existing issues and open PRs before filing this request."
+      required: true
+- type: textarea
+  attributes:
+    label: Problem and motivation
+    description: >
+      What online serving pain point or production need does this address?
+      If possible, share your current deployment scale and use case.
+      Help us understand why this is necessary and what the concrete benefit would be.
+  validations:
+    required: true
+- type: textarea
+  attributes:
+    label: Proposed solution
+    description: >
+      RFC, design doc, or a description of the proposed solution.
+      If you have a concrete design in mind, share it here.
+- type: textarea
+  attributes:
+    label: Execution plan
+    description: >
+      How do you plan to implement this? Note that core features are developed and driven by the TokenSpeed core team.
+      If after evaluation this is not on or planned for the roadmap, we encourage fork.

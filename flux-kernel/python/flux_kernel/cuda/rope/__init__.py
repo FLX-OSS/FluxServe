@@ -14,7 +14,7 @@ def build_rope(*, force: bool = False, verbose: bool = False) -> Path:
         "rope",
         force=force,
         verbose=verbose,
-        default_arches=("90", "120a"),
+        default_arches=("90", "100a", "120a"),
     )
 
 

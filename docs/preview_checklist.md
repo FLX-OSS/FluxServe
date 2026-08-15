@@ -29,11 +29,13 @@
 
 ### Env Support
 - [x] Dockerfile build
-- [x] UV build
+- [x] UV build (Deprecated)
 
 
 ## Eval Support
 - [x] [EvalScope-Perf](https://github.com/modelscope/evalscope)
+- [x] [EvalScope](https://github.com/modelscope/evalscope)
+
 
 
 ### PR Support
