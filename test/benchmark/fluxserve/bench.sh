@@ -2,8 +2,6 @@
 
 set -euo pipefail
 
-export PYTHONNOUSERSITE=1
-
 EVALSCOPE_COMMIT=acd09b44384d53174768bb1063f675420f76fae9
 EVALSCOPE_VENV="${EVALSCOPE_VENV:-/tmp/evalscope-venv}"
 python -m venv "${EVALSCOPE_VENV}"

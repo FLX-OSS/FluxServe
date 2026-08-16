@@ -26,7 +26,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v5
 
-      - name: Install and run tests in Apptainer
+      - name: Install FluxServe
         run: |
           set -euo pipefail
           bash test/ci/env/gh200.sh \
@@ -34,6 +34,18 @@ jobs:
                       export PIP_BREAK_SYSTEM_PACKAGES=1 && \
                       python -m pip install -e flux-kernel/python --no-build-isolation && \
                       python -m pip install -e flux-scheduler && \
-                      python -m pip install -e . && \
-                      bash test/ci/eval/gsm8k.sh && \
+                      python -m pip install -e .'
+
+      - name: Run GSM8K Eval Test
+        run: |
+          set -euo pipefail
+          bash test/ci/env/gh200.sh \
+            bash -lc 'cd "$GITHUB_WORKSPACE" && \
+                      bash test/ci/eval/gsm8k.sh'
+
+      - name: Run GSM8K Perf Test
+        run: |
+          set -euo pipefail
+          bash test/ci/env/gh200.sh \
+            bash -lc 'cd "$GITHUB_WORKSPACE" && \
                       bash test/benchmark/fluxserve/bench.sh'
