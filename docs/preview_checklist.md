@@ -34,12 +34,12 @@
 
 ## Eval Support
 - [x] [EvalScope-Perf](https://github.com/modelscope/evalscope)
-- [x] [EvalScope](https://github.com/modelscope/evalscope)
+- [x] [EvalScope-Acc](https://github.com/modelscope/evalscope)
 
 
 
 ### PR Support
-- [ ] CI/CD Suites
+- [ ] CI/CD Suites (WIP)
 
 
 
@@ -51,5 +51,5 @@
 - [x] Getting Started
 - [x] Env Setup (Docker)
 - [x] Benchmark Guide
-- [ ] Bug Report
+- [x] Bug Report
 - [ ] Contribution Guide

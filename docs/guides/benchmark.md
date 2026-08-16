@@ -1,7 +1,7 @@
 ## Offline Benchmark
 FluxServe supports offline thorughput benchamrk with json-style input files.
 ```bash
-python -m fluxserve.cli bench_offline \
+fluxserve bench_offline \
   --model inclusionAI/LLaDA2.0-mini \
   --dataset ./data/humaneval.jsonl \
   --tp-size 1 \
@@ -20,7 +20,7 @@ python -m fluxserve.cli bench_offline \
 1. Launch FluxServe engine
 
 ```bash
-python -m fluxserve.cli serve \
+fluxserve serve \
   --model inclusionAI/LLaDA2.0-mini \
   --host 127.0.0.1 \
   --port 8000 \
@@ -47,7 +47,7 @@ curl -fsS http://127.0.0.1:8000/health
 
 3. Run benchmark
 ```bash
-python -m fluxserve.cli serve \
+fluxserve serve \
   --model inclusionAI/LLaDA2.0-mini \
   --dataset ./data/humaneval.jsonl \
   --dataset-output-len 512 \
