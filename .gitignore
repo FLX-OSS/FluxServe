@@ -51,6 +51,11 @@ manager/dist/*
 **/scripts/
 *.def
 
+
+# B200 related
+**/b200/
+
+
 # agent related
 **/skills/
 

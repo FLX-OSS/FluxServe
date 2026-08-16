@@ -72,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fluxserve")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    serve = sub.add_parser("serve")
+    serve = sub.add_parser("serve", help='Launch the FluxServe server')
     serve.add_argument("--model", "--model-name", dest="model_name", required=True)
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=8000)
@@ -84,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
             "By default FluxServe uses its LLaDA-compatible prompt renderer."
         ),
     )
-    serve.add_argument("--device", default="cuda")
+    serve.add_argument("--device", default="cuda", help='GPU device type')
     serve.add_argument("--max-num-seqs", type=int, default=8)
     serve.add_argument("--max-scheduled-tokens", type=int, default=512)
     serve.add_argument("--max-model-len", type=int, default=2048)
@@ -154,6 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="fluxserve",
         help="Process title shown by ps/top for online serving.",
     )
+    sub.add_parser("env", help="Print environment and dependency information.")
     add_bench_subparser(sub)
     add_bench_offline_subparser(sub)
     return parser
@@ -365,6 +366,10 @@ def main() -> None:
     args = build_parser().parse_args()
     if args.command == "serve":
         serve(args)
+    elif args.command == "env":
+        from fluxserve.env import main as env_main
+
+        env_main()
     elif args.command == "bench":
         args.dispatch_function(args)
     elif args.command == "bench_offline":

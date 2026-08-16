@@ -2,8 +2,7 @@
 
 set -euo pipefail
 
-
-exec python3 -m fluxserve.cli serve \
+exec fluxserve serve \
     --model inclusionAI/LLaDA2.0-mini \
     --host 127.0.0.1 \
     --port 8000 \

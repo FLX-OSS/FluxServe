@@ -612,7 +612,7 @@ def _write_results(
 
 
 def add_bench_offline_subparser(subparsers) -> None:
-    parser = subparsers.add_parser("bench_offline")
+    parser = subparsers.add_parser("bench_offline", help="Offline batched benchmark.")
     parser.add_argument("--model", "--model-name", "--model_name", dest="model_name", required=True)
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--device", default="cuda")

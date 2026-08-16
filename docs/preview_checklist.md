@@ -29,15 +29,17 @@
 
 ### Env Support
 - [x] Dockerfile build
-- [x] UV build
+- [x] UV build (Deprecated)
 
 
 ## Eval Support
 - [x] [EvalScope-Perf](https://github.com/modelscope/evalscope)
+- [x] [EvalScope-Acc](https://github.com/modelscope/evalscope)
+
 
 
 ### PR Support
-- [ ] CI/CD Suites
+- [ ] CI/CD Suites (WIP)
 
 
 
@@ -49,5 +51,5 @@
 - [x] Getting Started
 - [x] Env Setup (Docker)
 - [x] Benchmark Guide
-- [ ] Bug Report
+- [x] Bug Report
 - [ ] Contribution Guide
