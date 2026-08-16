@@ -57,8 +57,8 @@ run_perf() {
     local config=$2
     local model=$3
     local dataset=$4
-    local number_flag=$5
-    local number_arg=$6
+    local number_flag=${5:-}
+    local number_arg=${6:-}
     local output_dir="${OUTPUTS_DIR}/${benchmark}/${config}"
     local dataset_path="${REPO_ROOT}/data/${dataset}"
 
