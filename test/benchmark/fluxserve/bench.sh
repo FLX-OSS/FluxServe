@@ -103,7 +103,6 @@ run_perf() {
 
 trap stop_server EXIT
 
-run_perf gsm8k tp1_ep1_mini inclusionAI/LLaDA2.0-mini openai/gsm8k_openai.jsonl 
-run_perf bigcodebench tp1_ep1_mini inclusionAI/LLaDA2.0-mini openai/bigcodebench.jsonl 
+run_perf gsm8k tp1_ep1_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
 
 exit 0

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-exec "${FLUXSERVE_VENV:-${HOME}/.venvs/fluxserve}/bin/fluxserve" serve \
+exec fluxserve serve \
     --model inclusionAI/LLaDA2.0-mini \
     --host 127.0.0.1 \
     --port 8000 \
