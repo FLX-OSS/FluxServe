@@ -31,6 +31,9 @@ jobs:
           set -euo pipefail
           bash test/ci/env/gh200.sh \
             bash -lc 'cd "$GITHUB_WORKSPACE" && \
-                      bash scripts/install.sh && \
+                      export PIP_BREAK_SYSTEM_PACKAGES=1 && \
+                      python -m pip install -e flux-kernel/python --no-build-isolation && \
+                      python -m pip install -e flux-scheduler && \
+                      python -m pip install -e . && \
                       bash test/ci/eval/gsm8k.sh && \
                       bash test/benchmark/fluxserve/bench.sh'
