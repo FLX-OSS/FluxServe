@@ -29,9 +29,8 @@ jobs:
       - name: Install and run tests in Apptainer
         run: |
           set -euo pipefail
-          bash b200/run_flux_container.sh \
+          bash test/ci/env/b200.sh \
             bash -lc 'cd "$GITHUB_WORKSPACE" && \
                       bash scripts/install.sh && \
                       bash test/ci/eval/gsm8k.sh && \
                       bash test/benchmark/fluxserve/bench.sh'
-

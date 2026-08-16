@@ -19,7 +19,7 @@ jobs:
   gpu-tests:
     name: GH200 GPU / GSM8K Eval / Apptainer
     # This must be a self-hosted runner where Apptainer and the SIF image exist.
-    runs-on: [self-hosted, linux, fluxserve-b200]
+    runs-on: [self-hosted, linux, fluxserve-gh200]
     timeout-minutes: 240
 
     steps:
@@ -29,7 +29,7 @@ jobs:
       - name: Install and run tests in Apptainer
         run: |
           set -euo pipefail
-          bash gh200/run_flux_container.sh \
+          bash test/ci/env/gh200.sh \
             bash -lc 'cd "$GITHUB_WORKSPACE" && \
                       bash scripts/install.sh && \
                       bash test/ci/eval/gsm8k.sh && \
