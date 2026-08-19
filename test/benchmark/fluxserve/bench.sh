@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+# Keep lazy native builds deterministic for the RTX PRO 6000 benchmark.
+export FLUX_KERNEL_CUDA_ARCH="${FLUX_KERNEL_CUDA_ARCH:-120}"
+
 EVALSCOPE_COMMIT=acd09b44384d53174768bb1063f675420f76fae9
 EVALSCOPE_VENV="${EVALSCOPE_VENV:-/tmp/evalscope-venv}"
 python -m venv "${EVALSCOPE_VENV}"

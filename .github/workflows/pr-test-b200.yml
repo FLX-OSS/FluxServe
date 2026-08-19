@@ -32,6 +32,7 @@ jobs:
           bash test/ci/env/b200.sh \
             bash -lc 'cd "$GITHUB_WORKSPACE" && \
                       export PIP_BREAK_SYSTEM_PACKAGES=1 && \
+                      export FLUX_KERNEL_CUDA_ARCH=100 && \
                       python -m pip install -e flux-kernel/python --no-build-isolation && \
                       python -m pip install -e flux-scheduler && \
                       python -m pip install -e .'
