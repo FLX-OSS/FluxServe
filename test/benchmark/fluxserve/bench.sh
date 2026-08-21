@@ -87,8 +87,8 @@ run_perf() {
         --max-tokens 2048
         --no-stream
         --num 1000
-        --parallel 16
-        --rate 16
+        --parallel 4
+        --rate 4
         --name "${benchmark}_${config}"
         --outputs-dir "$output_dir"
         --no-timestamp
@@ -105,5 +105,9 @@ run_perf() {
 trap stop_server EXIT
 
 run_perf gsm8k tp1_ep1_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
+run_perf gsm8k tp4_ep4_flash inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
+run_perf gsm8k tp4_ep4_gemma inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
+
+
 
 exit 0
