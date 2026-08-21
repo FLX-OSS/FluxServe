@@ -18,6 +18,8 @@ from transformers.modeling_outputs import MoeCausalLMOutputWithPast
 
 import fluxserve.backend.distributed as flux_distributed
 from fluxserve.backend.distributed import (
+    get_moe_expert_parallel_rank,
+    get_moe_expert_parallel_world_size,
     get_pp_group,
     get_tensor_model_parallel_world_size,
     tensor_model_parallel_all_reduce,
@@ -27,6 +29,9 @@ from fluxserve.backend.layers.attention import (
     AttentionForward,
     AttentionForwardConfig,
     apply_qk_norm,
+)
+from fluxserve.backend.layers.attention.diffusion_gemma_flashinfer import (
+    DiffusionGemmaPagedAttention,
 )
 from fluxserve.backend.layers.dp_attention import (
     get_attention_tp_rank,
@@ -228,6 +233,14 @@ class DiffusionGemmaAttention(nn.Module):
                 scale=1.0,
             )
         )
+        self.paged_attention = DiffusionGemmaPagedAttention(
+            layer_id=layer_id,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            head_dim=self.head_dim,
+            scale=1.0,
+            sliding_window=self.sliding_window,
+        )
 
     def _apply_sliding_window(
         self,
@@ -294,6 +307,22 @@ class DiffusionGemmaAttention(nn.Module):
         q = q.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(bsz, q_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
         v = v.view(bsz, q_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        if getattr(past_key_values, "is_diffusion_gemma_paged_cache", False):
+            if forward_batch is None or not forward_batch.diffusion_gemma_phase:
+                raise RuntimeError(
+                    "Diffusion-Gemma paged attention requires phase metadata"
+                )
+            output = self.paged_attention.forward(
+                q,
+                k,
+                v,
+                cache=past_key_values,
+                metadata=forward_batch.diffusion_gemma_attention_metadata,
+            )
+            output = output.transpose(1, 2).reshape(bsz, q_len, -1)
+            output, _ = self.o_proj(output)
+            return output, past_key_values if use_cache else None
+
         k, v = self._append_past_key_values(k, v, past_key_values)
         kv_len = k.shape[2]
         attention_mask = self._apply_sliding_window(attention_mask, positions, kv_len)
@@ -457,13 +486,26 @@ class DiffusionGemmaModel(nn.Module):
         per_layer_inputs = self._per_layer_inputs(input_ids, inputs_embeds)
         hidden_states = inputs_embeds
         presents = []
-        if past_key_values is not None and len(past_key_values) != len(self.layers):
+        paged_cache = getattr(
+            past_key_values, "is_diffusion_gemma_paged_cache", False
+        )
+        if (
+            past_key_values is not None
+            and not paged_cache
+            and len(past_key_values) != len(self.layers)
+        ):
             raise ValueError(
                 "Diffusion-Gemma past_key_values must contain one entry per layer: "
                 f"expected {len(self.layers)}, got {len(past_key_values)}"
             )
         for i, layer in enumerate(self.layers):
-            layer_past = past_key_values[i] if past_key_values is not None else None
+            layer_past = (
+                past_key_values
+                if paged_cache
+                else past_key_values[i]
+                if past_key_values is not None
+                else None
+            )
             layer_ple = per_layer_inputs[..., i, :] if per_layer_inputs is not None else None
             hidden_states, present = layer(
                 positions,
@@ -474,9 +516,9 @@ class DiffusionGemmaModel(nn.Module):
                 per_layer_input=layer_ple,
                 forward_batch=forward_batch,
             )
-            if use_cache:
+            if use_cache and not paged_cache:
                 presents.append(present)
-        return self.norm(hidden_states), tuple(presents)
+        return self.norm(hidden_states), past_key_values if paged_cache else tuple(presents)
 
 
 class DiffusionGemmaSelfConditioning(nn.Module):
@@ -535,6 +577,19 @@ class DiffusionGemmaForConditionalGeneration(nn.Module):
         buffers = dict(self.named_buffers())
         loaded: set[str] = set()
         unexpected: set[str] = set()
+
+        def local_expert_weights(value: torch.Tensor) -> torch.Tensor:
+            ep_size = get_moe_expert_parallel_world_size()
+            if ep_size == 1:
+                return value
+            if value.shape[0] % ep_size != 0:
+                raise ValueError(
+                    "Diffusion-Gemma expert count must be divisible by EP size: "
+                    f"checkpoint={value.shape[0]}, ep_size={ep_size}"
+                )
+            local_experts = value.shape[0] // ep_size
+            start = get_moe_expert_parallel_rank() * local_experts
+            return value.narrow(0, start, local_experts)
 
         def load_param(target: str, value: torch.Tensor, shard_id=None):
             param = params.get(target)
@@ -602,6 +657,7 @@ class DiffusionGemmaForConditionalGeneration(nn.Module):
                     loader = getattr(param, "weight_loader", None)
                     if loader is None:
                         raise ValueError(f"Missing fused MoE loader for {target}")
+                    value = local_expert_weights(value)
                     loader(param, value.to(param.device), target, "w13")
                     loaded.add(target)
             elif ".moe.experts.w2_weight" in name:
@@ -613,6 +669,7 @@ class DiffusionGemmaForConditionalGeneration(nn.Module):
                     loader = getattr(param, "weight_loader", None)
                     if loader is None:
                         raise ValueError(f"Missing fused MoE loader for {target}")
+                    value = local_expert_weights(value)
                     loader(param, value.to(param.device), target, "w2")
                     loaded.add(target)
             elif name in buffers:

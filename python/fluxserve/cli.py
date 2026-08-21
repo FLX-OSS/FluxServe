@@ -30,6 +30,7 @@ from transformers import AutoConfig, AutoTokenizer
 
 from fluxserve.bench import add_bench_subparser
 from fluxserve.bench_offline import (
+    StoreExplicit,
     add_bench_offline_subparser,
     bench_offline,
     normalize_attention_backend_args,
@@ -111,7 +112,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--attention-backend",
         choices=("sdpa", "flex", "flashinfer"),
         default="flashinfer",
+        action=StoreExplicit,
     )
+    serve.set_defaults(attention_backend_explicit=False)
     serve.add_argument(
         "--flashinfer-decode-batch-mode",
         choices=("default", "max_batch"),
@@ -218,10 +221,13 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
     apply_template = bool(args.apply_template or is_diffusion_gemma)
     if is_diffusion_gemma and not args.apply_template:
         logger.info("Diffusion-Gemma chat requests use the checkpoint chat template.")
-    if is_diffusion_gemma and args.attention_backend == "flashinfer":
-        logger.info("Diffusion-Gemma uses the SDPA backend in the initial release.")
+    if is_diffusion_gemma and not getattr(args, "attention_backend_explicit", False):
         args.attention_backend = "sdpa"
         normalize_attention_backend_args(args)
+    if is_diffusion_gemma and args.scheduler_policy == "paged":
+        raise RuntimeError(
+            "Diffusion-Gemma FlashInfer does not support scheduler_policy='paged' yet."
+        )
     _reject_unsupported_quantization(model_config)
     model_config.quant_config = None
     if args.scheduler_policy == "paged" and (

@@ -71,7 +71,7 @@ for i in "${!CONFIGS[@]}"; do
         --api-url http://127.0.0.1:8000/v1/chat/completions \
         --api-key EMPTY \
         --datasets gsm8k \
-        --eval-batch-size 1 \
+        --eval-batch-size 16 \
         --judge-strategy rule \
         --generation-config '{"max_tokens": 2048, "temperature": 0.0}' \
         --work-dir "$REPORT_DIR" \

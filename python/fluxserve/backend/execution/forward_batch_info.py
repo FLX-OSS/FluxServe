@@ -383,6 +383,8 @@ class ForwardBatch:
     flashinfer_cuda_graph_dummy_page: int = -1
     flashinfer_full_prefill_graph: bool = False
     flashinfer_full_decode_graph: bool = False
+    diffusion_gemma_phase: str | None = None
+    diffusion_gemma_attention_metadata: Any = None
 
 
 class PPProxyTensors:

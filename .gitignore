@@ -16,6 +16,10 @@
 
 # diffusion-gemma
 diffusion_gemma_*.md
+diffusion_gemma*.md
+flashinfer_gemma.md
+
+
 
 # Dependency directories (remove the comment below to include it)
 vendor/

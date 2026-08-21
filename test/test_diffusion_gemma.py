@@ -5,6 +5,11 @@ import torch.nn.functional as F
 
 from fluxserve.backend.configs.diffusion_gemma import DiffusionGemmaConfig
 from fluxserve.backend.layers.attention.base import AttentionForwardConfig, DenseAttention
+from fluxserve.backend.layers.attention.diffusion_gemma_flashinfer import (
+    DiffusionGemmaLayerGeometry,
+    DiffusionGemmaPagedAttention,
+    DiffusionGemmaPagedKVCache,
+)
 from fluxserve.backend.execution.decoders.diffusion_gemma import (
     DiffusionGemmaDecoder,
     DiffusionGemmaSamplingConfig,
@@ -86,6 +91,41 @@ def test_diffusion_masks_separate_denoise_and_commit():
     assert bool(bidi.all())
 
 
+def test_diffusion_runner_accepts_matching_tp_ep(monkeypatch):
+    monkeypatch.setattr(
+        "fluxserve.backend.execution.runners.block_diffusion.BlockDiffusionRunner.__init__",
+        lambda self, model_config, server_args, runner_config, device, **kwargs: None,
+    )
+    args = SimpleNamespace(
+        tp_size=2,
+        ep_size=2,
+        dp_size=1,
+        pp_size=1,
+        enable_dp_attention=False,
+    )
+
+    runner = DiffusionGemmaRunner(SimpleNamespace(), args, device="cuda")
+
+    assert runner.last_denoising_steps == []
+
+
+def test_diffusion_runner_rejects_mismatched_tp_ep():
+    args = SimpleNamespace(
+        tp_size=2,
+        ep_size=1,
+        dp_size=1,
+        pp_size=1,
+        enable_dp_attention=False,
+    )
+
+    try:
+        DiffusionGemmaRunner(SimpleNamespace(), args, device="cuda")
+    except ValueError as error:
+        assert "requires TP and EP to use the same world size" in str(error)
+    else:
+        raise AssertionError("mismatched TP/EP topology should be rejected")
+
+
 def test_diffusion_attention_appends_immutable_tuple_cache():
     past_k = torch.arange(6).reshape(1, 1, 3, 2)
     past_v = past_k + 10
@@ -135,6 +175,131 @@ def test_sliding_mask_uses_absolute_positions_for_truncated_cache():
     assert mask.tolist() == [
         [[False, True, True, True, True], [False, False, True, True, True]]
     ]
+
+
+def test_diffusion_gemma_paged_cache_supports_heterogeneous_layers():
+    cache = DiffusionGemmaPagedKVCache(
+        layer_geometries=[
+            DiffusionGemmaLayerGeometry(4, 256),
+            DiffusionGemmaLayerGeometry(1, 512),
+        ],
+        max_length=17,
+        page_size=8,
+        dtype=torch.bfloat16,
+        device="cpu",
+    )
+
+    assert cache.layer_paged_kv(0)[0].shape == (3, 8, 4, 256)
+    assert cache.layer_paged_kv(1)[0].shape == (3, 8, 1, 512)
+    indptr, indices, last_page_len = cache.metadata(17)
+    assert indptr.tolist() == [0, 3]
+    assert indices.tolist() == [0, 1, 2]
+    assert last_page_len.tolist() == [1]
+
+
+def test_diffusion_gemma_paged_cache_builds_variable_length_batch_metadata():
+    cache = DiffusionGemmaPagedKVCache(
+        layer_geometries=[DiffusionGemmaLayerGeometry(1, 8)],
+        max_length=20,
+        page_size=4,
+        dtype=torch.bfloat16,
+        device="cpu",
+        batch_size=4,
+    )
+
+    metadata = cache.build_metadata(
+        phase="prefill",
+        seq_ids=(0, 1, 2, 3),
+        q_offsets=(0, 0, 0, 0),
+        q_lens=(3, 5, 7, 9),
+        kv_lens=(3, 5, 7, 9),
+        max_q_len=9,
+    )
+
+    assert cache.pages_per_sequence == 5
+    assert cache.num_pages == 20
+    assert cache.layer_paged_kv(0)[0].shape == (20, 4, 1, 8)
+    assert metadata.qo_indptr.tolist() == [0, 3, 8, 15, 24]
+    assert metadata.kv_indptr.tolist() == [0, 1, 3, 5, 8]
+    assert metadata.kv_indices.tolist() == [0, 5, 6, 10, 11, 15, 16, 17]
+    assert metadata.last_page_len.tolist() == [3, 1, 3, 1]
+    assert metadata.gather_indices.tolist() == [
+        0,
+        1,
+        2,
+        9,
+        10,
+        11,
+        12,
+        13,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+    ]
+
+
+def test_diffusion_gemma_batch_metadata_reuses_phase_masks():
+    cache = DiffusionGemmaPagedKVCache(
+        layer_geometries=[DiffusionGemmaLayerGeometry(1, 8)],
+        max_length=16,
+        page_size=4,
+        dtype=torch.bfloat16,
+        device="cpu",
+        batch_size=2,
+    )
+    metadata = cache.build_metadata(
+        phase="denoise",
+        seq_ids=(0, 1),
+        q_offsets=(3, 5),
+        q_lens=(2, 2),
+        kv_lens=(5, 7),
+        max_q_len=2,
+    )
+
+    first = metadata.mask(3)
+    second = metadata.mask(3)
+
+    assert first.data_ptr() == second.data_ptr()
+    assert first.numel() == 2 * 5 + 2 * 7
+
+
+def test_diffusion_gemma_paged_masks_cover_all_phases_and_sliding_window():
+    attention = DiffusionGemmaPagedAttention(
+        layer_id=0,
+        num_heads=1,
+        num_kv_heads=1,
+        head_dim=2,
+        scale=1.0,
+        sliding_window=3,
+    )
+    positions = torch.tensor([3, 4])
+
+    prefill = attention._mask(positions, 5, "prefill")
+    denoise = attention._mask(positions, 5, "denoise")
+    commit = attention._mask(positions, 5, "commit")
+
+    assert prefill.tolist() == [
+        [False, True, True, True, False],
+        [False, False, True, True, True],
+    ]
+    assert denoise.tolist() == [
+        [False, True, True, True, True],
+        [False, False, True, True, True],
+    ]
+    assert torch.equal(commit, prefill)
 
 
 def test_dense_attention_honors_model_scale():

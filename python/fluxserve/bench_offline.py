@@ -19,6 +19,7 @@
 # SOFTWARE.
 
 
+import argparse
 import json
 import os
 import string
@@ -56,6 +57,12 @@ from fluxserve.prompt_utils import render_openai_messages
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 BUCKET_SIZE = 32
+
+
+class StoreExplicit(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        setattr(namespace, f"{self.dest}_explicit", True)
 
 
 def normalize_attention_backend_args(args) -> None:
@@ -319,15 +326,13 @@ def normalize_diffusion_gemma_args(args, model_config) -> bool:
     )
     args.canvas_length = int(canvas_length)
     args.block_length = int(canvas_length)
-    if args.attention_backend == "flashinfer":
+    if not getattr(args, "attention_backend_explicit", False):
         args.attention_backend = "sdpa"
         normalize_attention_backend_args(args)
-    # Diffusion-Gemma currently has a correctness-first runner only: it uses
-    # dense SDPA attention and tuple-based dense KV caches, and does not have
-    # CUDA-graph capture support. Normalize the general benchmark defaults so
-    # users do not need to supply implementation-specific overrides.
-    args.attention_backend = "sdpa"
-    args.kv_cache_layout = "dense"
+    if args.attention_backend != "flashinfer":
+        args.kv_cache_layout = "dense"
+        args.flashinfer_cache_mode = "dense"
+        args.flashinfer_prefill_mode = "dense"
     args.use_cuda_graph = False
     args.use_prefill_cuda_graph = False
     args.use_decode_cuda_graph = False
@@ -504,7 +509,10 @@ def run_worker(args, *, init_method: str = "env://"):
     )
     is_diffusion_gemma = normalize_diffusion_gemma_args(args, model_config)
     if is_diffusion_gemma:
-        logger.info("[Info] Diffusion-Gemma uses SDPA with dense KV cache.")
+        logger.info(
+            "[Info] Diffusion-Gemma attention backend: "
+            f"{args.attention_backend}, KV cache: {args.kv_cache_layout}."
+        )
     _reject_unsupported_quantization(model_config)
     model_config.quant_config = None
     all_input_ids, prompts, questions, ids = load_inputs(
@@ -757,7 +765,8 @@ def add_bench_offline_subparser(subparsers) -> None:
         help="Prefill sequence-length buckets captured by CUDA graphs.",
     )
     parser.add_argument("--prefilling-limit", "--prefilling_limit", dest="prefilling_limit", type=int, default=128)
-    parser.add_argument("--attention-backend", "--attention_backend", dest="attention_backend", choices=("sdpa", "flex", "flashinfer"), default="flashinfer")
+    parser.set_defaults(attention_backend_explicit=False)
+    parser.add_argument("--attention-backend", "--attention_backend", dest="attention_backend", choices=("sdpa", "flex", "flashinfer"), default="flashinfer", action=StoreExplicit)
     parser.add_argument("--flashinfer-decode-batch-mode", "--flashinfer_decode_batch_mode", dest="flashinfer_decode_batch_mode", choices=("default", "max_batch"), default="max_batch")
     parser.add_argument("--flashinfer-prefill-mode", "--flashinfer_prefill_mode", dest="flashinfer_prefill_mode", choices=("dense", "ragged", "paged"), default="paged")
     parser.add_argument("--flashinfer-cache-mode", "--flashinfer_cache_mode", dest="flashinfer_cache_mode", choices=("dense", "paged"), default="paged")

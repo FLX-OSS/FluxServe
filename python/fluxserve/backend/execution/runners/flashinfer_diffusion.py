@@ -17,6 +17,7 @@ from fluxserve.backend.managers.kvcache import PagedKVCache
 from fluxserve.backend.execution.flashinfer_cuda_graph_runner import (
     FlashInferCudaGraphRunner,
 )
+from fluxserve.backend.utils.runtime_utils import is_flashinfer_dllm_available
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,11 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
     """Block diffusion runner with FlashInfer-specific decode batching."""
 
     def __init__(self, *args, **kwargs):
+        if not is_flashinfer_dllm_available():
+            raise RuntimeError(
+                "LLaDA2 attention_backend='flashinfer' requires "
+                "flashinfer.dllm.BatchBlockExtendRaggedOffsetWrapper."
+            )
         super().__init__(*args, **kwargs, _allow_flashinfer=True)
         if self.runner_config.attention_backend != "flashinfer":
             raise ValueError(

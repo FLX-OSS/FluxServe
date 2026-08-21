@@ -43,6 +43,20 @@ class DiffusionGemmaSamplingState:
             self.history = []
 
 
+@dataclass
+class DiffusionGemmaBatchSamplingState:
+    canvas: torch.Tensor
+    argmax_canvas: torch.Tensor
+    active: torch.Tensor
+    steps: torch.Tensor
+    soft_embeds: torch.Tensor | None = None
+    history: list[torch.Tensor] | None = None
+
+    def __post_init__(self):
+        if self.history is None:
+            self.history = []
+
+
 class DiffusionGemmaDecoder:
     """Entropy-bound accept/renoise decoder used by Diffusion-Gemma."""
 
@@ -78,6 +92,96 @@ class DiffusionGemmaDecoder:
             device=device,
         )
         return DiffusionGemmaSamplingState(canvas=canvas, argmax_canvas=canvas.clone())
+
+    def new_batch_state(
+        self, batch_size: int, device: torch.device
+    ) -> DiffusionGemmaBatchSamplingState:
+        canvas = torch.randint(
+            0,
+            self.config.vocab_size,
+            (int(batch_size), self.config.canvas_length),
+            dtype=torch.long,
+            device=device,
+        )
+        return DiffusionGemmaBatchSamplingState(
+            canvas=canvas,
+            argmax_canvas=canvas.clone(),
+            active=torch.ones(int(batch_size), dtype=torch.bool, device=device),
+            steps=torch.zeros(int(batch_size), dtype=torch.int32, device=device),
+        )
+
+    def step_batch(
+        self,
+        logits: torch.Tensor,
+        state: DiffusionGemmaBatchSamplingState,
+        embed_weight: torch.Tensor,
+        vocab_start: int,
+        vocab_end: int,
+        normalizer: float,
+    ) -> torch.Tensor:
+        cfg = self.config
+        active = state.active
+        remaining = (cfg.max_denoising_steps - state.steps).clamp_min(1).float()
+        temperature = cfg.t_min + (cfg.t_max - cfg.t_min) * (
+            remaining / cfg.max_denoising_steps
+        )
+        scaled = logits.float() / temperature[:, None, None].clamp_min(1e-10)
+        argmax = scaled.argmax(dim=-1)
+        log_probs = scaled.log_softmax(dim=-1)
+        probs = log_probs.exp()
+        sampled = torch.multinomial(
+            probs.reshape(-1, probs.shape[-1]), num_samples=1
+        ).reshape(state.canvas.shape)
+        entropy = -(probs * log_probs).sum(dim=-1)
+        sorted_entropy, sorted_indices = entropy.sort(dim=-1)
+        cumulative = sorted_entropy.cumsum(dim=-1)
+        sorted_accept = (cumulative - sorted_entropy) <= cfg.entropy_bound
+        accept = torch.zeros_like(sorted_accept)
+        accept.scatter_(1, sorted_indices, sorted_accept)
+        random_tokens = torch.randint(
+            0,
+            cfg.vocab_size,
+            state.canvas.shape,
+            dtype=state.canvas.dtype,
+            device=state.canvas.device,
+        )
+        proposed_canvas = torch.where(accept, sampled, random_tokens)
+        state.canvas = torch.where(active[:, None], proposed_canvas, state.canvas)
+        state.argmax_canvas = torch.where(active[:, None], argmax, state.argmax_canvas)
+        state.steps += active.to(state.steps.dtype)
+
+        state.history.append(state.argmax_canvas.clone())
+        if len(state.history) > cfg.stability_threshold:
+            state.history.pop(0)
+        if len(state.history) >= cfg.stability_threshold:
+            reference = state.history[0]
+            stable = (
+                torch.stack(
+                    [(item == reference).all(dim=-1) for item in state.history[1:]],
+                    dim=0,
+                ).all(dim=0)
+                if len(state.history) > 1
+                else torch.ones_like(active)
+            )
+        else:
+            stable = torch.zeros_like(active)
+        confident = entropy.mean(dim=-1) < cfg.confidence_threshold
+        converged = active & (
+            (stable & confident) | (state.steps >= cfg.max_denoising_steps)
+        )
+
+        local_probs = probs[..., vocab_start:vocab_end].to(embed_weight.dtype)
+        local_weight = embed_weight[: vocab_end - vocab_start]
+        soft = tensor_model_parallel_all_reduce(local_probs @ local_weight) * normalizer
+        if state.soft_embeds is None:
+            state.soft_embeds = soft
+        else:
+            state.soft_embeds = torch.where(
+                active[:, None, None], soft, state.soft_embeds
+            )
+        state.canvas = torch.where(converged[:, None], state.argmax_canvas, state.canvas)
+        state.active &= ~converged
+        return converged
 
     def step(
         self,
@@ -142,5 +246,6 @@ __all__ = [
     "DiffusionGemmaDecoder",
     "DiffusionGemmaSamplingConfig",
     "DiffusionGemmaSamplingState",
+    "DiffusionGemmaBatchSamplingState",
     "normalize_eos_ids",
 ]
