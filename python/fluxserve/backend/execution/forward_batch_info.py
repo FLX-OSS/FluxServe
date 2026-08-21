@@ -208,7 +208,7 @@ class RunnerConfig:
         if self.page_size is not None and self.page_size <= 0:
             raise ValueError(f"page_size must be positive, got {self.page_size!r}")
         if (
-            self.enable_cuda_graph
+            self.enable_prefill_cuda_graph
             and self.page_size is not None
             and any(
                 size % self.page_size != 0
@@ -373,6 +373,9 @@ class ForwardBatch:
     flashinfer_paged_kv_last_page_len_cpu: tuple[int, ...] = field(default_factory=tuple)
     flashinfer_seq_ids: Any = None
     flashinfer_slot_mapping: Any = None
+    flashinfer_append_indptr: Any = None
+    flashinfer_append_batch_indices: Any = None
+    flashinfer_append_positions: Any = None
     flashinfer_custom_mask: Any = None
     flashinfer_page_size: int = 0
     use_flashinfer_prefill: bool = False
@@ -383,8 +386,10 @@ class ForwardBatch:
     flashinfer_cuda_graph_dummy_page: int = -1
     flashinfer_full_prefill_graph: bool = False
     flashinfer_full_decode_graph: bool = False
+    flashinfer_use_native_append: bool = False
     diffusion_gemma_phase: str | None = None
     diffusion_gemma_attention_metadata: Any = None
+    diffusion_gemma_full_decode_graph: bool = False
 
 
 class PPProxyTensors:

@@ -59,12 +59,33 @@ def _require_flashinfer_paged_prefill():
 
         wrapper_cls = flashinfer.BatchPrefillWithPagedKVCacheWrapper
         segment_packbits = flashinfer.segment_packbits
+        append_paged_kv_cache = flashinfer.append_paged_kv_cache
+        get_batch_indices_positions = flashinfer.get_batch_indices_positions
     except Exception as exc:
         raise RuntimeError(
             "flashinfer_cache_mode='paged' requires a flashinfer-python build "
             "with BatchPrefillWithPagedKVCacheWrapper and segment_packbits."
         ) from exc
-    return wrapper_cls, segment_packbits
+    try:
+        import inspect
+        params = inspect.signature(wrapper_cls.__init__).parameters
+        if "block_extend" not in params or "q_offsets_buf" not in params:
+            raise TypeError("paged wrapper lacks native block-extend constructor")
+        plan_params = inspect.signature(wrapper_cls.plan).parameters
+        if "q_offsets" not in plan_params or "kv_offsets" not in plan_params:
+            raise TypeError("paged wrapper lacks offset-aware plan()")
+    except Exception as exc:
+        raise RuntimeError(
+            "flashinfer_cache_mode='paged' requires FlashInfer 0.6.18-compatible "
+            "native block-extend paged attention, offset-aware plan(), "
+            "segment_packbits, and append_paged_kv_cache."
+        ) from exc
+    return (
+        wrapper_cls,
+        segment_packbits,
+        append_paged_kv_cache,
+        get_batch_indices_positions,
+    )
 
 
 class BatchBlockExtendRaggedOffsetWrapper:
@@ -235,8 +256,12 @@ class FlashInferPagedBlockExtendState:
             dtype=torch.uint8,
             device=self.device,
         )
-        wrapper_cls, _ = _require_flashinfer_paged_prefill()
-        self.wrapper = wrapper_cls(self.workspace, kv_layout="NHD", backend=backend)
+        wrapper_cls, _, _, _ = _require_flashinfer_paged_prefill()
+        self.wrapper = wrapper_cls(
+            self.workspace, kv_layout="NHD", backend=backend,
+            block_extend=True, block_size=1,
+        )
+        self.block_size = 1
         self.plan_key: tuple[Any, ...] | None = None
 
     def needs_plan(self, plan_key: tuple[Any, ...]) -> bool:
@@ -276,6 +301,7 @@ class FlashInferPagedBlockExtendState:
         last_page_len: torch.Tensor,
         kv_lens: torch.Tensor,
         q_offsets: torch.Tensor,
+        kv_offsets: Optional[torch.Tensor],
         custom_mask: Optional[torch.Tensor],
         plan_key: tuple[Any, ...],
         num_qo_heads: int,
@@ -288,10 +314,15 @@ class FlashInferPagedBlockExtendState:
         def plan():
             if self.plan_key == plan_key:
                 return
-            if custom_mask is None:
-                raise RuntimeError(
-                    "FlashInfer paged block-extend requires custom_mask on plan miss."
+            # Recreate the wrapper when block size changes; upstream captures it
+            # at construction time.
+            if getattr(self, "block_size", None) != int(block_length):
+                wrapper_cls, _, _, _ = _require_flashinfer_paged_prefill()
+                self.wrapper = wrapper_cls(
+                    self.workspace, kv_layout="NHD", backend="auto",
+                    block_extend=True, block_size=int(block_length),
                 )
+                self.block_size = int(block_length)
             self.wrapper.plan(
                 qo_indptr,
                 kv_indptr,
@@ -306,6 +337,8 @@ class FlashInferPagedBlockExtendState:
                 q_data_type=q.dtype,
                 kv_data_type=paged_kv_cache[0].dtype,
                 sm_scale=sm_scale,
+                q_offsets=q_offsets,
+                kv_offsets=kv_offsets,
             )
             self.plan_key = plan_key
 

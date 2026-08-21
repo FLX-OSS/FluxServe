@@ -9,13 +9,16 @@ exec fluxserve serve \
     --tp-size 4 \
     --dp-size 1 \
     --ep-size 4 \
-    --gpu-memory-utilization 0.8 \
-    --max-num-seqs 16 \
-    --max-model-len 65536 \
+    --gpu-memory-utilization 0.6 \
+    --max-num-seqs 4 \
+    --max-model-len 32876 \
     --max-scheduled-tokens 2048 \
     --block-length 256 \
+    --canvas-length 256 \
+    --page-size 256 \
     --attention-backend flashinfer \
     --flashinfer-prefill-mode paged \
     --flashinfer-cache-mode paged \
     --kv-cache-layout paged \
-    --page-size 256
+    --scheduler-policy default \
+    --use-decode-cuda-graph

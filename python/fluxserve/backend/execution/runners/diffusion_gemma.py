@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import torch
 from transformers import GenerationConfig
 
 from fluxserve.backend.execution.forward_batch_info import ForwardBatch, ForwardMode
+from fluxserve.backend.execution.flashinfer_cuda_graph_runner import (
+    FlashInferCudaGraphRunner,
+)
 from fluxserve.backend.execution.decoders.diffusion_gemma import (
     DiffusionGemmaDecoder,
     DiffusionGemmaSamplingConfig,
@@ -43,8 +47,11 @@ class DiffusionGemmaRunner(BlockDiffusionRunner):
                     "Diffusion-Gemma FlashInfer requires paged prefill, paged "
                     "cache mode, and paged KV layout"
                 )
-            if runner_config.enable_cuda_graph:
-                raise ValueError("Diffusion-Gemma does not support CUDA graphs yet")
+            if runner_config.enable_prefill_cuda_graph:
+                raise ValueError(
+                    "Diffusion-Gemma supports decode CUDA graphs only; disable "
+                    "prefill CUDA graphs and use --use-decode-cuda-graph."
+                )
         if server_args.pp_size != 1 or server_args.dp_size != 1:
             raise ValueError("Diffusion-Gemma supports single-DP and no PP")
         if server_args.enable_dp_attention:
@@ -75,6 +82,60 @@ class DiffusionGemmaRunner(BlockDiffusionRunner):
             ]
             probe_diffusion_gemma_flashinfer(geometries, self.device)
         self.last_denoising_steps = []
+        self._persistent_gemma_paged_cache = None
+        self.flashinfer_graph_runner = (
+            FlashInferCudaGraphRunner(
+                self.device,
+                log_callback=self.runner_config.cuda_graph_log_callback,
+                decode_capture_batch_sizes=(
+                    self.runner_config.cuda_graph_capture_batch_sizes
+                    or self.runner_config.supported_batch_sizes
+                ),
+                model_runner=self,
+                model_family="diffusion_gemma",
+            )
+            if use_flashinfer
+            and runner_config is not None
+            and runner_config.enable_decode_cuda_graph
+            else None
+        )
+
+    def shutdown_cuda_graphs(self, *, log: bool = True) -> None:
+        if self.flashinfer_graph_runner is not None:
+            self.flashinfer_graph_runner.shutdown_gemma(
+                self.tp_group.device_group, log=log
+            )
+
+    def cuda_graph_stats(self) -> dict[str, int | float]:
+        if self.flashinfer_graph_runner is None:
+            return {}
+        return self.flashinfer_graph_runner.stats()
+
+    def prepare_online_cuda_graphs(self) -> dict[str, int | float]:
+        """Allocate stable serving state; Gemma graphs capture lazily per bucket."""
+        graph_runner = self.flashinfer_graph_runner
+        if graph_runner is None:
+            return {}
+        started = time.perf_counter()
+        max_batch_size = int(self.server_args.max_num_seqs)
+        bucket_sizes = list(graph_runner.decode_capture_batch_sizes)
+        self.supported_batch_sizes = bucket_sizes
+        self.runner_config.supported_batch_sizes = tuple(bucket_sizes)
+        self._paged_cache(self.max_length, batch_size=max_batch_size)
+        torch.cuda.synchronize(self.device)
+        graph_runner.gemma_max_entries = max(
+            graph_runner.gemma_max_entries, len(bucket_sizes)
+        )
+        graph_runner.gemma_capture_enabled = True
+        graph_runner.capture_time_s = time.perf_counter() - started
+        graph_runner.log(
+            "Diffusion-Gemma CUDA graph online startup complete: "
+            "lazy_batch_buckets=%s max_length=%d",
+            ",".join(map(str, bucket_sizes)),
+            int(self.max_length),
+        )
+        graph_runner.reset_serving_counts()
+        return graph_runner.stats()
 
     def _paged_cache(
         self, max_length: int, batch_size: int = 1
@@ -85,7 +146,17 @@ class DiffusionGemmaRunner(BlockDiffusionRunner):
             )
             for layer in self.model.model.layers
         ]
-        return DiffusionGemmaPagedKVCache(
+        existing = getattr(self, "_persistent_gemma_paged_cache", None)
+        if (
+            existing is not None
+            and existing.max_length >= int(max_length)
+            and existing.batch_size >= int(batch_size)
+            and existing.page_size
+            == int(self.runner_config.page_size or self.block_length)
+            and existing.layer_geometries == tuple(geometries)
+        ):
+            return existing
+        cache = DiffusionGemmaPagedKVCache(
             layer_geometries=geometries,
             max_length=max_length,
             page_size=int(self.runner_config.page_size or self.block_length),
@@ -93,6 +164,13 @@ class DiffusionGemmaRunner(BlockDiffusionRunner):
             device=self.device,
             batch_size=batch_size,
         )
+        self._persistent_gemma_paged_cache = cache
+        graph_runner = getattr(self, "flashinfer_graph_runner", None)
+        if graph_runner is not None:
+            graph_runner.invalidate_gemma(
+                "Diffusion-Gemma KV cache allocation changed"
+            )
+        return cache
 
     @staticmethod
     def _paged_batch(metadata, *, prefill: bool) -> ForwardBatch:
@@ -395,14 +473,13 @@ class DiffusionGemmaRunner(BlockDiffusionRunner):
                 inputs_embeds = self.model.embed_with_self_conditioning(
                     state.canvas, state.soft_embeds
                 )
-                output = self._forward_model(
+                output = self._gemma_decode_forward(
+                    phase="denoise",
                     input_ids=state.canvas,
                     inputs_embeds=inputs_embeds,
                     position_ids=positions,
-                    past_key_values=cache,
-                    use_cache=True,
-                    attention_mask=None,
-                    forward_batch=self._paged_batch(denoise_metadata, prefill=False),
+                    cache=cache,
+                    metadata=denoise_metadata,
                 )
                 self.decoder.step_batch(
                     output.logits,
@@ -420,13 +497,13 @@ class DiffusionGemmaRunner(BlockDiffusionRunner):
                 denoising_steps[row_idx] += int(step_counts[local_idx])
 
             commit_metadata = cache.build_metadata(phase="commit", **metadata_args)
-            self._forward_model(
+            self._gemma_decode_forward(
+                phase="commit",
                 input_ids=state.argmax_canvas,
+                inputs_embeds=None,
                 position_ids=positions,
-                past_key_values=cache,
-                use_cache=True,
-                attention_mask=None,
-                forward_batch=self._paged_batch(commit_metadata, prefill=False),
+                cache=cache,
+                metadata=commit_metadata,
             )
             next_active = []
             for local_idx, row_idx in enumerate(active_rows):
@@ -457,6 +534,128 @@ class DiffusionGemmaRunner(BlockDiffusionRunner):
                     padded_prompt_len : padded_prompt_len + generated.shape[0],
                 ] = generated
         self.last_denoising_steps = denoising_steps
+        return result
+
+    def _gemma_decode_forward(
+        self,
+        *,
+        phase: str,
+        input_ids: torch.Tensor,
+        inputs_embeds: torch.Tensor | None,
+        position_ids: torch.Tensor,
+        cache: DiffusionGemmaPagedKVCache,
+        metadata,
+    ):
+        graph_runner = self.flashinfer_graph_runner
+        # Commit runs once per canvas and retaining a full logits graph for it
+        # roughly doubles graph memory with little replay benefit.
+        if graph_runner is None or phase == "commit":
+            return self._forward_model(
+                input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
+                position_ids=position_ids,
+                past_key_values=cache,
+                use_cache=True,
+                attention_mask=None,
+                forward_batch=self._paged_batch(metadata, prefill=False),
+            )
+        actual_batch = input_ids.shape[0]
+        bucket = next(
+            (size for size in self.supported_batch_sizes if size >= actual_batch),
+            actual_batch,
+        )
+        if bucket > actual_batch:
+            active_seq_ids = set(metadata.seq_ids)
+            dummy_seq_ids = [
+                idx for idx in range(cache.batch_size) if idx not in active_seq_ids
+            ][: bucket - actual_batch]
+            if len(dummy_seq_ids) != bucket - actual_batch:
+                return self._forward_model(
+                    input_ids=input_ids,
+                    inputs_embeds=inputs_embeds,
+                    position_ids=position_ids,
+                    past_key_values=cache,
+                    use_cache=True,
+                    attention_mask=None,
+                    forward_batch=self._paged_batch(metadata, prefill=False),
+                )
+            canvas = input_ids.shape[1]
+            padded_metadata = cache.build_metadata(
+                phase=phase,
+                seq_ids=metadata.seq_ids + tuple(dummy_seq_ids),
+                q_offsets=metadata.q_offsets + (0,) * len(dummy_seq_ids),
+                q_lens=metadata.q_lens + (canvas,) * len(dummy_seq_ids),
+                kv_lens=metadata.kv_lens + (canvas,) * len(dummy_seq_ids),
+                max_q_len=canvas,
+            )
+            dummy_ids = torch.full(
+                (len(dummy_seq_ids), canvas),
+                self.decoder.pad_id,
+                dtype=input_ids.dtype,
+                device=input_ids.device,
+            )
+            input_ids = torch.cat((input_ids, dummy_ids), dim=0)
+            dummy_positions = torch.arange(
+                canvas, dtype=position_ids.dtype, device=position_ids.device
+            ).unsqueeze(0).repeat(len(dummy_seq_ids), 1)
+            position_ids = torch.cat((position_ids, dummy_positions), dim=0)
+            if inputs_embeds is not None:
+                inputs_embeds = torch.cat(
+                    (
+                        inputs_embeds,
+                        torch.zeros(
+                            len(dummy_seq_ids),
+                            canvas,
+                            inputs_embeds.shape[-1],
+                            dtype=inputs_embeds.dtype,
+                            device=inputs_embeds.device,
+                        ),
+                    ),
+                    dim=0,
+                )
+            metadata = padded_metadata
+        self.num_forwards += 1
+        cache_ptr = cache.layer_paged_kv(0)[0].data_ptr()
+        key = (
+            phase,
+            tuple(input_ids.shape),
+            None if inputs_embeds is None else tuple(inputs_embeds.shape),
+            cache_ptr,
+            input_ids.dtype,
+            self.device.index,
+        )
+        result = graph_runner.run_gemma_decode(
+            key=key,
+            input_ids=input_ids,
+            inputs_embeds=inputs_embeds,
+            position_ids=position_ids,
+            cache=cache,
+            metadata=metadata,
+        )
+        if result is None:
+            return self.model(
+                input_ids=input_ids[:actual_batch],
+                inputs_embeds=(
+                    None if inputs_embeds is None else inputs_embeds[:actual_batch]
+                ),
+                position_ids=position_ids[:actual_batch],
+                past_key_values=cache,
+                use_cache=True,
+                attention_mask=None,
+                forward_batch=self._paged_batch(
+                    cache.build_metadata(
+                        phase=phase,
+                        seq_ids=metadata.seq_ids[:actual_batch],
+                        q_offsets=metadata.q_offsets[:actual_batch],
+                        q_lens=metadata.q_lens[:actual_batch],
+                        kv_lens=metadata.kv_lens[:actual_batch],
+                        max_q_len=input_ids.shape[1],
+                    ),
+                    prefill=False,
+                ),
+            )
+        if result.logits.shape[0] != actual_batch:
+            result.logits = result.logits[:actual_batch]
         return result
 
     @torch.no_grad()

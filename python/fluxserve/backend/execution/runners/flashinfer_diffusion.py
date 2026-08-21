@@ -17,7 +17,7 @@ from fluxserve.backend.managers.kvcache import PagedKVCache
 from fluxserve.backend.execution.flashinfer_cuda_graph_runner import (
     FlashInferCudaGraphRunner,
 )
-from fluxserve.backend.utils.runtime_utils import is_flashinfer_dllm_available
+from fluxserve.backend.layers.attention.utils import _require_flashinfer_paged_prefill
 
 logger = logging.getLogger(__name__)
 
@@ -26,16 +26,13 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
     """Block diffusion runner with FlashInfer-specific decode batching."""
 
     def __init__(self, *args, **kwargs):
-        if not is_flashinfer_dllm_available():
-            raise RuntimeError(
-                "LLaDA2 attention_backend='flashinfer' requires "
-                "flashinfer.dllm.BatchBlockExtendRaggedOffsetWrapper."
-            )
         super().__init__(*args, **kwargs, _allow_flashinfer=True)
         if self.runner_config.attention_backend != "flashinfer":
             raise ValueError(
                 "FlashInferDiffusionRunner requires attention_backend='flashinfer'."
             )
+        if self.runner_config.kv_cache_layout == "paged":
+            _require_flashinfer_paged_prefill()
         self._paged_request_slots: dict[str, int] = {}
         self.flashinfer_graph_runner = (
             FlashInferCudaGraphRunner(
@@ -47,6 +44,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                     self.runner_config.cuda_graph_capture_batch_sizes
                     or self.runner_config.supported_batch_sizes
                 ),
+                model_family="llada2",
             )
             if self.enable_flashinfer_attention_graph
             else None
@@ -88,7 +86,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
 
     def shutdown_cuda_graphs(self, *, log: bool = True) -> None:
         if self.flashinfer_graph_runner is not None:
-            self.flashinfer_graph_runner.shutdown(
+            self.flashinfer_graph_runner.shutdown_llada2(
                 self.tp_group.device_group, log=log
             )
 
@@ -116,7 +114,9 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             ):
                 return existing
             if isinstance(existing, PagedKVCache):
-                self.flashinfer_graph_runner.invalidate("KV cache allocation changed")
+                self.flashinfer_graph_runner.invalidate_llada2(
+                    "KV cache allocation changed"
+                )
             return PagedKVCache(
                 num_layers=config.num_hidden_layers,
                 batch_size=batch_size,
@@ -176,6 +176,36 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             )
         return forward_batch
 
+    def _attach_flashinfer_append_metadata(
+        self,
+        forward_batch: ForwardBatch,
+        *,
+        q_lens: torch.Tensor,
+        kv_lens: torch.Tensor,
+    ) -> ForwardBatch:
+        """Build compact logical append coordinates once for all layers."""
+        import flashinfer
+
+        q_lens = q_lens.to(device=self.device, dtype=torch.int32).contiguous()
+        kv_lens = kv_lens.to(device=self.device, dtype=torch.int32).contiguous()
+        if q_lens.numel() != kv_lens.numel():
+            raise RuntimeError(
+                "FlashInfer append metadata requires one q_len per kv_len."
+            )
+        append_indptr = torch.empty(
+            q_lens.numel() + 1, dtype=torch.int32, device=self.device
+        )
+        append_indptr[0] = 0
+        append_indptr[1:] = torch.cumsum(q_lens, dim=0)
+        nnz = int(sum(int(x) for x in q_lens.detach().cpu().tolist()))
+        batch_indices, positions = flashinfer.get_batch_indices_positions(
+            append_indptr, kv_lens, nnz
+        )
+        forward_batch.flashinfer_append_indptr = append_indptr
+        forward_batch.flashinfer_append_batch_indices = batch_indices.contiguous()
+        forward_batch.flashinfer_append_positions = positions.contiguous()
+        return forward_batch
+
     def ensure_paged_kv_cache(self, *, num_device_pages: int) -> None:
         if not self._use_flashinfer_paged_prefill():
             raise RuntimeError(
@@ -197,7 +227,9 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         ):
             return
         if self.flashinfer_graph_runner is not None:
-            self.flashinfer_graph_runner.invalidate("scheduler KV pool allocation changed")
+            self.flashinfer_graph_runner.invalidate_llada2(
+                "scheduler KV pool allocation changed"
+            )
         scheduler_pages = int(num_device_pages)
         self.past_key_values = PagedKVCache(
             num_layers=num_layers,
@@ -247,9 +279,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 warmup = _WarmupPrefill(int(bucket), int(self.decoder.mask_id))
                 self._execute_paged_prefill(warmup, 1, [0])
         if self.runner_config.enable_decode_cuda_graph:
-            decode_batch_sizes = graph_runner.capture_batch_sizes(
-                int(self.server_args.max_num_seqs)
-            )
+            decode_batch_sizes = graph_runner.decode_capture_batch_sizes
             graph_runner.capture_decode_batch_sizes(self, decode_batch_sizes)
         graph_runner.capture_time_s = time.perf_counter() - started
         graph_runner.record_capture_memory(allocated_before, reserved_before)
@@ -632,6 +662,9 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         else:
             forward_batch.use_flashinfer_decode = False
             forward_batch.use_flashinfer_paged_decode = True
+        self._attach_flashinfer_append_metadata(
+            forward_batch, q_lens=q_lens, kv_lens=kv_lens
+        )
         return self._attach_flashinfer_graph(forward_batch)
 
     def _make_flashinfer_decode_batch(
@@ -673,6 +706,10 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         forward_batch.flashinfer_q_offsets_cpu = q_offsets_cpu
         forward_batch.flashinfer_q_offsets = torch.tensor(
             q_offsets_cpu, dtype=torch.int32, device=self.device
+        )
+        forward_batch.flashinfer_kv_offsets_cpu = (0,) * len(kv_lens_cpu)
+        forward_batch.flashinfer_kv_offsets = torch.zeros(
+            len(kv_lens_cpu), dtype=torch.int32, device=self.device
         )
         forward_batch.flashinfer_block_length = self.block_length
         return forward_batch
@@ -780,6 +817,14 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             dtype=torch.int32,
             device=self.device,
         )
+        forward_batch.flashinfer_q_offsets_cpu = (0,) * len(prefill_lens_cpu)
+        forward_batch.flashinfer_q_offsets = torch.zeros(
+            len(prefill_lens_cpu), dtype=torch.int32, device=self.device
+        )
+        forward_batch.flashinfer_kv_offsets_cpu = (0,) * len(prefill_lens_cpu)
+        forward_batch.flashinfer_kv_offsets = torch.zeros(
+            len(prefill_lens_cpu), dtype=torch.int32, device=self.device
+        )
         forward_batch.flashinfer_qo_indptr_cpu = tuple(qo_values)
         forward_batch.flashinfer_qo_indptr = torch.tensor(
             qo_values,
@@ -800,6 +845,11 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         )
         forward_batch.flashinfer_block_length = int(self.block_length)
         forward_batch.flashinfer_page_size = int(self.past_key_values.page_size)
+        self._attach_flashinfer_append_metadata(
+            forward_batch,
+            q_lens=torch.tensor(prefill_lens_cpu, device=self.device),
+            kv_lens=forward_batch.flashinfer_kv_lens,
+        )
         return self._attach_flashinfer_graph(forward_batch)
 
     def _prefill_batches(
@@ -983,6 +1033,13 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             int(x) for x in last_page_len.detach().cpu().tolist()
         )
         forward_batch.flashinfer_page_size = int(self.past_key_values.page_size)
+        self._attach_flashinfer_append_metadata(
+            forward_batch,
+            q_lens=torch.full(
+                (seq_ids.numel(),), self.block_length, device=self.device
+            ),
+            kv_lens=kv_lens,
+        )
         return self._attach_flashinfer_graph(forward_batch)
 
     def _decode_batches(

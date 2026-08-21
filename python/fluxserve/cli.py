@@ -62,6 +62,14 @@ from fluxserve.backend.utils.server_args import ServerArgs
 logger = logging.getLogger(__name__)
 
 
+def default_cuda_graph_capture_batch_sizes(max_num_seqs: int) -> tuple[int, ...]:
+    """Return batch size 1 and every positive even size up to the limit."""
+    max_num_seqs = int(max_num_seqs)
+    if max_num_seqs <= 0:
+        raise ValueError("max_num_seqs must be positive")
+    return (1, *range(2, max_num_seqs + 1, 2))
+
+
 def set_process_title(title: str) -> None:
     try:
         import setproctitle
@@ -100,6 +108,17 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     serve.add_argument("--gpu-memory-safety-reserve", type=float, default=0.05)
     serve.add_argument("--block-length", type=int, default=64)
+    serve.add_argument(
+        "--canvas-length",
+        "--canvas_length",
+        dest="canvas_length",
+        type=int,
+        default=None,
+        help=(
+            "Override the Diffusion-Gemma denoising canvas length. "
+            "Defaults to the checkpoint configuration."
+        ),
+    )
     serve.add_argument(
         "--max-denoising-steps",
         type=int,
@@ -149,7 +168,18 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--use-prefill-cuda-graph", action="store_true")
     serve.add_argument("--use-decode-cuda-graph", action="store_true")
     serve.add_argument("--cuda-graph-decode-mode", choices=("decomposed", "padded"), default="decomposed")
-    serve.add_argument("--cuda-graph-capture-bs", "--cuda_graph_capture_bs", type=int, nargs="+", default=None, metavar="N")
+    serve.add_argument(
+        "--cuda-graph-capture-bs",
+        "--cuda_graph_capture_bs",
+        type=int,
+        nargs="+",
+        default=None,
+        metavar="N",
+        help=(
+            "Decode CUDA graph batch sizes. Defaults to batch size 1 and "
+            "every even size up to --max-num-seqs."
+        ),
+    )
     serve.add_argument(
         "--cuda-graph-capture-sizes",
         type=int,
@@ -187,6 +217,40 @@ def _reject_unsupported_quantization(model_config) -> None:
             )
 
 
+def normalize_diffusion_gemma_serve_args(args, model_config) -> bool:
+    architectures = set(getattr(model_config, "architectures", ()) or ())
+    is_diffusion_gemma = (
+        "DiffusionGemmaForBlockDiffusion" in architectures
+        or getattr(model_config, "model_type", None) == "diffusion_gemma"
+    )
+    if not is_diffusion_gemma:
+        return False
+    if args.canvas_length is not None and int(args.canvas_length) <= 0:
+        raise ValueError("--canvas-length must be positive")
+    if args.use_cuda_graph or args.use_prefill_cuda_graph:
+        raise ValueError(
+            "Diffusion-Gemma supports decode CUDA graphs only; use "
+            "--use-decode-cuda-graph."
+        )
+    if args.use_decode_cuda_graph:
+        if not getattr(args, "attention_backend_explicit", False):
+            args.attention_backend = "flashinfer"
+        if not (
+            args.attention_backend == "flashinfer"
+            and args.flashinfer_prefill_mode == "paged"
+            and args.flashinfer_cache_mode == "paged"
+            and args.kv_cache_layout == "paged"
+        ):
+            raise ValueError(
+                "Diffusion-Gemma decode CUDA graphs require FlashInfer paged "
+                "prefill, paged cache mode, and paged KV layout."
+            )
+    elif not getattr(args, "attention_backend_explicit", False):
+        args.attention_backend = "sdpa"
+        normalize_attention_backend_args(args)
+    return True
+
+
 def serve(args) -> None:
     reject_external_distributed_launch()
     normalize_attention_backend_args(args)
@@ -213,17 +277,10 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         args.model_name,
         trust_remote_code=args.trust_remote_code,
     )
-    architectures = set(getattr(model_config, "architectures", ()) or ())
-    is_diffusion_gemma = (
-        "DiffusionGemmaForBlockDiffusion" in architectures
-        or getattr(model_config, "model_type", None) == "diffusion_gemma"
-    )
+    is_diffusion_gemma = normalize_diffusion_gemma_serve_args(args, model_config)
     apply_template = bool(args.apply_template or is_diffusion_gemma)
     if is_diffusion_gemma and not args.apply_template:
         logger.info("Diffusion-Gemma chat requests use the checkpoint chat template.")
-    if is_diffusion_gemma and not getattr(args, "attention_backend_explicit", False):
-        args.attention_backend = "sdpa"
-        normalize_attention_backend_args(args)
     if is_diffusion_gemma and args.scheduler_policy == "paged":
         raise RuntimeError(
             "Diffusion-Gemma FlashInfer does not support scheduler_policy='paged' yet."
@@ -251,6 +308,15 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         max_num_seqs=args.max_num_seqs,
         max_scheduled_tokens=args.max_scheduled_tokens,
         max_model_len=args.max_model_len,
+        generation_block_size=(
+            int(
+                args.canvas_length
+                or getattr(model_config, "canvas_length", None)
+                or args.block_length
+            )
+            if is_diffusion_gemma
+            else 1
+        ),
         scheduler_policy=args.scheduler_policy,
         scheduler_page_size=args.page_size or args.block_length,
         scheduler_num_device_pages=args.scheduler_num_device_pages,
@@ -315,6 +381,15 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
                 "CUDA graph capture sizes must include at least one block-aligned "
                 "length no greater than max_model_len"
             )
+        graph_capture_batch_sizes = tuple(
+            args.cuda_graph_capture_bs
+            or default_cuda_graph_capture_batch_sizes(args.max_num_seqs)
+        )
+        if any(size > int(args.max_num_seqs) for size in graph_capture_batch_sizes):
+            raise ValueError(
+                "CUDA graph capture batch sizes cannot exceed max_num_seqs="
+                f"{args.max_num_seqs}: got {graph_capture_batch_sizes}"
+            )
 
         runner_config = RunnerConfig(
             gen_length=args.max_new_tokens,
@@ -329,7 +404,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             enable_prefill_cuda_graph=args.use_prefill_cuda_graph,
             enable_decode_cuda_graph=args.use_decode_cuda_graph,
             decode_cuda_graph_mode=args.cuda_graph_decode_mode,
-            cuda_graph_capture_batch_sizes=args.cuda_graph_capture_bs,
+            cuda_graph_capture_batch_sizes=graph_capture_batch_sizes,
             cuda_graph_capture_sizes=graph_capture_sizes,
             attention_backend=args.attention_backend,
             flashinfer_decode_batch_mode=args.flashinfer_decode_batch_mode,
@@ -337,6 +412,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             flashinfer_cache_mode=args.flashinfer_cache_mode,
             kv_cache_layout=args.kv_cache_layout,
             page_size=args.page_size,
+            canvas_length=args.canvas_length,
             max_denoising_steps=args.max_denoising_steps,
             parallel_decoding=args.parallel_decoding,
             threshold=args.threshold,

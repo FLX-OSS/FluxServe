@@ -333,9 +333,11 @@ def normalize_diffusion_gemma_args(args, model_config) -> bool:
         args.kv_cache_layout = "dense"
         args.flashinfer_cache_mode = "dense"
         args.flashinfer_prefill_mode = "dense"
-    args.use_cuda_graph = False
-    args.use_prefill_cuda_graph = False
-    args.use_decode_cuda_graph = False
+    if args.use_cuda_graph or args.use_prefill_cuda_graph:
+        raise ValueError(
+            "Diffusion-Gemma supports decode CUDA graphs only; use "
+            "--use-decode-cuda-graph."
+        )
     return True
 
 
@@ -419,10 +421,22 @@ def warmup_runner(runner, args, device, logger):
     )
     use_decode_graph = bool(args.use_cuda_graph or args.use_decode_cuda_graph)
     graph_runner = getattr(runner, "flashinfer_graph_runner", None)
+    is_llada2_graph_runner = bool(
+        graph_runner is not None and graph_runner.supports_llada2_graphs
+    )
+    is_gemma_graph_runner = bool(
+        graph_runner is not None
+        and graph_runner.supports_diffusion_gemma_graphs
+    )
     if graph_runner is not None and (use_prefill_graph or use_decode_graph):
         # Allocate persistent KV storage before the baseline so the reported
         # delta isolates graph capture rather than including the cache.
-        runner.past_key_values = runner.allocate_kv_cache(args.mini_batch_size)
+        # Diffusion-Gemma's heterogeneous cache is allocated by _paged_cache
+        # before warmup and cannot use BlockDiffusionRunner.allocate_kv_cache.
+        if is_llada2_graph_runner:
+            runner.past_key_values = runner.allocate_kv_cache(
+                args.mini_batch_size
+            )
         torch.cuda.synchronize(device)
         graph_allocated_before = torch.cuda.memory_allocated(device)
         graph_reserved_before = torch.cuda.memory_reserved(device)
@@ -458,17 +472,35 @@ def warmup_runner(runner, args, device, logger):
             runner.generate(prefill_ids)
         logger.info(f"[Info] Prefill warmup shapes: {warmup_shapes}")
     else:
+        warmup_batch_size = (
+            args.batch_size if is_gemma_graph_runner else args.mini_batch_size
+        )
         warmup_ids = torch.randint(
             0,
             100000,
-            (args.mini_batch_size, args.block_length),
+            (warmup_batch_size, args.block_length),
             dtype=torch.long,
             device=device,
         )
         runner.runner_config.gen_length = args.block_length
         runner.generate(warmup_ids)
 
-    if graph_runner is not None and use_decode_graph:
+        if is_gemma_graph_runner and use_decode_graph:
+            # Diffusion-Gemma graphs are expensive full-model captures. Keep
+            # capture confined to this short, fixed-shape warmup; benchmark
+            # batches with other metadata signatures fall back to eager mode.
+            graph_runner.gemma_capture_enabled = False
+            torch.cuda.synchronize(device)
+            logger.info(
+                "[Info] Diffusion-Gemma decode graph warmup complete: "
+                f"captures={graph_runner.gemma_capture_count}, "
+                f"max_entries={graph_runner.gemma_max_entries}"
+            )
+
+    if (
+        is_llada2_graph_runner
+        and use_decode_graph
+    ):
         graph_runner.capture_decode_batch_sizes(
             runner,
             batch_sizes=graph_runner.capture_batch_sizes(args.mini_batch_size),
@@ -587,6 +619,13 @@ def run_worker(args, *, init_method: str = "env://"):
             f"kv_cache_layout={args.kv_cache_layout}, eos_ids={tuple(eos_ids)}"
         )
 
+        if is_diffusion_gemma and getattr(
+            runner, "flashinfer_graph_runner", None
+        ) is not None:
+            runner._paged_cache(
+                batch_info.max_length,
+                batch_size=args.batch_size,
+            )
         warmup_runner(runner, args, device, logger)
 
         sorted_input_ids = [all_input_ids[i] for i in batch_info.sorted_indices]
@@ -619,7 +658,11 @@ def run_worker(args, *, init_method: str = "env://"):
                 )
             else:
                 out = runner.generate(batch_input_ids)
-            denoising_steps = getattr(runner, "last_denoising_steps", None)
+            denoising_steps = (
+                getattr(runner, "last_denoising_steps", None)
+                if is_diffusion_gemma
+                else None
+            )
             if denoising_steps is not None:
                 logger.info(
                     f"[Iter={i:4d}] denoising_steps={tuple(denoising_steps)}"
@@ -629,7 +672,7 @@ def run_worker(args, *, init_method: str = "env://"):
 
             for j in range(batch_input_ids.shape[0]):
                 batch_info.outputs.append(out[j].unsqueeze(0))
-                if denoising_steps is not None:
+                if is_diffusion_gemma and denoising_steps is not None:
                     batch_info.denoising_steps.append(denoising_steps[j])
             metrics = record_batch_performance_metrics(
                 batch_info,
@@ -699,7 +742,21 @@ def _write_results(
     tpfs = batch_info.original_order(batch_info.tpfs)
     tpss = batch_info.original_order(batch_info.tpss)
     fpss = batch_info.original_order(batch_info.fpss)
-    denoising_steps = batch_info.original_order(batch_info.denoising_steps)
+    # Some runners expose denoising metadata only for the rows they actively
+    # process. Keep result serialization robust when that optional metadata is
+    # absent or shorter than the output batch.
+    if not batch_info.denoising_steps:
+        denoising_steps = [None] * len(batch_info.sorted_indices)
+    elif len(batch_info.denoising_steps) == len(batch_info.sorted_indices):
+        denoising_steps = batch_info.original_order(batch_info.denoising_steps)
+    else:
+        logger.warning(
+            "Denoising-step metadata length (%d) does not match output count (%d); "
+            "writing null metadata for affected rows.",
+            len(batch_info.denoising_steps),
+            len(batch_info.sorted_indices),
+        )
+        denoising_steps = [None] * len(batch_info.sorted_indices)
     token_numbers = batch_info.original_order(batch_info.token_numbers)
     answers = [
         tokenizer.decode(

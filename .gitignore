@@ -35,6 +35,8 @@ manager/dist/*
 
 # docs related
 **/dynamic-scheduling.md
+code_reorg.md
+
 
 # kernel related
 **/profiling/

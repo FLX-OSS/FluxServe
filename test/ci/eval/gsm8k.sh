@@ -11,10 +11,14 @@ python -m venv "${EVALSCOPE_VENV}"
 
 CONFIGS=(
     tp1_ep1_mini
+    tp4_ep4_flash
+    tp4_ep4_gemma
 )
 
 MODELS=(
     inclusionAI/LLaDA2.0-mini
+    inclusionAI/LLaDA2.0-flash
+    google/diffusiongemma-26B-A4B-it
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

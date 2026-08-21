@@ -312,6 +312,7 @@ class DiffusionGemmaPagedAttention:
         *,
         cache: DiffusionGemmaPagedKVCache,
         metadata: DiffusionGemmaAttentionMetadata,
+        graph_runner=None,
     ) -> torch.Tensor:
         bsz, _, q_len, _ = q.shape
         if bsz != metadata.batch_size or q_len != metadata.max_q_len:
@@ -341,35 +342,49 @@ class DiffusionGemmaPagedAttention:
             kv_layout="NHD",
         )
 
-        mask = metadata.mask(self.sliding_window)
-        plan_key = (
-            metadata.plan_signature,
-            self.num_heads,
-            self.num_kv_heads,
-            self.head_dim,
-            self.sliding_window,
-            q.dtype,
-            k_cache.dtype,
-        )
-        state = self._state(q.device)
-        if state.plan_key != plan_key:
-            state.wrapper.plan(
-                metadata.qo_indptr,
-                metadata.kv_indptr,
-                metadata.kv_indices,
-                metadata.last_page_len,
-                num_qo_heads=self.num_heads,
+        if graph_runner is not None:
+            packed_output = graph_runner.run_gemma_attention(
+                q=packed_q,
+                paged_kv_cache=(k_cache, v_cache),
+                cache=cache,
+                metadata=metadata,
+                layer_id=self.layer_id,
+                num_q_heads=self.num_heads,
                 num_kv_heads=self.num_kv_heads,
-                head_dim_qk=self.head_dim,
-                page_size=cache.page_size,
-                custom_mask=mask,
-                causal=False,
-                q_data_type=q.dtype,
-                kv_data_type=k_cache.dtype,
+                head_dim=self.head_dim,
+                sliding_window=self.sliding_window,
                 sm_scale=self.scale,
             )
-            state.plan_key = plan_key
-        packed_output = state.wrapper.run(packed_q, (k_cache, v_cache))
+        else:
+            mask = metadata.mask(self.sliding_window)
+            plan_key = (
+                metadata.plan_signature,
+                self.num_heads,
+                self.num_kv_heads,
+                self.head_dim,
+                self.sliding_window,
+                q.dtype,
+                k_cache.dtype,
+            )
+            state = self._state(q.device)
+            if state.plan_key != plan_key:
+                state.wrapper.plan(
+                    metadata.qo_indptr,
+                    metadata.kv_indptr,
+                    metadata.kv_indices,
+                    metadata.last_page_len,
+                    num_qo_heads=self.num_heads,
+                    num_kv_heads=self.num_kv_heads,
+                    head_dim_qk=self.head_dim,
+                    page_size=cache.page_size,
+                    custom_mask=mask,
+                    causal=False,
+                    q_data_type=q.dtype,
+                    kv_data_type=k_cache.dtype,
+                    sm_scale=self.scale,
+                )
+                state.plan_key = plan_key
+            packed_output = state.wrapper.run(packed_q, (k_cache, v_cache))
         flat_output = q.new_zeros(bsz * q_len, self.num_heads, self.head_dim)
         flat_output.index_copy_(0, gather, packed_output)
         return (

@@ -318,6 +318,11 @@ class DiffusionGemmaAttention(nn.Module):
                 v,
                 cache=past_key_values,
                 metadata=forward_batch.diffusion_gemma_attention_metadata,
+                graph_runner=(
+                    forward_batch.flashinfer_cuda_graph_runner
+                    if forward_batch.diffusion_gemma_full_decode_graph
+                    else None
+                ),
             )
             output = output.transpose(1, 2).reshape(bsz, q_len, -1)
             output, _ = self.o_proj(output)
@@ -555,6 +560,16 @@ class DiffusionGemmaForConditionalGeneration(nn.Module):
         )
         if self.text_config.tie_word_embeddings:
             self.lm_head.tie_weights(self.model.embed_tokens)
+        sharded_mapping = self.lm_head.get_sharded_to_full_mapping()
+        self.register_buffer(
+            "_sharded_to_full_index",
+            torch.tensor(
+                sharded_mapping if sharded_mapping is not None else (),
+                dtype=torch.long,
+                device=self.lm_head.weight.device,
+            ),
+            persistent=False,
+        )
         self.final_logit_softcapping = getattr(
             self.text_config, "final_logit_softcapping", None
         )
@@ -696,10 +711,8 @@ class DiffusionGemmaForConditionalGeneration(nn.Module):
                 parts, local, group=flux_distributed.get_tensor_model_parallel_group()
             )
             local = torch.cat(parts, dim=-1)
-            mapping = self.lm_head.get_sharded_to_full_mapping()
-            if mapping is not None:
-                index = torch.tensor(mapping, device=local.device, dtype=torch.long)
-                local = local.index_select(-1, index)
+            if self._sharded_to_full_index.numel():
+                local = local.index_select(-1, self._sharded_to_full_index)
         logits = local[..., : self.text_config.vocab_size].float()
         if self.final_logit_softcapping is not None:
             cap = float(self.final_logit_softcapping)

@@ -111,6 +111,13 @@ def _eager_reference(flashinfer, case, q, kv_cache, metadata, mask):
     return wrapper.run(q, kv_cache, enable_pdl=False)
 
 
+def test_diffusion_gemma_graph_replays_different_prompt_lengths() -> None:
+    # FlashInfer 0.6.18 cannot mix the Gemma paged and LLaDA2 block-extend
+    # generated wrapper variants in one CUDA process. Serving instantiates one
+    # model family, so exercise Gemma first in this shared test process.
+    _assert_diffusion_gemma_graph_replays_different_prompt_lengths()
+
+
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
 def test_llada2_mini_paged_attention_cuda_graph_correctness(case: Case) -> None:
     flashinfer = _require_cuda_and_flashinfer()
@@ -197,6 +204,101 @@ def test_llada2_mini_paged_attention_cuda_graph_correctness(case: Case) -> None:
     )
 
 
+def test_native_block_extend_graph_captures_paged_append() -> None:
+    flashinfer = _require_cuda_and_flashinfer()
+    device = torch.device("cuda:0")
+    batch_size, q_len, kv_len = 2, 64, 128
+    pages_per_row = kv_len // PAGE_SIZE
+    workspace = torch.empty(WORKSPACE_BYTES, dtype=torch.uint8, device=device)
+    qo_indptr = torch.arange(
+        batch_size + 1, dtype=torch.int32, device=device
+    ) * q_len
+    kv_indptr = torch.arange(
+        batch_size + 1, dtype=torch.int32, device=device
+    ) * pages_per_row
+    kv_indices = torch.arange(
+        batch_size * pages_per_row, dtype=torch.int32, device=device
+    )
+    last_page_len = torch.full(
+        (batch_size,), PAGE_SIZE, dtype=torch.int32, device=device
+    )
+    q_offsets = torch.full(
+        (batch_size,), kv_len - q_len, dtype=torch.int32, device=device
+    )
+    kv_offsets = torch.zeros(batch_size, dtype=torch.int32, device=device)
+    wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(
+        workspace,
+        kv_layout="NHD",
+        use_cuda_graph=True,
+        qo_indptr_buf=qo_indptr,
+        paged_kv_indptr_buf=kv_indptr,
+        paged_kv_indices_buf=kv_indices,
+        paged_kv_last_page_len_buf=last_page_len,
+        q_offsets_buf=q_offsets,
+        kv_offsets_buf=kv_offsets,
+        backend="fa2",
+        block_extend=True,
+        block_size=q_len,
+    )
+    wrapper.plan(
+        qo_indptr,
+        kv_indptr,
+        kv_indices,
+        last_page_len,
+        num_qo_heads=NUM_Q_HEADS,
+        num_kv_heads=NUM_KV_HEADS,
+        head_dim_qk=HEAD_DIM,
+        page_size=PAGE_SIZE,
+        causal=False,
+        q_data_type=torch.bfloat16,
+        kv_data_type=torch.bfloat16,
+        q_offsets=q_offsets,
+        kv_offsets=kv_offsets,
+    )
+    nnz = batch_size * q_len
+    append_batch_indices = torch.arange(
+        batch_size, dtype=torch.int32, device=device
+    ).repeat_interleave(q_len)
+    append_positions = (
+        q_offsets.unsqueeze(1)
+        + torch.arange(q_len, dtype=torch.int32, device=device).unsqueeze(0)
+    ).reshape(-1)
+    q = torch.randn(nnz, NUM_Q_HEADS, HEAD_DIM, dtype=torch.bfloat16, device=device)
+    k = torch.randn(nnz, NUM_KV_HEADS, HEAD_DIM, dtype=torch.bfloat16, device=device)
+    v = torch.randn_like(k)
+    cache = torch.zeros(
+        batch_size * pages_per_row,
+        2,
+        PAGE_SIZE,
+        NUM_KV_HEADS,
+        HEAD_DIM,
+        dtype=torch.bfloat16,
+        device=device,
+    )
+
+    def run():
+        flashinfer.append_paged_kv_cache(
+            k, v, append_batch_indices, append_positions,
+            cache, kv_indices, kv_indptr, last_page_len,
+        )
+        return wrapper.run(q, cache, enable_pdl=False)
+
+    for _ in range(2):
+        eager = run()
+    torch.cuda.synchronize(device)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        graph_output = run()
+    graph.replay()
+    torch.cuda.synchronize(device)
+    torch.testing.assert_close(graph_output, eager, rtol=RTOL, atol=ATOL)
+    k.add_(0.125)
+    eager_mutated = run().clone()
+    graph.replay()
+    torch.cuda.synchronize(device)
+    torch.testing.assert_close(graph_output, eager_mutated, rtol=RTOL, atol=ATOL)
+
+
 def test_fluxserve_runner_selects_prefill_buckets() -> None:
     _require_cuda_and_flashinfer()
     from fluxserve.backend.execution.flashinfer_cuda_graph_runner import (
@@ -242,6 +344,137 @@ def test_fluxserve_runner_decode_eligibility() -> None:
     )
     assert larger_runner.can_run_decode(batch_size=16, q_len=64, kv_len=256)
     assert not larger_runner.can_run_decode(batch_size=32, q_len=64, kv_len=256)
+
+
+def test_fluxserve_runner_isolates_model_family_operations() -> None:
+    _require_cuda_and_flashinfer()
+    from fluxserve.backend.execution.flashinfer_cuda_graph_runner import (
+        FlashInferCudaGraphRunner,
+    )
+
+    llada2 = FlashInferCudaGraphRunner("cuda:0", model_family="llada2")
+    gemma = FlashInferCudaGraphRunner(
+        "cuda:0", model_runner=object(), model_family="diffusion_gemma"
+    )
+
+    with pytest.raises(RuntimeError, match="diffusion_gemma.*llada2"):
+        llada2.run_gemma_decode(
+            key=(), input_ids=None, inputs_embeds=None, position_ids=None,
+            cache=None, metadata=None,
+        )
+    with pytest.raises(RuntimeError, match="llada2.*diffusion_gemma"):
+        gemma.capture_decode_batch_sizes(None)
+
+    llada2._gemma_decode_graphs[()] = object()
+    llada2.invalidate_llada2(log=False)
+    assert () in llada2._gemma_decode_graphs
+
+    gemma._graphs[()] = object()
+    gemma.invalidate_gemma(log=False)
+    assert () in gemma._graphs
+
+
+def test_fluxserve_runner_rejects_ambiguous_model_family_configuration() -> None:
+    from fluxserve.backend.execution.flashinfer_cuda_graph_runner import (
+        FlashInferCudaGraphRunner,
+    )
+
+    with pytest.raises(ValueError, match="require model_runner"):
+        FlashInferCudaGraphRunner(
+            "cuda:0", model_family="diffusion_gemma"
+        )
+    with pytest.raises(ValueError, match="do not accept model_runner"):
+        FlashInferCudaGraphRunner(
+            "cuda:0", model_runner=object(), model_family="llada2"
+        )
+
+
+def _assert_diffusion_gemma_graph_replays_different_prompt_lengths() -> None:
+    flashinfer = _require_cuda_and_flashinfer()
+    from fluxserve.backend.execution.flashinfer_cuda_graph_runner import (
+        FlashInferCudaGraphRunner,
+        _GemmaAttentionGraphState,
+    )
+    from fluxserve.backend.layers.attention.diffusion_gemma_flashinfer import (
+        DiffusionGemmaLayerGeometry,
+        DiffusionGemmaPagedKVCache,
+    )
+
+    device = torch.device("cuda:0")
+    torch.cuda.set_device(device)
+    cache = DiffusionGemmaPagedKVCache(
+        layer_geometries=[DiffusionGemmaLayerGeometry(NUM_KV_HEADS, HEAD_DIM)],
+        max_length=256,
+        page_size=PAGE_SIZE,
+        dtype=torch.bfloat16,
+        device=device,
+        batch_size=1,
+    )
+    k_cache, v_cache = cache.layer_paged_kv(0)
+    torch.manual_seed(17)
+    k_cache.normal_()
+    v_cache.normal_()
+    canvas = 64
+    q = torch.randn(
+        canvas, NUM_Q_HEADS, HEAD_DIM, dtype=torch.bfloat16, device=device
+    )
+    workspace = torch.empty(WORKSPACE_BYTES, dtype=torch.uint8, device=device)
+    state = _GemmaAttentionGraphState(
+        workspace=workspace,
+        cache=cache,
+        batch_size=1,
+        q_len=canvas,
+        num_q_heads=NUM_Q_HEADS,
+        num_kv_heads=NUM_KV_HEADS,
+        head_dim=HEAD_DIM,
+        sliding_window=None,
+        dtype=q.dtype,
+        sm_scale=HEAD_DIM**-0.5,
+    )
+
+    initial_metadata = cache.build_metadata(
+        phase="denoise", seq_ids=(0,), q_offsets=(64,), q_lens=(canvas,),
+        kv_lens=(128,), max_q_len=canvas,
+    )
+    captured_metadata = FlashInferCudaGraphRunner._make_gemma_graph_metadata(
+        initial_metadata, cache
+    )
+    for _ in range(2):
+        state.run(q, (k_cache, v_cache), captured_metadata)
+    torch.cuda.synchronize(device)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        graph_output = state.run(q, (k_cache, v_cache), captured_metadata)
+
+    for prompt_length in (64, 160):
+        metadata = cache.build_metadata(
+            phase="denoise",
+            seq_ids=(0,),
+            q_offsets=(prompt_length,),
+            q_lens=(canvas,),
+            kv_lens=(prompt_length + canvas,),
+            max_q_len=canvas,
+        )
+        FlashInferCudaGraphRunner._copy_gemma_metadata(
+            captured_metadata, metadata
+        )
+        graph.replay()
+        torch.cuda.synchronize(device)
+
+        eager_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(
+            torch.empty(WORKSPACE_BYTES, dtype=torch.uint8, device=device),
+            "NHD", backend="fa2",
+        )
+        eager_wrapper.plan(
+            metadata.qo_indptr, metadata.kv_indptr, metadata.kv_indices,
+            metadata.last_page_len, num_qo_heads=NUM_Q_HEADS,
+            num_kv_heads=NUM_KV_HEADS, head_dim_qk=HEAD_DIM,
+            page_size=PAGE_SIZE, causal=False, q_data_type=q.dtype,
+            kv_data_type=k_cache.dtype, sm_scale=HEAD_DIM**-0.5,
+            disable_split_kv=True,
+        )
+        eager = eager_wrapper.run(q, (k_cache, v_cache))
+        torch.testing.assert_close(graph_output, eager, rtol=RTOL, atol=ATOL)
 
 
 def test_fluxserve_runner_decomposes_decode_batches_without_padding() -> None:
