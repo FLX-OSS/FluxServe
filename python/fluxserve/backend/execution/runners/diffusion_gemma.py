@@ -186,21 +186,31 @@ class DiffusionGemmaRunner(BlockDiffusionRunner):
         return torch.cat(emitted, dim=1) if emitted else prompt[:, :0]
 
     @torch.no_grad()
-    def generate(self, prompts, prompt_lengths=None):
+    def generate(self, prompts, prompt_lengths=None, generation_lengths=None):
         batch_size, padded_prompt_len = prompts.shape
         if prompt_lengths is None:
             prompt_lengths = (prompts != self.decoder.pad_id).sum(dim=-1).tolist()
         else:
             prompt_lengths = [int(item) for item in prompt_lengths]
-        gen_length = int(self.runner_config.gen_length)
+        if len(prompt_lengths) != batch_size:
+            raise ValueError("prompt_lengths must contain one value per batch row")
+        if generation_lengths is None:
+            generation_lengths = [int(self.runner_config.gen_length)] * batch_size
+        else:
+            generation_lengths = [int(item) for item in generation_lengths]
+        if len(generation_lengths) != batch_size:
+            raise ValueError("generation_lengths must contain one value per batch row")
+        if any(length < 0 for length in generation_lengths):
+            raise ValueError("generation_lengths must be non-negative")
+        padded_generation_len = max(generation_lengths, default=0)
         rows = []
         self.last_denoising_steps = []
         for index in range(batch_size):
             prompt = prompts[index, : prompt_lengths[index]]
-            generated = self._generate_one(prompt, gen_length)
+            generated = self._generate_one(prompt, generation_lengths[index])
             self.last_denoising_steps.append(self._current_denoising_steps)
             row = torch.full(
-                (1, padded_prompt_len + gen_length),
+                (1, padded_prompt_len + padded_generation_len),
                 self.decoder.pad_id,
                 dtype=prompts.dtype,
                 device=prompts.device,

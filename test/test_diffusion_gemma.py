@@ -262,3 +262,31 @@ def test_sampler_normalizes_and_detects_all_eos_ids():
         assert decoder.first_eos_index(tokens) == 1
     assert not decoder.contains_eos(torch.tensor([[7, 6, 5]]))
     assert decoder.first_eos_index(torch.tensor([[7, 6, 5]])) is None
+
+
+def test_runner_batch_uses_per_row_prompt_and_generation_lengths():
+    runner = object.__new__(DiffusionGemmaRunner)
+    runner.decoder = SimpleNamespace(pad_id=0)
+    runner.runner_config = SimpleNamespace(gen_length=4)
+    runner.last_denoising_steps = []
+    observed = []
+
+    def generate_one(prompt, generation_length):
+        observed.append((prompt.tolist(), generation_length))
+        runner._current_denoising_steps = generation_length
+        return torch.arange(10, 10 + generation_length).unsqueeze(0)
+
+    runner._generate_one = generate_one
+    prompts = torch.tensor([[2, 3, 0], [4, 5, 6]])
+
+    output = runner.generate(
+        prompts,
+        prompt_lengths=[2, 3],
+        generation_lengths=[2, 4],
+    )
+
+    assert observed == [([2, 3], 2), ([4, 5, 6], 4)]
+    assert output.shape == (2, 7)
+    assert output[0].tolist() == [2, 3, 0, 10, 11, 0, 0]
+    assert output[1].tolist() == [4, 5, 6, 10, 11, 12, 13]
+    assert runner.last_denoising_steps == [2, 4]

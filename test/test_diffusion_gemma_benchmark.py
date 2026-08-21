@@ -7,6 +7,7 @@ from fluxserve.backend.metrics import count_completion_tokens
 from fluxserve.bench_offline import (
     bucket_length,
     calc_padded_gen_lens,
+    compact_batch_output,
     cut_eos,
     load_openai_style_inputs,
     normalize_diffusion_gemma_args,
@@ -23,6 +24,25 @@ def test_generation_bucket_rounds_up_without_shortening_request():
     assert bucket_length(33) == 64
     assert calc_padded_gen_lens(args, inputs) == [22, 33]
     assert all(length >= args.gen_len for length in calc_padded_gen_lens(args, inputs))
+
+
+def test_compact_batch_output_removes_padding_before_generation():
+    inputs = [torch.tensor([[2, 3]]), torch.tensor([[4, 5, 6, 7]])]
+    # Generated tokens begin after the common padded prompt width of four.
+    output = torch.tensor(
+        [
+            [2, 3, 0, 0, 10, 106, 12, 0],
+            [4, 5, 6, 7, 20, 21, 22, 23],
+        ]
+    )
+
+    compacted = compact_batch_output(output, inputs, [3, 4], mask_id=0)
+
+    assert compacted.tolist() == [
+        [2, 3, 10, 106, 12, 0, 0, 0],
+        [4, 5, 6, 7, 20, 21, 22, 23],
+    ]
+    assert count_completion_tokens(compacted[0], 2, (1, 106, 50), 0) == 2
 
 
 def test_benchmark_eos_helpers_use_earliest_configured_id():

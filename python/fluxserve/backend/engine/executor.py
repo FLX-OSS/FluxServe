@@ -110,20 +110,29 @@ class BlockDiffusionExecutor:
             self.runner.early_stop = original_early_stop
 
         results = []
-        eos_id = self.runner.decoder.eos_id
+        eos_ids = tuple(
+            getattr(self.runner.decoder, "eos_ids", (self.runner.decoder.eos_id,))
+        )
+        eos_id_set = set(eos_ids)
         mask_id = self.runner.decoder.mask_id
         for i, req in enumerate(requests):
             row = output[i].detach().cpu().tolist()
             generated = row[max_prompt : max_prompt + req.max_new_tokens]
-            if not req.ignore_eos and eos_id in generated:
-                generated = generated[: generated.index(eos_id)]
+            first_eos = next(
+                (index for index, token in enumerate(generated) if token in eos_id_set),
+                None,
+            )
+            if not req.ignore_eos and first_eos is not None:
+                generated = generated[:first_eos]
                 finish_reason = "stop"
             else:
                 finish_reason = "length"
             if req.ignore_eos:
                 generated = [tok for tok in generated if tok != mask_id]
             else:
-                generated = [tok for tok in generated if tok != mask_id and tok != eos_id]
+                generated = [
+                    tok for tok in generated if tok != mask_id and tok not in eos_id_set
+                ]
             text = self.tokenizer.decode(generated, skip_special_tokens=True)
             results.append(
                 ExecutionResult(

@@ -99,6 +99,12 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     serve.add_argument("--gpu-memory-safety-reserve", type=float, default=0.05)
     serve.add_argument("--block-length", type=int, default=64)
+    serve.add_argument(
+        "--max-denoising-steps",
+        type=int,
+        default=None,
+        help="Override checkpoint denoising steps (primarily for smoke tests).",
+    )
     serve.add_argument("--prefilling-limit", type=int, default=128)
     serve.add_argument("--mini-batch-size", type=int, default=4)
     serve.add_argument(
@@ -209,6 +215,9 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         "DiffusionGemmaForBlockDiffusion" in architectures
         or getattr(model_config, "model_type", None) == "diffusion_gemma"
     )
+    apply_template = bool(args.apply_template or is_diffusion_gemma)
+    if is_diffusion_gemma and not args.apply_template:
+        logger.info("Diffusion-Gemma chat requests use the checkpoint chat template.")
     if is_diffusion_gemma and args.attention_backend == "flashinfer":
         logger.info("Diffusion-Gemma uses the SDPA backend in the initial release.")
         args.attention_backend = "sdpa"
@@ -232,7 +241,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         device=args.device,
         host=args.host,
         port=args.port,
-        apply_template=args.apply_template,
+        apply_template=apply_template,
         max_num_seqs=args.max_num_seqs,
         max_scheduled_tokens=args.max_scheduled_tokens,
         max_model_len=args.max_model_len,
@@ -322,6 +331,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             flashinfer_cache_mode=args.flashinfer_cache_mode,
             kv_cache_layout=args.kv_cache_layout,
             page_size=args.page_size,
+            max_denoising_steps=args.max_denoising_steps,
             parallel_decoding=args.parallel_decoding,
             threshold=args.threshold,
             low_threshold=args.low_threshold,

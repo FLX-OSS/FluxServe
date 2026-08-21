@@ -347,6 +347,33 @@ def pad_batch(input_ids, device, mask_id):
     return batch
 
 
+def compact_batch_output(out, input_ids, generation_lengths, mask_id):
+    """Move generated tokens next to each unpadded prompt."""
+    if out.shape[0] != len(input_ids) or len(input_ids) != len(generation_lengths):
+        raise ValueError("batch outputs, inputs, and generation lengths must align")
+    padded_prompt_len = max(sample.shape[1] for sample in input_ids)
+    rows = []
+    for index, (sample, generation_length) in enumerate(
+        zip(input_ids, generation_lengths, strict=True)
+    ):
+        prompt = sample[0].to(out.device)
+        generated = out[
+            index,
+            padded_prompt_len : padded_prompt_len + int(generation_length),
+        ]
+        rows.append(torch.cat((prompt, generated)))
+    max_length = max(row.shape[0] for row in rows)
+    compacted = torch.full(
+        (len(rows), max_length),
+        mask_id,
+        dtype=out.dtype,
+        device=out.device,
+    )
+    for index, row in enumerate(rows):
+        compacted[index, : row.shape[0]] = row
+    return compacted
+
+
 def maybe_disable_sorting(batch_info, disable_sorting):
     if disable_sorting:
         batch_info.sorted_indices = list(range(len(batch_info.input_lengths)))
@@ -565,13 +592,25 @@ def run_worker(args, *, init_method: str = "env://"):
         start = time.time()
         for i in iterator:
             input_ids = sorted_input_ids[i : i + args.batch_size]
-            runner.runner_config.gen_length = max(
-                sorted_padded_gen_lens[i : i + len(input_ids)]
-            )
+            generation_lengths = sorted_padded_gen_lens[i : i + len(input_ids)]
+            runner.runner_config.gen_length = max(generation_lengths)
             batch_input_ids = pad_batch(input_ids, device, runner.decoder.mask_id)
             inner_start = time.time()
             prev_forwards = runner.num_forwards
-            out = runner.generate(batch_input_ids)
+            if is_diffusion_gemma:
+                out = runner.generate(
+                    batch_input_ids,
+                    prompt_lengths=[sample.shape[1] for sample in input_ids],
+                    generation_lengths=generation_lengths,
+                )
+                out = compact_batch_output(
+                    out,
+                    input_ids,
+                    generation_lengths,
+                    runner.decoder.mask_id,
+                )
+            else:
+                out = runner.generate(batch_input_ids)
             denoising_steps = getattr(runner, "last_denoising_steps", None)
             if denoising_steps is not None:
                 logger.info(

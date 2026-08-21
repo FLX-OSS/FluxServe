@@ -1,7 +1,6 @@
 import json
 import math
 import os
-from pathlib import Path
 import subprocess
 import sys
 
@@ -9,7 +8,6 @@ import pytest
 
 MODEL_ID = "google/diffusiongemma-26B-A4B-it"
 RUN_CLI_SMOKE = "FLUXSERVE_RUN_DIFFUSION_GEMMA_CLI"
-DATASET = Path(__file__).parents[1] / "data" / "diffusion_gemma_smoke.jsonl"
 
 
 @pytest.mark.skipif(
@@ -18,6 +16,26 @@ DATASET = Path(__file__).parents[1] / "data" / "diffusion_gemma_smoke.jsonl"
 )
 def test_official_diffusion_gemma_offline_cli(tmp_path):
     model_name = os.environ.get("DIFFUSION_GEMMA_MODEL", MODEL_ID)
+    dataset = tmp_path / "batch-smoke.jsonl"
+    dataset_rows = [
+        {
+            "messages": [{"role": "user", "content": "Name one prime number."}],
+            "metadata": {"task_id": "short"},
+        },
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Explain in one concise sentence why the daytime sky "
+                        "appears blue instead of violet."
+                    ),
+                }
+            ],
+            "metadata": {"task_id": "long"},
+        },
+    ]
+    dataset.write_text("".join(json.dumps(row) + "\n" for row in dataset_rows))
     command = [
         sys.executable,
         "-m",
@@ -26,13 +44,13 @@ def test_official_diffusion_gemma_offline_cli(tmp_path):
         "--model",
         model_name,
         "--dataset",
-        str(DATASET),
+        str(dataset),
         "--dataset-format",
         "openai",
         "--batch-size",
-        "1",
+        "2",
         "--mini-batch-size",
-        "1",
+        "2",
         "--tp-size",
         "1",
         "--dp-size",
@@ -77,9 +95,12 @@ def test_official_diffusion_gemma_offline_cli(tmp_path):
     result_files = list(tmp_path.glob("diffusion-gemma-smoke_*.jsonl"))
     assert len(result_files) == 1
     rows = [json.loads(line) for line in result_files[0].read_text().splitlines()]
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["id"] == "diffusion-gemma-smoke"
-    assert isinstance(row["answer"], str)
-    assert row["generated_length"] >= 0
-    assert all(math.isfinite(row[key]) for key in ("tpf", "tps", "fps"))
+    assert len(rows) == 2
+    rows_by_id = {row["id"]: row for row in rows}
+    assert set(rows_by_id) == {"short", "long"}
+    assert rows_by_id["short"]["generated_length"] <= 18
+    assert rows_by_id["long"]["generated_length"] <= 8
+    for row in rows:
+        assert isinstance(row["answer"], str)
+        assert row["generated_length"] >= 0
+        assert all(math.isfinite(row[key]) for key in ("tpf", "tps", "fps"))
