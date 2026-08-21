@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-IMAGE="${APPTAINER_IMAGE:-/projects/bekz/yzhao25/flux-cu129-gh200.sif}"
+IMAGE="${APPTAINER_IMAGE:-/projects/bekz/yzhao25/flux-cu129-gemma.sif}"
 HF_BIND="${HF_BIND:-/work/nvme/bekz/yzhao25/huggingface:/mnt/huggingface}"
 FLUXSERVE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 FLUXSERVE_PYTHONPATH="${FLUXSERVE_ROOT}/python:${PYTHONPATH:-}"
