@@ -323,9 +323,10 @@ def initialize_dp_attention(
                 _ATTN_TP_GROUP.device_group = group
                 _ATTN_TP_GROUP.unique_name = f"attention_tp_{idx}"
 
+    runtime_config = getattr(model_config, "text_config", model_config)
     _DpGatheredBufferWrapper.set_metadata(
-        hidden_size=model_config.hidden_size,
-        dtype=model_config.dtype,
+        hidden_size=runtime_config.hidden_size,
+        dtype=runtime_config.dtype,
         device=torch.device(server_args.device),
     )
 

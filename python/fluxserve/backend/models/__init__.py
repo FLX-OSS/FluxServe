@@ -18,3 +18,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 from .llada2 import LLaDA2LLM
+from .diffusion_gemma import DiffusionGemmaForConditionalGeneration
+
+__all__ = ["DiffusionGemmaForConditionalGeneration", "LLaDA2LLM"]

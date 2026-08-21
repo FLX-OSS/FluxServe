@@ -36,7 +36,10 @@ from fluxserve.backend.model_loader.weight_utils import (
     resolve_model_snapshot,
     tp_split,
 )
-from fluxserve.backend.models import LLaDA2LLM
+from fluxserve.backend.models import (
+    DiffusionGemmaForConditionalGeneration,
+    LLaDA2LLM,
+)
 from fluxserve.backend.utils.runtime_utils import tqdm_progress as tqdm
 
 
@@ -553,3 +556,49 @@ class DefaultModelLoader:
                 "up_proj.input_scale",
             ):
                 new_state_dict.pop(f"model.layers.{layer_id}.mlp.{suffix}", None)
+
+
+class DiffusionGemmaModelLoader:
+    """Streaming loader for the official unquantized Diffusion-Gemma layout."""
+
+    def load_model(self, *, model_config, device: str, quant_config=None) -> nn.Module:
+        if quant_config is not None:
+            raise ValueError("Diffusion-Gemma quantization is not supported yet")
+        old_dtype = torch.get_default_dtype()
+        try:
+            torch.set_default_dtype(torch.bfloat16)
+            with torch.device(device):
+                model = DiffusionGemmaForConditionalGeneration(model_config).eval()
+        finally:
+            torch.set_default_dtype(old_dtype)
+
+        model_dir = resolve_model_snapshot(model_config)
+        shard_files = get_safetensors_shard_files(model_dir)
+        loaded: set[str] = set()
+        unexpected: set[str] = set()
+        for _, shard in tqdm.tqdm(
+            iter_safetensors_shards(model_dir, shard_files), total=len(shard_files)
+        ):
+            shard_loaded, shard_unexpected = model.load_weights(shard.items())
+            loaded.update(shard_loaded)
+            unexpected.update(shard_unexpected)
+            del shard
+
+        required = {
+            name
+            for name, _ in model.named_parameters()
+            if not (name == "lm_head.weight" and model.text_config.tie_word_embeddings)
+        }
+        missing = sorted(required - loaded)
+        if missing:
+            preview = ", ".join(missing[:20])
+            raise ValueError(
+                f"Diffusion-Gemma checkpoint is missing {len(missing)} required "
+                f"text weights: {preview}"
+            )
+        if unexpected:
+            preview = ", ".join(sorted(unexpected)[:20])
+            raise ValueError(
+                f"Diffusion-Gemma checkpoint contains unmapped text weights: {preview}"
+            )
+        return model.eval()

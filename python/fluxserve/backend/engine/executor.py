@@ -99,7 +99,12 @@ class BlockDiffusionExecutor:
         if any(req.ignore_eos for req in requests):
             self.runner.early_stop = False
         try:
-            output = self.runner.generate(prompt)
+            if getattr(self.runner, "requires_prompt_lengths", False):
+                output = self.runner.generate(
+                    prompt, prompt_lengths=[len(ids) for ids in prompt_ids]
+                )
+            else:
+                output = self.runner.generate(prompt)
         finally:
             self.runner.runner_config.gen_length = original_gen_length
             self.runner.early_stop = original_early_stop

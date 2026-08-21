@@ -20,4 +20,10 @@
 
 __version__ = "0.1"
 
+# Register FluxServe-native configs before any CLI calls AutoConfig.from_pretrained.
+from fluxserve.backend.configs.diffusion_gemma import (  # noqa: E402,F401
+    DiffusionGemmaConfig,
+    DiffusionGemmaTextConfig,
+)
+
 __all__ = ["__version__"]

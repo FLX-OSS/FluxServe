@@ -206,6 +206,7 @@ class DenseAttention:
                 attn_mask=None,
                 dropout_p=0.0,
                 is_causal=False,
+                scale=self.config.scale,
             )
 
         if attention_mask.__class__.__name__ == "BlockMask":
@@ -227,6 +228,7 @@ class DenseAttention:
             attn_mask=attention_mask,
             dropout_p=0.0,
             is_causal=False,
+            scale=self.config.scale,
         )
 
     @torch.compiler.disable(recursive=False)

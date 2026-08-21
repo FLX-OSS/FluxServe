@@ -142,6 +142,13 @@ class RunnerConfig:
     flashinfer_cache_mode: str = "dense"
     kv_cache_layout: Literal["dense", "paged"] = "dense"
     page_size: int | None = None
+    canvas_length: int | None = None
+    max_denoising_steps: int | None = None
+    t_min: float | None = None
+    t_max: float | None = None
+    entropy_bound: float | None = None
+    confidence_threshold: float | None = None
+    stability_threshold: int | None = None
 
     def __post_init__(self):
         if self.enable_cuda_graph:
@@ -273,6 +280,7 @@ class GenerationBatchInfo:
     tpfs: list[float] = field(default_factory=list)
     tpss: list[float] = field(default_factory=list)
     fpss: list[float] = field(default_factory=list)
+    denoising_steps: list[int] = field(default_factory=list)
     total_forward: int = 0
     total_token: int = 0
     total_time: float = 0.0

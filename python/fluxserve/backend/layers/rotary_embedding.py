@@ -139,7 +139,6 @@ class RotaryEmbedding(CustomOp):
         sin = freqs.sin()
         cache = torch.cat((cos, sin), dim=-1)
         return cache
-
     def forward_native(
         self,
         positions: torch.Tensor,
@@ -229,6 +228,42 @@ class RotaryEmbedding(CustomOp):
         s += f", max_position_embeddings={self.max_position_embeddings}"
         s += f", base={self.base}, is_neox_style={self.is_neox_style}"
         return s
+
+
+class Gemma4RotaryEmbedding(RotaryEmbedding):
+    """Gemma4 proportional RoPE with identity-padded non-rotated dimensions."""
+
+    def __init__(
+        self,
+        head_size: int,
+        rotary_dim: int,
+        max_position_embeddings: int,
+        base: float,
+        is_neox_style: bool,
+        dtype: torch.dtype,
+    ) -> None:
+        self.rope_angles = rotary_dim // 2
+        self.nope_angles = head_size // 2 - self.rope_angles
+        super().__init__(
+            head_size,
+            head_size,
+            max_position_embeddings,
+            base,
+            is_neox_style,
+            dtype,
+        )
+
+    def _compute_inv_freq(self, base: Union[int, float]) -> torch.Tensor:
+        exponents = (
+            torch.arange(0, 2 * self.rope_angles, 2, dtype=torch.float)
+            / self.head_size
+        )
+        inv_freq = 1.0 / (base**exponents)
+        if self.nope_angles:
+            inv_freq = torch.cat(
+                (inv_freq, torch.zeros(self.nope_angles, dtype=torch.float))
+            )
+        return inv_freq
 
 
 class LinearScalingRotaryEmbedding(RotaryEmbedding):
@@ -1679,7 +1714,16 @@ def get_rope(
         else:
             raise ValueError("Unknown RoPE scaling type")
 
-        if scaling_type == "llama3":
+        if scaling_type == "proportional":
+            rotary_emb = Gemma4RotaryEmbedding(
+                head_size,
+                rotary_dim,
+                max_position,
+                base,
+                is_neox_style,
+                dtype,
+            )
+        elif scaling_type == "llama3":
             scaling_factor = rope_scaling["factor"]
             low_freq_factor = rope_scaling["low_freq_factor"]
             high_freq_factor = rope_scaling["high_freq_factor"]

@@ -38,9 +38,14 @@ class RMSNorm(nn.Module):
         self,
         hidden_size: int,
         eps: float = 1e-6,
+        has_weight: bool = True,
     ) -> None:
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.has_weight = has_weight
+        if has_weight:
+            self.weight = nn.Parameter(torch.ones(hidden_size))
+        else:
+            self.register_parameter("weight", None)
         self.variance_epsilon = eps
         self.hidden_size = hidden_size
         self.normalized_shape = tuple((hidden_size,))
@@ -61,7 +66,7 @@ class RMSNorm(nn.Module):
         x: torch.Tensor,
         residual: Optional[torch.Tensor],
     ) -> Optional[Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]]:
-        if not x.is_cuda or x.numel() == 0:
+        if not x.is_cuda or x.numel() == 0 or self.weight is None:
             return None
 
         try:

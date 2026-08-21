@@ -49,6 +49,7 @@ from fluxserve.backend.entrypoints.http_server import run
 from fluxserve.backend.execution.forward_batch_info import RunnerConfig
 from fluxserve.backend.execution.runners import (
     BlockDiffusionRunner,
+    DiffusionGemmaRunner,
     FlashInferDiffusionRunner,
 )
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
@@ -203,6 +204,15 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         args.model_name,
         trust_remote_code=args.trust_remote_code,
     )
+    architectures = set(getattr(model_config, "architectures", ()) or ())
+    is_diffusion_gemma = (
+        "DiffusionGemmaForBlockDiffusion" in architectures
+        or getattr(model_config, "model_type", None) == "diffusion_gemma"
+    )
+    if is_diffusion_gemma and args.attention_backend == "flashinfer":
+        logger.info("Diffusion-Gemma uses the SDPA backend in the initial release.")
+        args.attention_backend = "sdpa"
+        normalize_attention_backend_args(args)
     _reject_unsupported_quantization(model_config)
     model_config.quant_config = None
     if args.scheduler_policy == "paged" and (
@@ -316,11 +326,14 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             threshold=args.threshold,
             low_threshold=args.low_threshold,
         )
-        runner_cls = (
-            FlashInferDiffusionRunner
-            if args.attention_backend == "flashinfer"
-            else BlockDiffusionRunner
-        )
+        if is_diffusion_gemma:
+            runner_cls = DiffusionGemmaRunner
+        else:
+            runner_cls = (
+                FlashInferDiffusionRunner
+                if args.attention_backend == "flashinfer"
+                else BlockDiffusionRunner
+            )
         runner = runner_cls(
             model_config=model_config,
             server_args=server_args,
