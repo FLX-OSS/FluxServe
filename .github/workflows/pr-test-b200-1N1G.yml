@@ -42,11 +42,4 @@ jobs:
           set -euo pipefail
           bash test/ci/env/b200.sh \
             bash -lc 'cd "$GITHUB_WORKSPACE" && \
-                      bash test/ci/eval/gsm8k.sh'
-
-      - name: Run GSM8K Perf Test
-        run: |
-          set -euo pipefail
-          bash test/ci/env/b200.sh \
-            bash -lc 'cd "$GITHUB_WORKSPACE" && \
-                      bash test/benchmark/fluxserve/bench.sh'
+                      bash test/ci/eval/1N1G/gsm8k.sh'

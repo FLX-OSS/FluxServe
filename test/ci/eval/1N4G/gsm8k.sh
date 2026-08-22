@@ -10,19 +10,17 @@ python -m venv "${EVALSCOPE_VENV}"
     "evalscope @ git+https://github.com/modelscope/evalscope.git@${EVALSCOPE_COMMIT}"
 
 CONFIGS=(
-    tp1_ep1_mini
     tp4_ep4_flash
     tp4_ep4_gemma
 )
 
 MODELS=(
-    inclusionAI/LLaDA2.0-mini
     inclusionAI/LLaDA2.0-flash
     google/diffusiongemma-26B-A4B-it
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 OUTPUTS_DIR="${SCRIPT_DIR}/outputs/$(date +%Y%m%d_%H%M%S)"
 MIN_ACCURACY="${GSM8K_MIN_ACCURACY:-0.5}"
 SERVER_PID=

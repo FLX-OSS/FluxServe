@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-IMAGE="${APPTAINER_IMAGE:-/blue/juwang.ucf/yo493393.ucf/flux-cu130-sm100.sif}"
+IMAGE="${APPTAINER_IMAGE:-/blue/juwang.ucf/yo493393.ucf/flux-cu130-gemma.sif}"
 HF_BIND="${HF_BIND:-/blue/juwang.ucf/yo493393.ucf/huggingface:/mnt/huggingface}"
 FLUXSERVE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 USER_NAME="${USER_NAME:-$(id -un)}"
