@@ -16,6 +16,7 @@ from torch.utils.cpp_extension import CUDA_HOME, include_paths, library_paths
 
 
 _ARCH_SPLIT_RE = re.compile(r"[,;\s]+")
+_ARCHITECTURES_WITH_A_SUFFIX = frozenset({"90", "100", "103", "110"})
 
 
 def normalize_cuda_arch(arch: str) -> str:
@@ -65,11 +66,11 @@ def nvcc_supported_arches(nvcc: str) -> frozenset[str]:
         for match in re.findall(r"(?:sm_|compute_)([0-9]+a?)", output)
     }
     # NVCC lists architecture families (for example sm_100) but also accepts
-    # their feature-specific targets (sm_100a).
+    # feature-specific targets only for selected architecture families.
     arches.update(
         f"{arch.removesuffix('a')}a"
         for arch in tuple(arches)
-        if int(arch.removesuffix("a")) >= 90
+        if arch.removesuffix("a") in _ARCHITECTURES_WITH_A_SUFFIX
     )
     return frozenset(arches)
 
@@ -113,7 +114,8 @@ def resolve_cuda_arches(
                 detected_capability = None
         if detected_capability is not None:
             major, minor = detected_capability
-            suffix = "a" if major >= 10 else ""
+            base = f"{major}{minor}"
+            suffix = "a" if base in _ARCHITECTURES_WITH_A_SUFFIX else ""
             arches = (normalize_cuda_arch(f"{major}.{minor}{suffix}"),)
         else:
             arches = tuple(normalize_cuda_arch(arch) for arch in default_arches)
@@ -139,7 +141,7 @@ def build_cuda_library(
     *,
     force: bool,
     verbose: bool,
-    default_arches: tuple[str, ...] = ("90", "100a"),
+    default_arches: tuple[str, ...] = ("90", "100a", "120"),
 ) -> Path:
     source = root / "csrc" / f"{name}.cu"
     objects = root / "objs"
@@ -148,6 +150,20 @@ def build_cuda_library(
     stamp = objects / f"{name}.build"
     nvcc = str(Path(CUDA_HOME) / "bin" / "nvcc") if CUDA_HOME is not None else "nvcc"
     arches = resolve_cuda_arches(default_arches, nvcc=nvcc)
+    if verbose:
+        try:
+            cuda_available = torch.cuda.is_available()
+            device = torch.cuda.get_device_name() if cuda_available else "<unavailable>"
+            capability = (
+                torch.cuda.get_device_capability() if cuda_available else "<unavailable>"
+            )
+            print(
+                "Flux Kernel CUDA detection: "
+                f"available={cuda_available}, device={device}, "
+                f"compute_capability={capability}, resolved_arches={arches}"
+            )
+        except Exception as exc:
+            print(f"Flux Kernel CUDA detection failed: {exc!r}; resolved_arches={arches}")
     arch_signature = ",".join(arches)
     signature = f"torch={torch.__version__}\ncuda={torch.version.cuda}\narch={arch_signature}\nabi={int(torch._C._GLIBCXX_USE_CXX11_ABI)}\n"
     dependencies = [source, *root.glob("csrc/**/*.h"), *root.glob("csrc/**/*.cuh")]

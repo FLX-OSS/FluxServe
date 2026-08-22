@@ -1,0 +1,45 @@
+name: 4 x GH200 PR Tests (Apptainer)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "python/**"
+      - "flux-kernel/**"
+      - "flux-scheduler/**"
+      - "test/**"
+      - ".github/workflows/pr-test-gh200.yml"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gpu-tests:
+    name: GH200 GPU / GSM8K Eval / Apptainer
+    # This must be a self-hosted runner where Apptainer and the SIF image exist.
+    runs-on: [self-hosted, linux, fluxserve-gh200]
+    timeout-minutes: 240
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Install FluxServe
+        run: |
+          set -euo pipefail
+          bash test/ci/env/gh200.sh \
+            bash -lc 'cd "$GITHUB_WORKSPACE" && \
+                      export PIP_BREAK_SYSTEM_PACKAGES=1 && \
+                      export FLUX_KERNEL_CUDA_ARCH=90 && \
+                      python -m pip install -e flux-kernel/python --no-build-isolation && \
+                      python -m pip install -e flux-scheduler && \
+                      python -m pip install -e .'
+
+      - name: Run GSM8K Eval Test
+        run: |
+          set -euo pipefail
+          bash test/ci/env/gh200.sh \
+            bash -lc 'cd "$GITHUB_WORKSPACE" && \
+                      bash test/ci/eval/1N4G/gsm8k.sh'

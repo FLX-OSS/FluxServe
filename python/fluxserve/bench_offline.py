@@ -19,6 +19,7 @@
 # SOFTWARE.
 
 
+import argparse
 import json
 import os
 import string
@@ -43,6 +44,7 @@ from fluxserve.backend.execution.forward_batch_info import (
 )
 from fluxserve.backend.execution.runners import (
     BlockDiffusionRunner,
+    DiffusionGemmaRunner,
     FlashInferDiffusionRunner,
 )
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
@@ -55,6 +57,12 @@ from fluxserve.prompt_utils import render_openai_messages
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 BUCKET_SIZE = 32
+
+
+class StoreExplicit(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        setattr(namespace, f"{self.dest}_explicit", True)
 
 
 def normalize_attention_backend_args(args) -> None:
@@ -88,10 +96,10 @@ class BenchmarkLogger:
 
 
 def bucket_length(length: int) -> int:
-    return BUCKET_SIZE * (length // BUCKET_SIZE)
+    return BUCKET_SIZE * ((length + BUCKET_SIZE - 1) // BUCKET_SIZE)
 
 
-def load_openai_style_inputs(dataset, tokenizer):
+def load_openai_style_inputs(dataset, tokenizer, *, apply_chat_template=False):
     prompts = []
     questions = []
     ids = []
@@ -113,7 +121,15 @@ def load_openai_style_inputs(dataset, tokenizer):
                 if message.get("role") == "user"
             )
             questions.append(question)
-            prompt = render_openai_messages(messages)
+            prompt = (
+                tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                if apply_chat_template
+                else render_openai_messages(messages)
+            )
             prompts.append(prompt)
             input_ids = torch.tensor(tokenizer(prompt)["input_ids"]).unsqueeze(0)
             all_input_ids.append(input_ids)
@@ -154,11 +170,15 @@ def detect_dataset_format(dataset):
     return "legacy"
 
 
-def load_inputs(dataset, tokenizer, dataset_format="auto"):
+def load_inputs(dataset, tokenizer, dataset_format="auto", *, apply_chat_template=False):
     if dataset_format == "auto":
         dataset_format = detect_dataset_format(dataset)
     if dataset_format == "openai":
-        return load_openai_style_inputs(dataset, tokenizer)
+        return load_openai_style_inputs(
+            dataset,
+            tokenizer,
+            apply_chat_template=apply_chat_template,
+        )
     if dataset_format == "legacy":
         return load_legacy_inputs(dataset, tokenizer)
     raise ValueError(f"Unsupported dataset format: {dataset_format}")
@@ -172,7 +192,13 @@ def calc_padded_gen_lens(args, all_input_ids):
 
 
 def cut_eos(data, eos_id=156892):
-    eos_indices = (data[0] == eos_id).nonzero(as_tuple=True)[0]
+    eos_ids = (eos_id,) if isinstance(eos_id, int) else tuple(eos_id)
+    if not eos_ids:
+        raise ValueError("at least one EOS token ID is required")
+    eos_mask = data[0] == int(eos_ids[0])
+    for stop_id in eos_ids[1:]:
+        eos_mask |= data[0] == int(stop_id)
+    eos_indices = eos_mask.nonzero(as_tuple=True)[0]
     if eos_indices.numel() > 0:
         return data[:, : eos_indices[0].item()]
     return data
@@ -280,7 +306,39 @@ def build_runner_config(args, batch_info):
         flashinfer_cache_mode=getattr(args, "flashinfer_cache_mode", "dense"),
         kv_cache_layout=getattr(args, "kv_cache_layout", "dense"),
         page_size=getattr(args, "page_size", None),
+        canvas_length=getattr(args, "canvas_length", None),
+        max_denoising_steps=getattr(args, "max_denoising_steps", None),
     )
+
+
+def normalize_diffusion_gemma_args(args, model_config) -> bool:
+    architectures = set(getattr(model_config, "architectures", ()) or ())
+    is_diffusion_gemma = (
+        "DiffusionGemmaForBlockDiffusion" in architectures
+        or getattr(model_config, "model_type", None) == "diffusion_gemma"
+    )
+    if not is_diffusion_gemma:
+        return False
+    canvas_length = (
+        getattr(args, "canvas_length", None)
+        or getattr(model_config, "canvas_length", None)
+        or args.block_length
+    )
+    args.canvas_length = int(canvas_length)
+    args.block_length = int(canvas_length)
+    if not getattr(args, "attention_backend_explicit", False):
+        args.attention_backend = "sdpa"
+        normalize_attention_backend_args(args)
+    if args.attention_backend != "flashinfer":
+        args.kv_cache_layout = "dense"
+        args.flashinfer_cache_mode = "dense"
+        args.flashinfer_prefill_mode = "dense"
+    if args.use_cuda_graph or args.use_prefill_cuda_graph:
+        raise ValueError(
+            "Diffusion-Gemma supports decode CUDA graphs only; use "
+            "--use-decode-cuda-graph."
+        )
+    return True
 
 
 def pad_batch(input_ids, device, mask_id):
@@ -294,6 +352,33 @@ def pad_batch(input_ids, device, mask_id):
     for idx, sample in enumerate(input_ids):
         batch[idx, : sample.shape[1]] = sample.to(device)
     return batch
+
+
+def compact_batch_output(out, input_ids, generation_lengths, mask_id):
+    """Move generated tokens next to each unpadded prompt."""
+    if out.shape[0] != len(input_ids) or len(input_ids) != len(generation_lengths):
+        raise ValueError("batch outputs, inputs, and generation lengths must align")
+    padded_prompt_len = max(sample.shape[1] for sample in input_ids)
+    rows = []
+    for index, (sample, generation_length) in enumerate(
+        zip(input_ids, generation_lengths, strict=True)
+    ):
+        prompt = sample[0].to(out.device)
+        generated = out[
+            index,
+            padded_prompt_len : padded_prompt_len + int(generation_length),
+        ]
+        rows.append(torch.cat((prompt, generated)))
+    max_length = max(row.shape[0] for row in rows)
+    compacted = torch.full(
+        (len(rows), max_length),
+        mask_id,
+        dtype=out.dtype,
+        device=out.device,
+    )
+    for index, row in enumerate(rows):
+        compacted[index, : row.shape[0]] = row
+    return compacted
 
 
 def maybe_disable_sorting(batch_info, disable_sorting):
@@ -336,10 +421,22 @@ def warmup_runner(runner, args, device, logger):
     )
     use_decode_graph = bool(args.use_cuda_graph or args.use_decode_cuda_graph)
     graph_runner = getattr(runner, "flashinfer_graph_runner", None)
+    is_llada2_graph_runner = bool(
+        graph_runner is not None and graph_runner.supports_llada2_graphs
+    )
+    is_gemma_graph_runner = bool(
+        graph_runner is not None
+        and graph_runner.supports_diffusion_gemma_graphs
+    )
     if graph_runner is not None and (use_prefill_graph or use_decode_graph):
         # Allocate persistent KV storage before the baseline so the reported
         # delta isolates graph capture rather than including the cache.
-        runner.past_key_values = runner.allocate_kv_cache(args.mini_batch_size)
+        # Diffusion-Gemma's heterogeneous cache is allocated by _paged_cache
+        # before warmup and cannot use BlockDiffusionRunner.allocate_kv_cache.
+        if is_llada2_graph_runner:
+            runner.past_key_values = runner.allocate_kv_cache(
+                args.mini_batch_size
+            )
         torch.cuda.synchronize(device)
         graph_allocated_before = torch.cuda.memory_allocated(device)
         graph_reserved_before = torch.cuda.memory_reserved(device)
@@ -375,17 +472,35 @@ def warmup_runner(runner, args, device, logger):
             runner.generate(prefill_ids)
         logger.info(f"[Info] Prefill warmup shapes: {warmup_shapes}")
     else:
+        warmup_batch_size = (
+            args.batch_size if is_gemma_graph_runner else args.mini_batch_size
+        )
         warmup_ids = torch.randint(
             0,
             100000,
-            (args.mini_batch_size, args.block_length),
+            (warmup_batch_size, args.block_length),
             dtype=torch.long,
             device=device,
         )
         runner.runner_config.gen_length = args.block_length
         runner.generate(warmup_ids)
 
-    if graph_runner is not None and use_decode_graph:
+        if is_gemma_graph_runner and use_decode_graph:
+            # Diffusion-Gemma graphs are expensive full-model captures. Keep
+            # capture confined to this short, fixed-shape warmup; benchmark
+            # batches with other metadata signatures fall back to eager mode.
+            graph_runner.gemma_capture_enabled = False
+            torch.cuda.synchronize(device)
+            logger.info(
+                "[Info] Diffusion-Gemma decode graph warmup complete: "
+                f"captures={graph_runner.gemma_capture_count}, "
+                f"max_entries={graph_runner.gemma_max_entries}"
+            )
+
+    if (
+        is_llada2_graph_runner
+        and use_decode_graph
+    ):
         graph_runner.capture_decode_batch_sizes(
             runner,
             batch_sizes=graph_runner.capture_batch_sizes(args.mini_batch_size),
@@ -420,8 +535,23 @@ def run_worker(args, *, init_method: str = "env://"):
         args.model_name,
         trust_remote_code=args.trust_remote_code,
     )
+    model_config = AutoConfig.from_pretrained(
+        args.model_name,
+        trust_remote_code=args.trust_remote_code,
+    )
+    is_diffusion_gemma = normalize_diffusion_gemma_args(args, model_config)
+    if is_diffusion_gemma:
+        logger.info(
+            "[Info] Diffusion-Gemma attention backend: "
+            f"{args.attention_backend}, KV cache: {args.kv_cache_layout}."
+        )
+    _reject_unsupported_quantization(model_config)
+    model_config.quant_config = None
     all_input_ids, prompts, questions, ids = load_inputs(
-        args.dataset, tokenizer, args.dataset_format
+        args.dataset,
+        tokenizer,
+        args.dataset_format,
+        apply_chat_template=is_diffusion_gemma,
     )
     padded_gen_lens = calc_padded_gen_lens(args, all_input_ids)
     dataset_name = Path(args.dataset).stem
@@ -451,12 +581,6 @@ def run_worker(args, *, init_method: str = "env://"):
     log_input_shape_summary(input_lengths, batch_info, args, logger)
 
     logger.info("[Loading model]")
-    model_config = AutoConfig.from_pretrained(
-        args.model_name,
-        trust_remote_code=args.trust_remote_code,
-    )
-    _reject_unsupported_quantization(model_config)
-    model_config.quant_config = None
 
     server_args = build_server_args(args, model_config)
     server_args.device = device
@@ -471,18 +595,37 @@ def run_worker(args, *, init_method: str = "env://"):
 
         runner_config = build_runner_config(args, batch_info)
         runner_config.cuda_graph_log_callback = logger.info
-        runner_cls = (
-            FlashInferDiffusionRunner
-            if args.attention_backend == "flashinfer"
-            else BlockDiffusionRunner
-        )
+        if is_diffusion_gemma:
+            runner_cls = DiffusionGemmaRunner
+        else:
+            runner_cls = (
+                FlashInferDiffusionRunner
+                if args.attention_backend == "flashinfer"
+                else BlockDiffusionRunner
+            )
         runner = runner_cls(
             model_config=model_config,
             server_args=server_args,
             runner_config=runner_config,
             device=device,
         )
+        eos_ids = getattr(runner.decoder, "eos_ids", (runner.decoder.eos_id,))
+        logger.info(
+            "[Info] Runner configuration: "
+            f"runner={runner_cls.__name__}, canvas_length={runner.block_length}, "
+            "max_denoising_steps="
+            f"{getattr(getattr(runner.decoder, 'config', None), 'max_denoising_steps', None)}, "
+            f"attention_backend={args.attention_backend}, "
+            f"kv_cache_layout={args.kv_cache_layout}, eos_ids={tuple(eos_ids)}"
+        )
 
+        if is_diffusion_gemma and getattr(
+            runner, "flashinfer_graph_runner", None
+        ) is not None:
+            runner._paged_cache(
+                batch_info.max_length,
+                batch_size=args.batch_size,
+            )
         warmup_runner(runner, args, device, logger)
 
         sorted_input_ids = [all_input_ids[i] for i in batch_info.sorted_indices]
@@ -496,18 +639,41 @@ def run_worker(args, *, init_method: str = "env://"):
         start = time.time()
         for i in iterator:
             input_ids = sorted_input_ids[i : i + args.batch_size]
-            runner.runner_config.gen_length = max(
-                sorted_padded_gen_lens[i : i + len(input_ids)]
-            )
+            generation_lengths = sorted_padded_gen_lens[i : i + len(input_ids)]
+            runner.runner_config.gen_length = max(generation_lengths)
             batch_input_ids = pad_batch(input_ids, device, runner.decoder.mask_id)
             inner_start = time.time()
             prev_forwards = runner.num_forwards
-            out = runner.generate(batch_input_ids)
+            if is_diffusion_gemma:
+                out = runner.generate(
+                    batch_input_ids,
+                    prompt_lengths=[sample.shape[1] for sample in input_ids],
+                    generation_lengths=generation_lengths,
+                )
+                out = compact_batch_output(
+                    out,
+                    input_ids,
+                    generation_lengths,
+                    runner.decoder.mask_id,
+                )
+            else:
+                out = runner.generate(batch_input_ids)
+            denoising_steps = (
+                getattr(runner, "last_denoising_steps", None)
+                if is_diffusion_gemma
+                else None
+            )
+            if denoising_steps is not None:
+                logger.info(
+                    f"[Iter={i:4d}] denoising_steps={tuple(denoising_steps)}"
+                )
             nfe = runner.num_forwards - prev_forwards
             sample_time = time.time() - inner_start
 
             for j in range(batch_input_ids.shape[0]):
                 batch_info.outputs.append(out[j].unsqueeze(0))
+                if is_diffusion_gemma and denoising_steps is not None:
+                    batch_info.denoising_steps.append(denoising_steps[j])
             metrics = record_batch_performance_metrics(
                 batch_info,
                 out,
@@ -515,7 +681,7 @@ def run_worker(args, *, init_method: str = "env://"):
                 i,
                 nfe,
                 sample_time,
-                runner.decoder.eos_id,
+                eos_ids,
                 runner.decoder.mask_id,
             )
             if rank == 0:
@@ -542,6 +708,7 @@ def run_worker(args, *, init_method: str = "env://"):
                 start,
                 stop,
                 logger,
+                eos_ids,
             )
     finally:
         if runner is not None and hasattr(runner, "shutdown_cuda_graphs"):
@@ -569,15 +736,31 @@ def _write_results(
     start,
     stop,
     logger,
+    eos_ids,
 ) -> None:
     outputs = batch_info.original_order(batch_info.outputs)
     tpfs = batch_info.original_order(batch_info.tpfs)
     tpss = batch_info.original_order(batch_info.tpss)
     fpss = batch_info.original_order(batch_info.fpss)
+    # Some runners expose denoising metadata only for the rows they actively
+    # process. Keep result serialization robust when that optional metadata is
+    # absent or shorter than the output batch.
+    if not batch_info.denoising_steps:
+        denoising_steps = [None] * len(batch_info.sorted_indices)
+    elif len(batch_info.denoising_steps) == len(batch_info.sorted_indices):
+        denoising_steps = batch_info.original_order(batch_info.denoising_steps)
+    else:
+        logger.warning(
+            "Denoising-step metadata length (%d) does not match output count (%d); "
+            "writing null metadata for affected rows.",
+            len(batch_info.denoising_steps),
+            len(batch_info.sorted_indices),
+        )
+        denoising_steps = [None] * len(batch_info.sorted_indices)
     token_numbers = batch_info.original_order(batch_info.token_numbers)
     answers = [
         tokenizer.decode(
-            cut_eos(outputs[i][:, all_input_ids[i].shape[1] :])[0],
+            cut_eos(outputs[i][:, all_input_ids[i].shape[1] :], eos_ids)[0],
             skip_special_tokens=True,
         )
         for i in tqdm.trange(len(outputs))
@@ -605,6 +788,7 @@ def _write_results(
                     "tpf": tpfs[i],
                     "tps": tpss[i],
                     "fps": fpss[i],
+                    "denoising_steps": denoising_steps[i],
                 },
                 f,
             )
@@ -638,7 +822,8 @@ def add_bench_offline_subparser(subparsers) -> None:
         help="Prefill sequence-length buckets captured by CUDA graphs.",
     )
     parser.add_argument("--prefilling-limit", "--prefilling_limit", dest="prefilling_limit", type=int, default=128)
-    parser.add_argument("--attention-backend", "--attention_backend", dest="attention_backend", choices=("sdpa", "flex", "flashinfer"), default="flashinfer")
+    parser.set_defaults(attention_backend_explicit=False)
+    parser.add_argument("--attention-backend", "--attention_backend", dest="attention_backend", choices=("sdpa", "flex", "flashinfer"), default="flashinfer", action=StoreExplicit)
     parser.add_argument("--flashinfer-decode-batch-mode", "--flashinfer_decode_batch_mode", dest="flashinfer_decode_batch_mode", choices=("default", "max_batch"), default="max_batch")
     parser.add_argument("--flashinfer-prefill-mode", "--flashinfer_prefill_mode", dest="flashinfer_prefill_mode", choices=("dense", "ragged", "paged"), default="paged")
     parser.add_argument("--flashinfer-cache-mode", "--flashinfer_cache_mode", dest="flashinfer_cache_mode", choices=("dense", "paged"), default="paged")
@@ -646,6 +831,15 @@ def add_bench_offline_subparser(subparsers) -> None:
     parser.add_argument("--page-size", "--page_size", dest="page_size", type=int)
     parser.add_argument("--gen-len", "--gen_len", dest="gen_len", type=int, default=1024)
     parser.add_argument("--block-length", "--block_length", dest="block_length", type=int, default=64)
+    parser.add_argument(
+        "--canvas-length", "--canvas_length", dest="canvas_length", type=int
+    )
+    parser.add_argument(
+        "--max-denoising-steps",
+        "--max_denoising_steps",
+        dest="max_denoising_steps",
+        type=int,
+    )
     parser.add_argument("--threshold", type=float, default=0.9)
     parser.add_argument("--low-threshold", "--low_threshold", dest="low_threshold", type=float, default=0.3)
     parser.add_argument("--parallel-decoding", "--parallel_decoding", dest="parallel_decoding", default="threshold")
@@ -686,6 +880,10 @@ def bench_offline(args) -> None:
         raise ValueError("--ep_size must be positive")
     if args.dp_size <= 0:
         raise ValueError("--dp_size must be positive")
+    if args.canvas_length is not None and args.canvas_length <= 0:
+        raise ValueError("--canvas-length must be positive")
+    if args.max_denoising_steps is not None and args.max_denoising_steps <= 0:
+        raise ValueError("--max-denoising-steps must be positive")
     if args.dp_size > 1 and args.dp_size != args.ep_size:
         raise ValueError(
             "This benchmark currently supports dp_attention with EP only when "

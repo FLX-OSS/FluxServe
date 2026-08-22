@@ -39,7 +39,6 @@ from fluxserve.backend.managers.kvcache import KVCache
 from fluxserve.backend.model_loader import get_model
 from fluxserve.backend.utils.runtime_utils import (
     get_available_gpu_memory,
-    is_flashinfer_dllm_available,
     require_nvidia_cuda,
 )
 from fluxserve.backend.utils.server_args import ServerArgs
@@ -109,16 +108,6 @@ class ModelRunner:
                 "materializes dynamic dense KV views."
             )
             self.runner_config.enable_cuda_graph = False
-        if (
-            self.runner_config.attention_backend == "flashinfer"
-            and not is_flashinfer_dllm_available()
-        ):
-            raise RuntimeError(
-                "attention_backend='flashinfer' requires flashinfer.dllm "
-                "from the rebuilt flashinfer-python package. Use the "
-                "flux-cu129 Apptainer environment or run with "
-                "attention_backend='sdpa'."
-            )
         self.enable_cuda_graph = bool(
             self.runner_config.enable_cuda_graph
             and not self.enable_flashinfer_attention_graph

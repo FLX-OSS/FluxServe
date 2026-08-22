@@ -17,6 +17,8 @@ class CudaArchTest(unittest.TestCase):
         self.assertEqual(normalize_cuda_arch("10.0a"), "100a")
         self.assertEqual(normalize_cuda_arch("sm_100a"), "100a")
         self.assertEqual(normalize_cuda_arch("9.0+PTX"), "90")
+        self.assertEqual(normalize_cuda_arch("12.0"), "120")
+        self.assertEqual(normalize_cuda_arch("sm_120"), "120")
 
     def test_parses_separators_and_removes_duplicates(self):
         self.assertEqual(
@@ -46,15 +48,26 @@ class CudaArchTest(unittest.TestCase):
         )
         self.assertEqual(arches, ("100a",))
 
-    def test_filters_unsupported_automatic_defaults(self):
+    @mock.patch("torch.cuda.is_available", return_value=False)
+    def test_filters_unsupported_automatic_defaults(self, _cuda_available):
         arches = resolve_cuda_arches(
-            ("90", "100a", "120a"),
+            ("90", "100a", "120"),
             nvcc="nvcc",
             env={},
             detected_capability=None,
             supported_arches=frozenset({"90", "100a"}),
         )
         self.assertEqual(arches, ("90", "100a"))
+
+    def test_detects_rtx_pro_blackwell_as_sm120(self):
+        arches = resolve_cuda_arches(
+            ("90", "100a", "120"),
+            nvcc="nvcc",
+            env={},
+            detected_capability=(12, 0),
+            supported_arches=frozenset({"100a", "120"}),
+        )
+        self.assertEqual(arches, ("120",))
 
     def test_rejects_unsupported_explicit_architecture(self):
         with self.assertRaisesRegex(RuntimeError, "sm_100a"):
@@ -67,10 +80,10 @@ class CudaArchTest(unittest.TestCase):
 
     @mock.patch("subprocess.check_output")
     def test_reads_nvcc_supported_architectures(self, check_output):
-        check_output.return_value = "sm_80\nsm_90\nsm_100\n"
+        check_output.return_value = "sm_80\nsm_90\nsm_100\nsm_120\n"
         self.assertEqual(
             nvcc_supported_arches("nvcc"),
-            frozenset({"80", "90", "90a", "100", "100a"}),
+            frozenset({"80", "90", "90a", "100", "100a", "120"}),
         )
         check_output.assert_called_once_with(
             ["nvcc", "--list-gpu-code"],

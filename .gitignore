@@ -14,6 +14,12 @@
 *.pytest_cache
 *.pt
 
+# diffusion-gemma
+diffusion_gemma_*.md
+diffusion_gemma*.md
+flashinfer_gemma.md
+
+
 
 # Dependency directories (remove the comment below to include it)
 vendor/
@@ -29,6 +35,8 @@ manager/dist/*
 
 # docs related
 **/dynamic-scheduling.md
+code_reorg.md
+
 
 # kernel related
 **/profiling/

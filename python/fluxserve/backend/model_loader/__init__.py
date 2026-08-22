@@ -27,9 +27,17 @@ def get_model(
     device: str,
     quant_config=None,
 ) -> nn.Module:
-    from fluxserve.backend.model_loader.loader import DefaultModelLoader
+    from fluxserve.backend.model_loader.loader import (
+        DefaultModelLoader,
+        DiffusionGemmaModelLoader,
+    )
 
-    loader = DefaultModelLoader()
+    architectures = set(getattr(model_config, "architectures", ()) or ())
+    is_diffusion_gemma = (
+        "DiffusionGemmaForBlockDiffusion" in architectures
+        or getattr(model_config, "model_type", None) == "diffusion_gemma"
+    )
+    loader = DiffusionGemmaModelLoader() if is_diffusion_gemma else DefaultModelLoader()
     return loader.load_model(
         model_config=model_config,
         device=device,

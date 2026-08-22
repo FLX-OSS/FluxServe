@@ -3,8 +3,11 @@ from __future__ import annotations
 import bisect
 import gc
 import logging
+import os
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import Any
 
 import torch
 
@@ -37,12 +40,100 @@ class _DecodeGraphEntry:
     kv_indices: torch.Tensor
     last_page_len: torch.Tensor
     slot_mapping: torch.Tensor
+    q_offsets: torch.Tensor
+    kv_offsets: torch.Tensor
+    append_batch_indices: torch.Tensor
+    append_positions: torch.Tensor
     wrapper: object
     hidden_states: torch.Tensor
 
 
+@dataclass
+class _GemmaDecodeGraphEntry:
+    graph: torch.cuda.CUDAGraph
+    input_ids: torch.Tensor
+    inputs_embeds: torch.Tensor | None
+    position_ids: torch.Tensor
+    logits: torch.Tensor
+    metadata: Any
+    attention_states: dict[tuple[Any, ...], Any]
+
+
+class _GemmaAttentionGraphState:
+    def __init__(
+        self,
+        *,
+        workspace: torch.Tensor,
+        cache,
+        batch_size: int,
+        q_len: int,
+        num_q_heads: int,
+        num_kv_heads: int,
+        head_dim: int,
+        sliding_window: int | None,
+        dtype: torch.dtype,
+        sm_scale: float,
+    ):
+        from fluxserve.backend.layers.attention.diffusion_gemma_flashinfer import (
+            require_diffusion_gemma_flashinfer,
+        )
+
+        if sliding_window is not None and q_len > int(sliding_window):
+            raise RuntimeError(
+                "Diffusion-Gemma dynamic CUDA graphs require canvas_length <= "
+                f"sliding_window; got {q_len} > {sliding_window}"
+            )
+        _, wrapper_cls, _, _ = require_diffusion_gemma_flashinfer()
+        max_pages = int(cache.pages_per_sequence)
+        self.kv_indptr = torch.arange(
+            batch_size + 1, dtype=torch.int32, device=cache.device
+        ) * max_pages
+        self.kv_indices = cache.page_table[:batch_size].reshape(-1).clone()
+        self.last_page_len = torch.full(
+            (batch_size,), int(cache.page_size),
+            dtype=torch.int32, device=cache.device,
+        )
+        self.qo_indptr = torch.arange(
+            batch_size + 1, dtype=torch.int32, device=cache.device
+        ) * q_len
+        self.wrapper = wrapper_cls(
+            workspace,
+            kv_layout="NHD",
+            use_cuda_graph=True,
+            qo_indptr_buf=self.qo_indptr,
+            paged_kv_indptr_buf=self.kv_indptr,
+            paged_kv_indices_buf=self.kv_indices,
+            paged_kv_last_page_len_buf=self.last_page_len,
+            backend="fa2",
+        )
+        self.wrapper.plan(
+            self.qo_indptr,
+            self.kv_indptr,
+            self.kv_indices,
+            self.last_page_len,
+            num_qo_heads=num_q_heads,
+            num_kv_heads=num_kv_heads,
+            head_dim_qk=head_dim,
+            page_size=int(cache.page_size),
+            causal=False,
+            window_left=(
+                -1 if sliding_window is None else int(sliding_window) - 1
+            ),
+            q_data_type=dtype,
+            kv_data_type=cache.layer_paged_kv(0)[0].dtype,
+            sm_scale=sm_scale,
+            disable_split_kv=True,
+        )
+
+    def run(self, q: torch.Tensor, paged_kv_cache, metadata) -> torch.Tensor:
+        self.kv_indptr.copy_(metadata.kv_indptr)
+        self.kv_indices.copy_(metadata.kv_indices)
+        self.last_page_len.copy_(metadata.last_page_len)
+        return self.wrapper.run(q, paged_kv_cache)
+
+
 class FlashInferCudaGraphRunner:
-    """One full-model CUDA graph per FlashInfer paged prefill bucket."""
+    """CUDA graph execution for LLaDA2 and Diffusion-Gemma FlashInfer paths."""
 
     DEFAULT_CAPTURE_SIZES = (64, 128, 256, 512, 1024)
 
@@ -53,7 +144,20 @@ class FlashInferCudaGraphRunner:
         log_callback=None,
         num_layers: int | None = None,
         decode_capture_batch_sizes=(1, 2, 4, 6, 8),
+        model_runner: Any | None = None,
+        model_family: str = "llada2",
     ):
+        if model_family not in {"llada2", "diffusion_gemma"}:
+            raise ValueError(
+                "model_family must be 'llada2' or 'diffusion_gemma'"
+            )
+        if model_family == "diffusion_gemma" and model_runner is None:
+            raise ValueError(
+                "Diffusion-Gemma CUDA graphs require model_runner"
+            )
+        if model_family == "llada2" and model_runner is not None:
+            raise ValueError("LLaDA2 CUDA graphs do not accept model_runner")
+        self.model_family = model_family
         self.device = torch.device(device)
         self.capture_sizes = tuple(sorted(set(int(x) for x in capture_sizes)))
         self.decode_capture_batch_sizes = tuple(
@@ -71,19 +175,42 @@ class FlashInferCudaGraphRunner:
         self._num_layers = int(num_layers) if num_layers is not None else None
         self._graphs: dict[tuple, _GraphEntry] = {}
         self._decode_graphs: dict[tuple, _DecodeGraphEntry] = {}
+        self._gemma_decode_graphs: dict[tuple, _GemmaDecodeGraphEntry] = {}
+        self._model_runner = model_runner
+        self.supports_llada2_graphs = model_family == "llada2"
+        self.supports_diffusion_gemma_graphs = model_family == "diffusion_gemma"
+        self.gemma_capture_enabled = True
+        self.gemma_max_entries = (
+            int(os.environ.get("DIFFUSION_GEMMA_MAX_CUDA_GRAPHS", "1"))
+            if self.supports_diffusion_gemma_graphs
+            else 0
+        )
+        if self.supports_diffusion_gemma_graphs and self.gemma_max_entries <= 0:
+            raise ValueError("DIFFUSION_GEMMA_MAX_CUDA_GRAPHS must be positive")
         self._packed_masks: dict[tuple[int, int, int], torch.Tensor] = {}
         self._active_entry: _GraphEntry | None = None
-        self._workspace = torch.empty(
-            128 * 1024 * 1024, dtype=torch.uint8, device=self.device
+        self._active_gemma_entry: _GemmaDecodeGraphEntry | None = None
+        self._workspace = (
+            torch.empty(
+                (256 if self.supports_diffusion_gemma_graphs else 128)
+                * 1024 * 1024,
+                dtype=torch.uint8,
+                device=self.device,
+            )
         )
         self._capture_stream = torch.cuda.Stream(device=self.device)
-        self._graph_pool = torch.cuda.graph_pool_handle()
+        self._graph_pool = (
+            torch.cuda.graph_pool_handle() if self.supports_llada2_graphs else None
+        )
         self.capture_count = 0
         self.replay_count = 0
         self.decode_capture_count = 0
         self.decode_replay_count = 0
         self.decode_decomposed_plan_count = 0
         self.decode_component_replay_count = 0
+        self.gemma_capture_count = 0
+        self.gemma_replay_count = 0
+        self.gemma_fallback_count = 0
         self._decode_capture_counts_by_bs = {
             size: 0 for size in self.decode_capture_batch_sizes
         }
@@ -91,6 +218,8 @@ class FlashInferCudaGraphRunner:
             size: 0 for size in self.decode_capture_batch_sizes
         }
         self.invalidation_count = 0
+        self.llada2_invalidation_count = 0
+        self.gemma_invalidation_count = 0
         self.prefill_fallback_count = 0
         self.decode_fallback_count = 0
         self.capture_time_s = 0.0
@@ -103,37 +232,67 @@ class FlashInferCudaGraphRunner:
         else:
             logger.warning(message, *args)
 
-    def invalidate(self, reason: str = "unspecified", *, log: bool = True) -> None:
+    def _require_family(self, model_family: str) -> None:
+        if self.model_family != model_family:
+            raise RuntimeError(
+                f"{model_family} CUDA graph operation invoked on "
+                f"{self.model_family} runner"
+            )
+
+    def invalidate_llada2(
+        self, reason: str = "unspecified", *, log: bool = True
+    ) -> None:
+        self._require_family("llada2")
         had_graphs = bool(self._graphs or self._decode_graphs)
         if had_graphs:
             self.invalidation_count += 1
+            self.llada2_invalidation_count += 1
         if had_graphs and log:
             self.log(
-                "Invalidating CUDA graphs: prefill=%d decode=%d reason=%s",
+                "Invalidating LLaDA2 CUDA graphs: prefill=%d decode=%d reason=%s",
                 len(self._graphs), len(self._decode_graphs), reason,
             )
         self._active_entry = None
         self._graphs.clear()
         self._decode_graphs.clear()
 
+    def invalidate_gemma(
+        self, reason: str = "unspecified", *, log: bool = True
+    ) -> None:
+        self._require_family("diffusion_gemma")
+        had_graphs = bool(self._gemma_decode_graphs)
+        if had_graphs:
+            self.invalidation_count += 1
+            self.gemma_invalidation_count += 1
+        if had_graphs and log:
+            self.log(
+                "Invalidating Diffusion-Gemma CUDA graphs: decode=%d reason=%s",
+                len(self._gemma_decode_graphs), reason,
+            )
+        self._gemma_decode_graphs.clear()
+
     def reset_serving_counts(self) -> None:
         self.replay_count = 0
         self.decode_replay_count = 0
         self.decode_decomposed_plan_count = 0
         self.decode_component_replay_count = 0
+        self.gemma_replay_count = 0
+        self.gemma_fallback_count = 0
         for batch_size in self._decode_replay_counts_by_bs:
             self._decode_replay_counts_by_bs[batch_size] = 0
         self.prefill_fallback_count = 0
         self.decode_fallback_count = 0
 
-    def shutdown(self, process_group=None, *, log: bool = True) -> None:
+    def _shutdown(
+        self, invalidate_graphs, process_group=None, *, log: bool = True
+    ) -> None:
         """Release captured collectives before their NCCL process group."""
         import torch.distributed as dist
 
         torch.cuda.synchronize(self.device)
         if dist.is_available() and dist.is_initialized():
             dist.barrier(group=process_group)
-        self.invalidate(log=log)
+        invalidate_graphs(log=log)
         self._packed_masks.clear()
         self._workspace = None
         self._capture_stream = None
@@ -142,6 +301,24 @@ class FlashInferCudaGraphRunner:
         torch.cuda.empty_cache()
         if dist.is_available() and dist.is_initialized():
             dist.barrier(group=process_group)
+
+    def shutdown_llada2(self, process_group=None, *, log: bool = True) -> None:
+        self._require_family("llada2")
+        self._shutdown(
+            self.invalidate_llada2, process_group, log=log
+        )
+
+    def shutdown_gemma(self, process_group=None, *, log: bool = True) -> None:
+        self._require_family("diffusion_gemma")
+        self._shutdown(
+            self.invalidate_gemma, process_group, log=log
+        )
+
+    def shutdown(self, process_group=None, *, log: bool = True) -> None:
+        if self.supports_llada2_graphs:
+            self.shutdown_llada2(process_group, log=log)
+        else:
+            self.shutdown_gemma(process_group, log=log)
 
     def bucket(self, length: int) -> int | None:
         index = bisect.bisect_left(self.capture_sizes, int(length))
@@ -162,6 +339,7 @@ class FlashInferCudaGraphRunner:
         position_ids: torch.Tensor,
         forward_batch: ForwardBatch,
     ) -> None:
+        self._require_family("llada2")
         q_len = int(input_ids.shape[1])
         bucket = self.bucket(q_len)
         if bucket is None:
@@ -170,7 +348,7 @@ class FlashInferCudaGraphRunner:
         key = (bucket, cache.data.data_ptr(), input_ids.dtype)
         entry = self._graphs.get(key)
         if entry is None:
-            entry = self._capture(runner, bucket, key)
+            entry = self._capture_llada2_prefill(runner, bucket, key)
 
         entry.input_ids.fill_(int(runner.decoder.mask_id))
         entry.input_ids[:, :q_len].copy_(input_ids)
@@ -198,6 +376,7 @@ class FlashInferCudaGraphRunner:
         head_dim: int,
         sm_scale: float,
     ) -> torch.Tensor:
+        self._require_family("llada2")
         del num_q_heads, num_kv_heads, head_dim, sm_scale
         if self._active_entry is None:
             raise RuntimeError("FlashInfer full-prefill graph is not active")
@@ -284,6 +463,7 @@ class FlashInferCudaGraphRunner:
             self.decode_decomposed_plan_count += 1
 
     def capture_decode_batch_sizes(self, runner, batch_sizes=None) -> None:
+        self._require_family("llada2")
         started = time.perf_counter()
         cache = runner.past_key_values
         if batch_sizes is None:
@@ -291,8 +471,165 @@ class FlashInferCudaGraphRunner:
         for batch_size in sorted(set(map(int, batch_sizes)), reverse=True):
             key = (batch_size, cache.data.data_ptr(), torch.long)
             if key not in self._decode_graphs:
-                self._capture_decode(runner, batch_size, key)
+                self._capture_llada2_decode(runner, batch_size, key)
         self.capture_time_s += time.perf_counter() - started
+
+    def run_gemma_decode(
+        self,
+        *,
+        key,
+        input_ids,
+        inputs_embeds,
+        position_ids,
+        cache,
+        metadata,
+    ):
+        """Capture or replay a Diffusion-Gemma full-model decode graph."""
+        self._require_family("diffusion_gemma")
+        entry = self._gemma_decode_graphs.get(key)
+        if entry is None:
+            if (
+                not self.gemma_capture_enabled
+                or len(self._gemma_decode_graphs) >= self.gemma_max_entries
+            ):
+                self.gemma_fallback_count += 1
+                return None
+            started = time.perf_counter()
+            entry = self._capture_gemma_decode(
+                key, input_ids, inputs_embeds, position_ids, cache, metadata
+            )
+            self.capture_time_s += time.perf_counter() - started
+        entry.input_ids.copy_(input_ids)
+        entry.position_ids.copy_(position_ids)
+        if entry.inputs_embeds is not None:
+            if inputs_embeds is None:
+                raise RuntimeError(
+                    "Captured Diffusion-Gemma graph requires inputs_embeds"
+                )
+            entry.inputs_embeds.copy_(inputs_embeds)
+        self._copy_gemma_metadata(entry.metadata, metadata)
+        entry.graph.replay()
+        self.gemma_replay_count += 1
+        return SimpleNamespace(logits=entry.logits, past_key_values=cache)
+
+    @staticmethod
+    def _copy_gemma_metadata(target, source) -> None:
+        target.gather_indices.copy_(source.gather_indices)
+        target.append_batch_indices.copy_(source.append_batch_indices)
+        target.append_positions.copy_(source.append_positions)
+        target.qo_indptr.copy_(source.qo_indptr)
+        target.kv_indptr.copy_(source.kv_indptr)
+        target.kv_indices.fill_(0)
+        target.kv_indices[: source.kv_indices.numel()].copy_(source.kv_indices)
+        target.last_page_len.copy_(source.last_page_len)
+
+    @staticmethod
+    def _make_gemma_graph_metadata(metadata, cache):
+        from dataclasses import replace
+
+        capacity = metadata.batch_size * int(cache.pages_per_sequence)
+        kv_indices = torch.zeros(
+            capacity, dtype=torch.int32, device=cache.device
+        )
+        result = replace(
+            metadata,
+            kv_indices=kv_indices,
+            kv_indices_signature=(),
+            _masks={},
+        )
+        FlashInferCudaGraphRunner._copy_gemma_metadata(result, metadata)
+        return result
+
+    def run_gemma_attention(
+        self,
+        *,
+        q: torch.Tensor,
+        paged_kv_cache,
+        cache,
+        metadata,
+        layer_id: int,
+        num_q_heads: int,
+        num_kv_heads: int,
+        head_dim: int,
+        sliding_window: int | None,
+        sm_scale: float,
+    ) -> torch.Tensor:
+        self._require_family("diffusion_gemma")
+        entry = self._active_gemma_entry
+        if entry is None:
+            raise RuntimeError("Diffusion-Gemma decode graph is not active")
+        key = (
+            int(layer_id), int(num_q_heads), int(num_kv_heads), int(head_dim),
+            sliding_window, q.dtype,
+        )
+        state = entry.attention_states.get(key)
+        if state is None:
+            state = _GemmaAttentionGraphState(
+                workspace=self._workspace,
+                cache=cache,
+                batch_size=metadata.batch_size,
+                q_len=int(entry.input_ids.shape[1]),
+                num_q_heads=num_q_heads,
+                num_kv_heads=num_kv_heads,
+                head_dim=head_dim,
+                sliding_window=sliding_window,
+                dtype=q.dtype,
+                sm_scale=sm_scale,
+            )
+            entry.attention_states[key] = state
+        return state.run(q, paged_kv_cache, metadata)
+
+    def _capture_gemma_decode(
+        self, key, input_ids, inputs_embeds, position_ids, cache, metadata
+    ) -> _GemmaDecodeGraphEntry:
+        runner = self._model_runner
+        ids = input_ids.clone()
+        embeds = None if inputs_embeds is None else inputs_embeds.clone()
+        positions = position_ids.clone()
+        graph_metadata = self._make_gemma_graph_metadata(metadata, cache)
+        forward_batch = runner._paged_batch(graph_metadata, prefill=False)
+        forward_batch.flashinfer_cuda_graph_runner = self
+        forward_batch.diffusion_gemma_full_decode_graph = True
+
+        def run_model():
+            return runner.model(
+                input_ids=ids,
+                inputs_embeds=embeds,
+                position_ids=positions,
+                past_key_values=cache,
+                use_cache=True,
+                attention_mask=None,
+                forward_batch=forward_batch,
+            ).logits
+
+        graph = torch.cuda.CUDAGraph()
+        entry = _GemmaDecodeGraphEntry(
+            graph, ids, embeds, positions, torch.empty(0, device=self.device),
+            graph_metadata, {},
+        )
+        self._active_gemma_entry = entry
+        try:
+            for _ in range(2):
+                entry.logits = run_model()
+            torch.cuda.synchronize(self.device)
+            runner.tp_group.barrier()
+            with model_capture_mode(), torch.cuda.graph(
+                graph, stream=self._capture_stream
+            ):
+                entry.logits = run_model()
+            torch.cuda.synchronize(self.device)
+            runner.tp_group.barrier()
+        finally:
+            self._active_gemma_entry = None
+        self._gemma_decode_graphs[key] = entry
+        self.gemma_capture_count += 1
+        self.log(
+            "CUDA graph captured: Diffusion-Gemma decode batch_size=%d "
+            "canvas_length=%d",
+            int(ids.shape[0]),
+            int(ids.shape[1]),
+        )
+        return entry
 
     def stats(self) -> dict[str, int | float]:
         stats = {
@@ -304,7 +641,14 @@ class FlashInferCudaGraphRunner:
             "decode_decomposed_plan_count": self.decode_decomposed_plan_count,
             "decode_component_replay_count": self.decode_component_replay_count,
             "decode_fallback_count": self.decode_fallback_count,
+            "gemma_decode_capture_count": self.gemma_capture_count,
+            "gemma_decode_replay_count": self.gemma_replay_count,
+            "gemma_decode_fallback_count": self.gemma_fallback_count,
+            "gemma_decode_entry_count": len(self._gemma_decode_graphs),
+            "gemma_decode_max_entries": self.gemma_max_entries,
             "invalidation_count": self.invalidation_count,
+            "llada2_invalidation_count": self.llada2_invalidation_count,
+            "gemma_invalidation_count": self.gemma_invalidation_count,
             "capture_time_s": self.capture_time_s,
             "memory_allocated_bytes": torch.cuda.memory_allocated(self.device),
             "memory_reserved_bytes": torch.cuda.memory_reserved(self.device),
@@ -326,6 +670,7 @@ class FlashInferCudaGraphRunner:
         position_ids: torch.Tensor,
         forward_batch: ForwardBatch,
     ) -> torch.Tensor:
+        self._require_family("llada2")
         actual_batch_size = int(input_ids.shape[0])
         batch_size = actual_batch_size
         mode = getattr(runner.runner_config, "decode_cuda_graph_mode", "decomposed")
@@ -340,7 +685,7 @@ class FlashInferCudaGraphRunner:
         key = (batch_size, cache.data.data_ptr(), input_ids.dtype)
         entry = self._decode_graphs.get(key)
         if entry is None:
-            entry = self._capture_decode(runner, batch_size, key)
+            entry = self._capture_llada2_decode(runner, batch_size, key)
         if batch_size != actual_batch_size:
             # Use model mask tokens and dedicated dummy pages for padding. The
             # padded rows are needed only for collective/graph shape and their
@@ -386,6 +731,21 @@ class FlashInferCudaGraphRunner:
             padded_kv_indices = forward_batch.flashinfer_paged_kv_indices
             padded_last_page_len = forward_batch.flashinfer_paged_kv_last_page_len
             padded_slots = forward_batch.flashinfer_slot_mapping
+        padded_q_offsets = torch.zeros(
+            batch_size, dtype=torch.int32, device=self.device
+        )
+        padded_q_offsets[:actual_batch_size].copy_(
+            forward_batch.flashinfer_q_offsets
+        )
+        padded_append_batch_indices = torch.arange(
+            batch_size, dtype=torch.int32, device=self.device
+        ).repeat_interleave(input_ids.shape[1])
+        padded_append_positions = (
+            padded_q_offsets.unsqueeze(1)
+            + torch.arange(
+                input_ids.shape[1], dtype=torch.int32, device=self.device
+            ).unsqueeze(0)
+        ).reshape(-1)
         entry.input_ids.copy_(input_ids)
         entry.position_ids.copy_(position_ids)
         actual_indices = padded_kv_indices
@@ -399,6 +759,10 @@ class FlashInferCudaGraphRunner:
         entry.kv_indices[: actual_indices.numel()].copy_(actual_indices)
         entry.last_page_len.copy_(padded_last_page_len)
         entry.slot_mapping.copy_(padded_slots.reshape(-1))
+        entry.q_offsets.copy_(padded_q_offsets)
+        entry.kv_offsets.zero_()
+        entry.append_batch_indices.copy_(padded_append_batch_indices)
+        entry.append_positions.copy_(padded_append_positions)
         entry.graph.replay()
         self.decode_replay_count += 1
         self.decode_component_replay_count += 1
@@ -406,6 +770,7 @@ class FlashInferCudaGraphRunner:
         return entry.hidden_states[:actual_batch_size]
 
     def run_decode_attention(self, q: torch.Tensor, paged_kv_cache) -> torch.Tensor:
+        self._require_family("llada2")
         if not isinstance(self._active_entry, _DecodeGraphEntry):
             raise RuntimeError("FlashInfer full-decode graph is not active")
         output = self._active_entry.wrapper.run(q, paged_kv_cache)
@@ -413,7 +778,9 @@ class FlashInferCudaGraphRunner:
         q_len = int(self._active_entry.input_ids.shape[1])
         return output.view(bsz, q_len, q.shape[1], q.shape[2]).transpose(1, 2).contiguous()
 
-    def _capture_decode(self, runner, batch_size: int, key: tuple) -> _DecodeGraphEntry:
+    def _capture_llada2_decode(
+        self, runner, batch_size: int, key: tuple
+    ) -> _DecodeGraphEntry:
         import flashinfer
 
         cache = runner.past_key_values
@@ -445,13 +812,32 @@ class FlashInferCudaGraphRunner:
         last_page_len = torch.full(
             (batch_size,), page_size, dtype=torch.int32, device=self.device
         )
-        wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(
-            self._workspace, kv_layout="NHD", use_cuda_graph=True,
+        q_offsets = torch.full(
+            (batch_size,), q_offset, dtype=torch.int32, device=self.device
+        )
+        kv_offsets = torch.zeros(
+            batch_size, dtype=torch.int32, device=self.device
+        )
+        native_graph = getattr(
+            runner.runner_config, "decode_cuda_graph_mode", "decomposed"
+        ) == "padded"
+        wrapper_kwargs = dict(
+            kv_layout="NHD", use_cuda_graph=True,
             qo_indptr_buf=qo_indptr,
             paged_kv_indptr_buf=kv_indptr,
             paged_kv_indices_buf=kv_indices,
             paged_kv_last_page_len_buf=last_page_len,
             backend="fa2",
+        )
+        if native_graph:
+            wrapper_kwargs.update(
+                q_offsets_buf=q_offsets,
+                kv_offsets_buf=kv_offsets,
+                block_extend=True,
+                block_size=block_length,
+            )
+        wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(
+            self._workspace, **wrapper_kwargs
         )
         input_ids = torch.full(
             (batch_size, block_length), int(runner.decoder.mask_id), dtype=torch.long,
@@ -467,9 +853,18 @@ class FlashInferCudaGraphRunner:
         kv_lens = torch.full(
             (batch_size,), max_kv_len, dtype=torch.int32, device=self.device
         )
-        q_offsets = torch.full(
-            (batch_size,), q_offset, dtype=torch.int32, device=self.device
-        )
+        append_batch_indices = torch.arange(
+            batch_size, dtype=torch.int32, device=self.device
+        ).repeat_interleave(block_length)
+        append_positions = (
+            q_offsets.unsqueeze(1)
+            + torch.arange(
+                block_length, dtype=torch.int32, device=self.device
+            ).unsqueeze(0)
+        ).reshape(-1)
+        plan_kwargs = {}
+        if native_graph:
+            plan_kwargs.update(q_offsets=q_offsets, kv_offsets=kv_offsets)
         wrapper.plan(
             qo_indptr, kv_indptr, kv_indices, last_page_len,
             num_qo_heads=runner.model.model.config.num_attention_heads
@@ -485,6 +880,7 @@ class FlashInferCudaGraphRunner:
             q_data_type=torch.bfloat16,
             kv_data_type=cache.data.dtype,
             disable_split_kv=True,
+            **plan_kwargs,
         )
         forward_batch = ForwardBatch(
             forward_mode=ForwardMode.DECODE,
@@ -501,10 +897,14 @@ class FlashInferCudaGraphRunner:
             flashinfer_paged_kv_last_page_len=last_page_len,
             flashinfer_seq_ids=torch.arange(batch_size, dtype=torch.long, device=self.device),
             flashinfer_slot_mapping=slot_mapping.view(batch_size, block_length),
+            flashinfer_append_indptr=qo_indptr,
+            flashinfer_append_batch_indices=append_batch_indices,
+            flashinfer_append_positions=append_positions,
             flashinfer_block_length=block_length,
             flashinfer_page_size=page_size,
             flashinfer_cuda_graph_runner=self,
             flashinfer_full_decode_graph=True,
+            flashinfer_use_native_append=native_graph,
         )
         past_key_values = [
             cache.layer_paged_kv(layer_id) for layer_id in range(cache.num_layers)
@@ -527,7 +927,8 @@ class FlashInferCudaGraphRunner:
         )
         entry = _DecodeGraphEntry(
             torch.cuda.CUDAGraph(), input_ids, position_ids, kv_indptr, kv_indices,
-            last_page_len, slot_mapping, wrapper, placeholder,
+            last_page_len, slot_mapping, q_offsets, kv_offsets,
+            append_batch_indices, append_positions, wrapper, placeholder,
         )
         self._active_entry = entry
         try:
@@ -554,7 +955,9 @@ class FlashInferCudaGraphRunner:
         )
         return entry
 
-    def _capture(self, runner, bucket: int, key: tuple) -> _GraphEntry:
+    def _capture_llada2_prefill(
+        self, runner, bucket: int, key: tuple
+    ) -> _GraphEntry:
         import flashinfer
         from flashinfer import segment_packbits
 

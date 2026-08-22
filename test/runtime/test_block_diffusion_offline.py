@@ -7,6 +7,10 @@ from fluxserve.backend.execution.runners.flashinfer_diffusion import (
 )
 from fluxserve.backend.engine.request import RequestState
 from fluxserve.backend.layers.attention.utils import FlashInferPagedBlockExtendState
+from fluxserve.backend.layers.attention.flashinfer import FlashInferPagedPrefillAttention
+from fluxserve.backend.execution.forward_batch_info import ForwardBatch
+from fluxserve.backend.managers.kvcache import PagedKVCache
+import pytest
 
 
 def test_flashinfer_unaligned_prompt_prefills_aligned_prefix_and_replays_partial_block():
@@ -105,3 +109,64 @@ def test_online_block_start_reuses_partial_prompt_block():
 
     state.mark_decode_block_done()
     assert state.aligned_prefill_length(64) + state.current_decode_block * 64 == 128
+
+
+@pytest.mark.parametrize("external_pages", [False, True])
+def test_flashinfer_native_append_matches_fluxserve_slot_mapping(external_pages):
+    if not torch.cuda.is_available():
+        pytest.skip("FlashInfer paged append requires CUDA")
+    pytest.importorskip("flashinfer")
+
+    cache = PagedKVCache(
+        num_layers=1,
+        batch_size=4,
+        local_kv_heads=2,
+        max_length=32,
+        head_dim=128,
+        page_size=8,
+        num_pages=24 if external_pages else None,
+        dtype=torch.bfloat16,
+        device="cuda",
+    )
+    seq_ids = torch.tensor([3, 1], device="cuda")
+    if external_pages:
+        cache.set_page_tables(seq_ids, [[7, 2, 11], [5, 13]])
+    q_offsets = torch.tensor([9, 3], dtype=torch.int32, device="cuda")
+    q_lens = torch.tensor([6, 4], dtype=torch.int32, device="cuda")
+    kv_lens = q_offsets + q_lens
+    kv_indptr, kv_indices, last_page_len = cache.flashinfer_paged_metadata(
+        seq_ids=seq_ids, lengths=kv_lens
+    )
+
+    runner = FlashInferDiffusionRunner.__new__(FlashInferDiffusionRunner)
+    runner.device = torch.device("cuda")
+    forward_batch = ForwardBatch(
+        flashinfer_kv_indptr=kv_indptr,
+        flashinfer_paged_kv_indices=kv_indices,
+        flashinfer_paged_kv_last_page_len=last_page_len,
+    )
+    runner._attach_flashinfer_append_metadata(
+        forward_batch, q_lens=q_lens, kv_lens=kv_lens
+    )
+    nnz = int(q_lens.sum())
+    packed_k = torch.arange(
+        nnz * 2 * 128, device="cuda", dtype=torch.float32
+    ).to(torch.bfloat16).reshape(nnz, 2, 128)
+    packed_v = -packed_k
+    layer_cache = cache.layer_paged_kv(0)
+    FlashInferPagedPrefillAttention._append_native(
+        packed_k, packed_v, layer_cache, forward_batch
+    )
+    torch.cuda.synchronize()
+
+    slots = torch.cat([
+        cache.slot_mapping(
+            seq_ids[i : i + 1],
+            torch.arange(int(q_offsets[i]), int(kv_lens[i]), device="cuda").unsqueeze(0),
+        ).reshape(-1)
+        for i in range(2)
+    ])
+    actual_k = layer_cache[0][slots // cache.page_size, slots % cache.page_size]
+    actual_v = layer_cache[1][slots // cache.page_size, slots % cache.page_size]
+    torch.testing.assert_close(actual_k, packed_k)
+    torch.testing.assert_close(actual_v, packed_v)

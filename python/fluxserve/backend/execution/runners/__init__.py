@@ -21,5 +21,11 @@
 from .base import ModelRunner
 from .block_diffusion import BlockDiffusionRunner
 from .flashinfer_diffusion import FlashInferDiffusionRunner
+from .diffusion_gemma import DiffusionGemmaRunner
 
-__all__ = ["BlockDiffusionRunner", "FlashInferDiffusionRunner", "ModelRunner"]
+__all__ = [
+    "BlockDiffusionRunner",
+    "DiffusionGemmaRunner",
+    "FlashInferDiffusionRunner",
+    "ModelRunner",
+]

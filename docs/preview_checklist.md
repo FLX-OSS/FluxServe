@@ -4,6 +4,8 @@
 - [x] LLaDA2.0
   - [x] [LLaDA2.0-mini](https://huggingface.co/inclusionAI/LLaDA2.0-mini)
   - [x] [LLaDA2.0-flash](https://huggingface.co/inclusionAI/LLaDA2.0-flash)
+- [ ] DiffusionGemma (WIP)
+
 
 ### Engine Support
 - [x] Kernel

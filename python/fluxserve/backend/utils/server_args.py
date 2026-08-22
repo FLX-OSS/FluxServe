@@ -56,6 +56,7 @@ class ServerArgs:
     max_num_seqs: int = 8
     max_scheduled_tokens: int = 512
     max_model_len: int = 2048
+    generation_block_size: int = 1
     stream_interval: int = 1
     enable_prefix_caching: bool = False
     scheduler_policy: str = "default"

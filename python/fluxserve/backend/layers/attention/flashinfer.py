@@ -350,6 +350,11 @@ class FlashInferPagedPrefillAttention:
             v,
             prefill_lens,
             page_size,
+            forward_batch.flashinfer_paged_kv_indices,
+            forward_batch.flashinfer_kv_indptr,
+            forward_batch.flashinfer_paged_kv_last_page_len,
+            q_offsets,
+            forward_batch,
         )
         q_packed = self._pack_q(q, prefill_lens)
         if forward_batch.flashinfer_full_prefill_graph:
@@ -381,13 +386,6 @@ class FlashInferPagedPrefillAttention:
             q.device.index,
         )
         state = get_flashinfer_paged_block_extend_state(q.device)
-        if state.needs_plan(plan_key) and forward_batch.flashinfer_custom_mask is None:
-            forward_batch.flashinfer_custom_mask = state.make_mask(
-                q_offsets=q_offsets,
-                qo_indptr=forward_batch.flashinfer_qo_indptr,
-                kv_lens=forward_batch.flashinfer_kv_lens,
-                block_length=block_length,
-            )
         output = state.run(
             q_packed,
             past_key_values,
@@ -397,7 +395,8 @@ class FlashInferPagedPrefillAttention:
             forward_batch.flashinfer_paged_kv_last_page_len,
             forward_batch.flashinfer_kv_lens,
             q_offsets,
-            forward_batch.flashinfer_custom_mask,
+            forward_batch.flashinfer_kv_offsets,
+            None,
             plan_key,
             self.config.num_heads,
             self.config.num_kv_heads,
@@ -426,8 +425,12 @@ class FlashInferPagedPrefillAttention:
         v: torch.Tensor,
         prefill_lens: tuple[int, ...],
         page_size: int,
+        kv_indices: torch.Tensor,
+        kv_indptr: torch.Tensor,
+        last_page_len: torch.Tensor,
+        q_offsets: torch.Tensor,
+        forward_batch: ForwardBatch,
     ) -> None:
-        k_cache, v_cache = past_key_values
         k_parts = []
         v_parts = []
         for batch_idx, prefill_len in enumerate(prefill_lens):
@@ -441,14 +444,54 @@ class FlashInferPagedPrefillAttention:
                 .transpose(0, 1)
                 .contiguous()
             )
-        flat_slots = []
-        for batch_idx, prefill_len in enumerate(prefill_lens):
-            flat_slots.append(slot_mapping[batch_idx, : int(prefill_len)])
-        flat_slots = torch.cat(flat_slots, dim=0).to(device=k.device, dtype=torch.long)
+        packed_k = torch.cat(k_parts, dim=0)
+        packed_v = torch.cat(v_parts, dim=0)
+        if (
+            not forward_batch.flashinfer_full_prefill_graph
+            or forward_batch.flashinfer_use_native_append
+        ):
+            self._append_native(
+                packed_k, packed_v, past_key_values, forward_batch
+            )
+            return
+        k_cache, v_cache = past_key_values
+        flat_slots = torch.cat([
+            slot_mapping[batch_idx, : int(prefill_len)]
+            for batch_idx, prefill_len in enumerate(prefill_lens)
+        ], dim=0).to(device=k.device, dtype=torch.long)
         pages = flat_slots // int(page_size)
         offsets = flat_slots % int(page_size)
-        k_cache[pages, offsets] = torch.cat(k_parts, dim=0)
-        v_cache[pages, offsets] = torch.cat(v_parts, dim=0)
+        k_cache[pages, offsets] = packed_k
+        v_cache[pages, offsets] = packed_v
+
+    @staticmethod
+    def _append_native(packed_k, packed_v, past_key_values, forward_batch) -> None:
+        import flashinfer
+
+        batch_indices = forward_batch.flashinfer_append_batch_indices
+        positions = forward_batch.flashinfer_append_positions
+        if batch_indices is None or positions is None:
+            raise RuntimeError("FlashInfer paged append metadata is missing.")
+        nnz = packed_k.shape[0]
+        if packed_v.shape[0] != nnz or batch_indices.numel() != nnz or positions.numel() != nnz:
+            raise RuntimeError(
+                "FlashInfer paged append token count mismatch: "
+                f"k={nnz}, v={packed_v.shape[0]}, batch_indices={batch_indices.numel()}, "
+                f"positions={positions.numel()}."
+            )
+        if batch_indices.dtype != torch.int32 or positions.dtype != torch.int32:
+            raise RuntimeError("FlashInfer paged append indices must use int32.")
+        flashinfer.append_paged_kv_cache(
+            packed_k,
+            packed_v,
+            batch_indices,
+            positions,
+            past_key_values,
+            forward_batch.flashinfer_paged_kv_indices,
+            forward_batch.flashinfer_kv_indptr,
+            forward_batch.flashinfer_paged_kv_last_page_len,
+            kv_layout="NHD",
+        )
 
     def _pad_output(
         self,
@@ -531,6 +574,11 @@ class FlashInferPagedAttention:
             k,
             v,
             page_size,
+            forward_batch.flashinfer_paged_kv_indices,
+            forward_batch.flashinfer_kv_indptr,
+            forward_batch.flashinfer_paged_kv_last_page_len,
+            q_offsets,
+            forward_batch,
         )
         q_packed = q.transpose(1, 2).contiguous().view(
             bsz * q_len,
@@ -560,13 +608,6 @@ class FlashInferPagedAttention:
             q.device.index,
         )
         state = get_flashinfer_paged_block_extend_state(q.device)
-        if state.needs_plan(plan_key) and forward_batch.flashinfer_custom_mask is None:
-            forward_batch.flashinfer_custom_mask = state.make_mask(
-                q_offsets=q_offsets,
-                qo_indptr=forward_batch.flashinfer_qo_indptr,
-                kv_lens=forward_batch.flashinfer_kv_lens,
-                block_length=block_length,
-            )
         output = state.run(
             q_packed,
             past_key_values,
@@ -576,7 +617,8 @@ class FlashInferPagedAttention:
             forward_batch.flashinfer_paged_kv_last_page_len,
             forward_batch.flashinfer_kv_lens,
             q_offsets,
-            forward_batch.flashinfer_custom_mask,
+            forward_batch.flashinfer_kv_offsets,
+            None,
             plan_key,
             self.config.num_heads,
             self.config.num_kv_heads,
@@ -599,16 +641,29 @@ class FlashInferPagedAttention:
         k: torch.Tensor,
         v: torch.Tensor,
         page_size: int,
+        kv_indices: torch.Tensor,
+        kv_indptr: torch.Tensor,
+        last_page_len: torch.Tensor,
+        q_offsets: torch.Tensor,
+        forward_batch: ForwardBatch,
     ) -> None:
-        k_cache, v_cache = past_key_values
-        flat_slots = slot_mapping.reshape(-1).to(device=k.device, dtype=torch.long)
-        pages = flat_slots // int(page_size)
-        offsets = flat_slots % int(page_size)
         k_values = k.transpose(1, 2).contiguous().view(
             -1,
             self.config.num_kv_heads,
             self.config.head_dim,
         )
         v_values = v.transpose(1, 2).contiguous().view_as(k_values)
+        if (
+            not forward_batch.flashinfer_full_decode_graph
+            or forward_batch.flashinfer_use_native_append
+        ):
+            FlashInferPagedPrefillAttention._append_native(
+                k_values, v_values, past_key_values, forward_batch
+            )
+            return
+        k_cache, v_cache = past_key_values
+        flat_slots = slot_mapping.reshape(-1).to(device=k.device, dtype=torch.long)
+        pages = flat_slots // int(page_size)
+        offsets = flat_slots % int(page_size)
         k_cache[pages, offsets] = k_values
         v_cache[pages, offsets] = v_values

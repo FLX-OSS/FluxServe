@@ -188,7 +188,7 @@ def _resolve_cuda_lib_flags() -> list[str]:
 def _detect_cuda_archs() -> list[str]:
     return list(
         resolve_cuda_arches(
-            ("90", "100a"),
+            ("90", "100a", "120"),
             nvcc=_nvcc(),
             legacy_env_names=(
                 "FLASHINFER_CUDA_ARCH_LIST",

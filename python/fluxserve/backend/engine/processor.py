@@ -50,8 +50,20 @@ class InputProcessor:
                 f"request input length {len(input_ids)} exceeds max_model_len={self.server_args.max_model_len}"
             )
 
+        generation_block_size = max(
+            1, int(getattr(self.server_args, "generation_block_size", 1))
+        )
+        usable_context = (
+            remaining_context // generation_block_size * generation_block_size
+        )
+        if usable_context <= 0:
+            raise ValueError(
+                f"request input length {len(input_ids)} does not leave room for "
+                f"a generation block of {generation_block_size} tokens within "
+                f"max_model_len={self.server_args.max_model_len}"
+            )
         max_new_tokens = int(params.get("max_tokens", params.get("max_new_tokens", 128)))
-        max_new_tokens = max(1, min(max_new_tokens, remaining_context))
+        max_new_tokens = max(1, min(max_new_tokens, usable_context))
         ignore_eos = bool(params.get("ignore_eos", False))
 
         return RequestState(

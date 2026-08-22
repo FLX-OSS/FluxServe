@@ -29,6 +29,7 @@ import os
 from typing import TYPE_CHECKING, List, Optional
 
 import torch
+import torch.nn.functional as F
 import triton.language as tl
 from flux_kernel.ops import silu_and_mul as flux_silu_and_mul
 
@@ -341,6 +342,14 @@ def swiglu_with_alpha_and_limit(x, gemm1_alpha, gemm1_limit):
     return gate * torch.sigmoid(gate * gemm1_alpha) * (up + 1)
 
 
+@torch.compile
+def gelu_tanh_and_mul(x):
+    # Fused w13 checkpoints concatenate the complete gate projection followed
+    # by the complete up projection, matching ``linear(...).chunk(2)``.
+    gate, up = x.chunk(2, dim=-1)
+    return F.gelu(gate, approximate="tanh") * up
+
+
 def fused_experts_impl(
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -496,7 +505,7 @@ def fused_experts_impl(
             per_channel_quant=per_channel_quant,
             block_shape=block_shape,
         )
-        if activation != "silu":
+        if activation not in ("silu", "gelu_tanh"):
             raise ValueError(f"Unsupported activation: {activation=}")
         if gemm1_alpha is not None:
             assert gemm1_limit is not None
@@ -506,7 +515,12 @@ def fused_experts_impl(
                 gemm1_limit,
             )
         else:
-            flux_silu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
+            if activation == "gelu_tanh":
+                intermediate_cache2.copy_(
+                    gelu_tanh_and_mul(intermediate_cache1.view(-1, N))
+                )
+            else:
+                flux_silu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
 
         invoke_fused_moe_kernel(
             intermediate_cache2,

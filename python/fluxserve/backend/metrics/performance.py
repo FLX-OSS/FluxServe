@@ -56,9 +56,24 @@ class DecodeBlockMetric:
         }
 
 
-def count_completion_tokens(row: Any, input_len: int, eos_id: int, mask_id: int) -> int:
+def _eos_mask(tokens: Any, eos_id: int | Sequence[int]):
+    eos_ids = (eos_id,) if isinstance(eos_id, int) else tuple(eos_id)
+    if not eos_ids:
+        raise ValueError("at least one EOS token ID is required")
+    mask = tokens == int(eos_ids[0])
+    for stop_id in eos_ids[1:]:
+        mask |= tokens == int(stop_id)
+    return mask
+
+
+def count_completion_tokens(
+    row: Any,
+    input_len: int,
+    eos_id: int | Sequence[int],
+    mask_id: int,
+) -> int:
     generated = row[input_len:]
-    eos_indices = (generated == eos_id).nonzero(as_tuple=True)[0]
+    eos_indices = _eos_mask(generated, eos_id).nonzero(as_tuple=True)[0]
     if eos_indices.numel() > 0:
         return int(eos_indices[0].item()) + 1
     return int((generated != mask_id).sum().item())
@@ -71,7 +86,7 @@ def record_batch_performance_metrics(
     start_idx: int,
     nfe: int,
     sample_time: float,
-    eos_id: int,
+    eos_id: int | Sequence[int],
     mask_id: int,
 ) -> BatchPerformanceMetrics:
     batch_token_number = 0
