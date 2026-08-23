@@ -1,7 +1,10 @@
 ### Model Support
 - [ ] LLaDA2.1
 - [ ] LLaDA2.2
-- [ ] DiffusionGemma
+
+
+### Kernel Support
+- [ ] Flash-Attn-4
 
 ### Quantization Support
 - [ ] FP8
