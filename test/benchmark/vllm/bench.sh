@@ -2,13 +2,17 @@
 
 set -euo pipefail
 
-# Keep lazy native builds deterministic for the RTX PRO 6000 benchmark.
-# export FLUX_KERNEL_CUDA_ARCH="${FLUX_KERNEL_CUDA_ARCH:-120}"
+export PYTHONNOUSERSITE=1
+
+PYTHON="${PYTHON:-python3}"
 
 EVALSCOPE_COMMIT=acd09b44384d53174768bb1063f675420f76fae9
 EVALSCOPE_VENV="${EVALSCOPE_VENV:-/tmp/evalscope-venv}"
-python -m venv "${EVALSCOPE_VENV}"
-"${EVALSCOPE_VENV}/bin/python" -m pip install \
+VENV_PYTHON="${EVALSCOPE_VENV}/bin/python"
+if [[ ! -x "${VENV_PYTHON}" ]] || ! "${VENV_PYTHON}" -c 'import sys; print(sys.executable)' >/dev/null 2>&1; then
+    "${PYTHON}" -m venv --clear --copies "${EVALSCOPE_VENV}"
+fi
+"${VENV_PYTHON}" -m pip install \
     "evalscope[perf] @ git+https://github.com/modelscope/evalscope.git@${EVALSCOPE_COMMIT}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,7 +23,7 @@ SERVER_LOG=
 
 stop_server() {
     if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
-        echo "Stopping FluxServe (pgid $SERVER_PID)..."
+        echo "Stopping vLLM (pgid $SERVER_PID)..."
         kill -TERM -"$SERVER_PID" 2>/dev/null || true
         wait "$SERVER_PID" 2>/dev/null || true
     fi
@@ -85,10 +89,13 @@ run_perf() {
         --dataset line_by_line
         --dataset-path "$dataset_path"
         --max-tokens 2048
+        # DiffusionGemma rejects sampling fields such as temperature.  EvalScope
+        # defaults temperature to 0.0, so explicitly replace it with JSON null.
+        --extra-args '{"temperature":null}'
         --no-stream
         --num 1000
         --parallel 16
-        --rate 4
+        --rate 16
         --name "${benchmark}_${config}"
         --outputs-dir "$output_dir"
         --no-timestamp
@@ -97,16 +104,14 @@ run_perf() {
         perf_args+=("$number_flag" "$number_arg")
     fi
 
-    "${EVALSCOPE_VENV}/bin/python" "${perf_args[@]}"
+    "${VENV_PYTHON}" "${perf_args[@]}"
     stop_server
     wait_for_port_free
 }
 
 trap stop_server EXIT
 
-run_perf gsm8k tp1_ep1_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
-run_perf gsm8k tp4_ep4_flash inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
-run_perf gsm8k tp4_ep4_gemma google/diffusiongemma-26B-A4B-it gsm8k.jsonl 
-
+# run_perf gsm8k tp1_ep1_gemma google/diffusiongemma-26B-A4B-it openai/gsm8k_openai.jsonl
+run_perf bigcodebench tp4_ep4_gemma google/diffusiongemma-26B-A4B-it openai/bigcodebench.jsonl
 
 exit 0
