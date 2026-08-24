@@ -13,6 +13,7 @@
         - [x] Torch-SDPA
         - [x] Torch-Flex
         - [x] Flashinfer-Paged
+        - [ ] Flash-Attn-4
     - [x] MoE Fused Kernels
         - [x] sgl-kernel
     - [x] Flux-Kernels

@@ -16,6 +16,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 OUTPUTS_DIR="${SCRIPT_DIR}/outputs/$(date +%Y%m%d_%H%M%S)"
 SERVER_PID=
 SERVER_LOG=
+RATES=(1 2 4 8 16)
 
 stop_server() {
     if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -76,28 +77,34 @@ run_perf() {
     SERVER_PID=$!
     wait_for_ready
 
-    perf_args=(
-        -m evalscope.cli.cli perf
-        --model "$model"
-        --url http://127.0.0.1:8000/v1/chat/completions
-        --api openai
-        --tokenizer-path "$model"
-        --dataset line_by_line
-        --dataset-path "$dataset_path"
-        --max-tokens 2048
-        --no-stream
-        --num 1000
-        --parallel 16
-        --rate 4
-        --name "${benchmark}_${config}"
-        --outputs-dir "$output_dir"
-        --no-timestamp
-    )
-    if [[ -n "$number_arg" ]]; then
-        perf_args+=("$number_flag" "$number_arg")
-    fi
+    for rate in "${RATES[@]}"; do
+        local rate_output_dir="${output_dir}/rate_${rate}"
+        mkdir -p "$rate_output_dir"
 
-    "${EVALSCOPE_VENV}/bin/python" "${perf_args[@]}"
+        perf_args=(
+            -m evalscope.cli.cli perf
+            --model "$model"
+            --url http://127.0.0.1:8000/v1/chat/completions
+            --api openai
+            --tokenizer-path "$model"
+            --dataset line_by_line
+            --dataset-path "$dataset_path"
+            --max-tokens 2048
+            --no-stream
+            --num 1000
+            --parallel 16
+            --rate "$rate"
+            --name "${benchmark}_${config}_rate_${rate}"
+            --outputs-dir "$rate_output_dir"
+            --no-timestamp
+        )
+        if [[ -n "$number_arg" ]]; then
+            perf_args+=("$number_flag" "$number_arg")
+        fi
+
+        echo "=== Running ${benchmark}/${config} at rate ${rate} ==="
+        "${EVALSCOPE_VENV}/bin/python" "${perf_args[@]}"
+    done
     stop_server
     wait_for_port_free
 }
@@ -106,7 +113,12 @@ trap stop_server EXIT
 
 run_perf gsm8k tp1_ep1_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
 run_perf gsm8k tp4_ep4_flash inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
+run_perf bigcodebench tp1_ep1_mini inclusionAI/LLaDA2.0-mini openai/bigcodebench.jsonl 
+run_perf bigcodebench tp4_ep4_flash inclusionAI/LLaDA2.0-mini openai/bigcodebench.jsonl 
+run_perf gsm8k tp1_ep1_gemma google/diffusiongemma-26B-A4B-it gsm8k.jsonl 
 run_perf gsm8k tp4_ep4_gemma google/diffusiongemma-26B-A4B-it gsm8k.jsonl 
+run_perf bigcodebench tp1_ep1_gemma google/diffusiongemma-26B-A4B-it openai/bigcodebench.jsonl 
+run_perf bigcodebench tp4_ep4_gemma google/diffusiongemma-26B-A4B-it openai/bigcodebench.jsonl 
 
 
 exit 0
