@@ -22,11 +22,13 @@ import asyncio
 import hashlib
 import json
 import time
+from collections.abc import AsyncIterator
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from collections.abc import AsyncIterator
 
+from fluxserve import __version__
 from fluxserve.backend.engine import AsyncLLM, GenerateReqInput
+from fluxserve.backend.entrypoints.api_utils import log_startup_banner
 from fluxserve.prompt_utils import render_openai_messages
 
 
@@ -324,7 +326,15 @@ def create_app(engine: AsyncLLM):
     return app
 
 
-def run(engine: AsyncLLM, host: str, port: int):
+def run(engine: AsyncLLM, host: str, port: int, *, runner_config=None):
     import uvicorn
 
+    log_startup_banner(
+        version=__version__,
+        model=engine.server_args.model_name,
+        host=host,
+        port=port,
+        server_config=engine.server_args,
+        runner_config=runner_config,
+    )
     uvicorn.run(create_app(engine), host=host, port=port, timeout_keep_alive=30)

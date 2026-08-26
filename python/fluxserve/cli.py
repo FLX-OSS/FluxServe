@@ -458,7 +458,12 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
                 scheduler=scheduler,
             )
             try:
-                run(engine, host=args.host, port=args.port)
+                run(
+                    engine,
+                    host=args.host,
+                    port=args.port,
+                    runner_config=runner_config,
+                )
             finally:
                 asyncio.run(executor.shutdown_workers())
         else:
