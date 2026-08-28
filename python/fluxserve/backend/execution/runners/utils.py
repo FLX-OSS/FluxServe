@@ -1,6 +1,71 @@
 import torch
 
 
+class DecodeEditBudget:
+    """Loop-local per-row state for LLaDA2.1 joint (editing) decoding.
+
+    Indexed by global seq_id, never by position within a sub-batch, so it
+    survives CUDA-graph batch decomposition. ``post_steps`` counts mask-free
+    iterations that still changed the block (T2T edits); once it reaches
+    ``max_post_steps`` the row's T2T is disabled via ``allow_edit`` and the
+    next iteration finishes the block with pre-update == post-update tokens,
+    keeping the committed KV consistent with the final tokens.
+
+    ``block_iters`` bounds the per-block iteration count
+    (``block_length + max_post_steps + 1``); exceeding it means the decode
+    loop is not converging and is reported instead of spinning forever.
+    """
+
+    def __init__(
+        self,
+        num_rows: int,
+        max_post_steps: int,
+        block_length: int,
+        device,
+        max_block_iters_override: int | None = None,
+    ):
+        self.max_post_steps = int(max_post_steps)
+        self.block_length = int(block_length)
+        self._max_block_iters_override = max_block_iters_override
+        self.post_steps = torch.zeros(num_rows, dtype=torch.long, device=device)
+        self.block_iters = torch.zeros(num_rows, dtype=torch.long, device=device)
+
+    @property
+    def max_block_iters(self) -> int:
+        # levenshtein_joint decoding is bounded by max_steps_per_block, not by
+        # the mask count; the runner passes an override in that case.
+        if self._max_block_iters_override is not None:
+            return int(self._max_block_iters_override)
+        return self.block_length + self.max_post_steps + 1
+
+    def allow_edit(self, seq_ids: torch.Tensor) -> torch.Tensor:
+        return self.post_steps[seq_ids] < self.max_post_steps
+
+    def update(
+        self,
+        seq_ids: torch.Tensor,
+        had_mask: torch.Tensor,
+        changed: torch.Tensor,
+        block_finished: torch.Tensor,
+    ) -> None:
+        self.post_steps[seq_ids] += ((~had_mask) & changed).long()
+        self.block_iters[seq_ids] += 1
+        finished_ids = seq_ids[block_finished]
+        self.post_steps[finished_ids] = 0
+        self.block_iters[finished_ids] = 0
+        # A row that finishes on the last budgeted iteration was reset above;
+        # any row still counting at the full budget is genuinely stuck.
+        over = self.block_iters[seq_ids] >= self.max_block_iters
+        if bool(over.any()):
+            stuck = seq_ids[over].tolist()
+            raise RuntimeError(
+                "decode block did not finish within "
+                f"block_length + max_post_steps + 1 = {self.max_block_iters} "
+                f"iterations for seq_ids {stuck} "
+                f"(post_steps={self.post_steps[seq_ids][over].tolist()})."
+            )
+
+
 def align_exp2(x: torch.Tensor | int):
     if isinstance(x, torch.Tensor):
         assert x.ndim == 0

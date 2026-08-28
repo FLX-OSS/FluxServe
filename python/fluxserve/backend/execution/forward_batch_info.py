@@ -128,10 +128,18 @@ class RunnerConfig:
     early_stop: bool = True
     cache: str = ""
     max_cache_length_align: int = 128
-    parallel_decoding: str = "hierarchy"
+    parallel_decoding: str = "threshold"
     threshold: float = 0.9
     low_threshold: float = 0.3
     use_credit: bool = False
+    editing_threshold: float = 0.5
+    max_post_steps: int = 16
+    num_to_transfer: int = 1
+    # LLaDA2.2 levenshtein_joint decoding. steps=0 means "use block_length".
+    steps: int = 0
+    max_steps_per_block: int = 1000
+    delete_token_id: int = 156930
+    split_token_id: int = 156931
     mask_id: int = 156895
     eos_id: int = 156892
     attention_backend: str = "sdpa"
@@ -157,6 +165,31 @@ class RunnerConfig:
         self.enable_cuda_graph = bool(
             self.enable_prefill_cuda_graph or self.enable_decode_cuda_graph
         )
+        if not 0.0 <= self.editing_threshold <= 1.0:
+            raise ValueError(
+                f"editing_threshold must be in [0, 1], got {self.editing_threshold!r}"
+            )
+        if self.max_post_steps < 0:
+            raise ValueError(
+                f"max_post_steps must be non-negative, got {self.max_post_steps!r}"
+            )
+        if self.num_to_transfer < 1:
+            raise ValueError(
+                f"num_to_transfer must be >= 1, got {self.num_to_transfer!r}"
+            )
+        if self.parallel_decoding in {"joint_threshold", "levenshtein_joint"} and not (
+            0.0 <= self.threshold <= 1.0
+        ):
+            raise ValueError(
+                f"{self.parallel_decoding} requires threshold in [0, 1], "
+                f"got {self.threshold!r}"
+            )
+        if self.steps < 0:
+            raise ValueError(f"steps must be non-negative, got {self.steps!r}")
+        if self.max_steps_per_block < 2:
+            raise ValueError(
+                f"max_steps_per_block must be >= 2, got {self.max_steps_per_block!r}"
+            )
         if self.attention_backend not in {"sdpa", "flex", "flashinfer"}:
             raise ValueError(
                 "attention_backend must be one of 'sdpa', 'flex', or 'flashinfer', "
