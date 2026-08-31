@@ -30,6 +30,7 @@ from fluxserve.backend.execution.forward_batch_info import (
     RunnerConfig,
 )
 from fluxserve.backend.execution.runners.utils import (
+    DecodeEditBudget,
     align_exp2,
     gather_blocks,
     select_batch_sequences_by_mask_number,
@@ -275,6 +276,7 @@ class BlockDiffusionRunner(ModelRunner):
             pos_ids,
             num_layers,
             mini_batch_size,
+            prompt_lengths=non_mask_number,
         )
 
         logger.info("The number of diffusion iterations: %s", self.num_forwards)
@@ -354,6 +356,52 @@ class BlockDiffusionRunner(ModelRunner):
             self.num_forwards += 1
             prefilling_flag[seq_ids] = False
 
+    def _make_decode_loop_state(self, num_rows):
+        """Per-decode-loop editing state: iteration budget and, for the
+        levenshtein_joint decoder, the per-row block-refinement state."""
+        needs_row_state = getattr(self.decoder, "needs_row_state", False)
+        edit_budget = DecodeEditBudget(
+            num_rows,
+            getattr(self.runner_config, "max_post_steps", 16),
+            self.block_length,
+            self.device,
+            max_block_iters_override=(
+                self.decoder.max_block_iters if needs_row_state else None
+            ),
+        )
+        row_state = (
+            self.decoder.make_row_state(num_rows, self.block_length, self.device)
+            if needs_row_state
+            else None
+        )
+        return edit_budget, row_state
+
+    def _decoder_editing_kwargs(
+        self, seq_ids, prompt_lengths, edit_budget, row_state
+    ):
+        if getattr(self.decoder, "needs_editing_inputs", False):
+            if prompt_lengths is None or edit_budget is None:
+                raise RuntimeError(
+                    "joint_threshold decoding requires prompt_lengths and an "
+                    "edit budget; the decode loop was not given them."
+                )
+            return dict(
+                prompt_lengths=prompt_lengths[seq_ids],
+                allow_edit=edit_budget.allow_edit(seq_ids),
+            )
+        if getattr(self.decoder, "needs_row_state", False):
+            if prompt_lengths is None or row_state is None:
+                raise RuntimeError(
+                    "levenshtein_joint decoding requires prompt_lengths and a "
+                    "row state; the decode loop was not given them."
+                )
+            return dict(
+                prompt_lengths=prompt_lengths[seq_ids],
+                row_state=row_state,
+                seq_ids=seq_ids,
+            )
+        return {}
+
     def _decode_batches(
         self,
         x,
@@ -362,7 +410,11 @@ class BlockDiffusionRunner(ModelRunner):
         pos_ids,
         num_layers,
         mini_batch_size,
+        prompt_lengths=None,
     ):
+        edit_budget, row_state = self._make_decode_loop_state(
+            decoding_start.shape[0]
+        )
         decoding_flag = (decoding_start + self.block_length) <= total_length
         while torch.any(decoding_flag):
             current_cache_length = max(
@@ -406,13 +458,30 @@ class BlockDiffusionRunner(ModelRunner):
                 )
                 logits = output.logits[: len(seq_ids)]
 
+                decoder_kwargs = self._decoder_editing_kwargs(
+                    seq_ids, prompt_lengths, edit_budget, row_state
+                )
                 self.decoder.batch_decode(
-                    logits, decoding_start[seq_ids], decoding_x, self.block_length
+                    logits,
+                    decoding_start[seq_ids],
+                    decoding_x,
+                    self.block_length,
+                    **decoder_kwargs,
                 )
 
-                block_finished = (
-                    decoding_block == self.decoder.mask_id
-                ).sum(dim=1) == 0
+                # A block is finished on an iteration whose pre-update tokens
+                # had no masks AND that applied no update. For the 2.0
+                # decoders this is exactly the old `no masks` test (they only
+                # ever write masked positions), and it keeps the KV-commit
+                # invariant: the forward that commits a block's KV is the one
+                # whose input tokens are the block's final tokens.
+                after = gather_blocks(
+                    decoding_x.data, decoding_start[seq_ids], self.block_length
+                )
+                had_mask = (decoding_block == self.decoder.mask_id).any(dim=1)
+                changed = (after != decoding_block).any(dim=1)
+                block_finished = (~had_mask) & (~changed)
+                edit_budget.update(seq_ids, had_mask, changed, block_finished)
                 self._update_finished_kv_cache(
                     output,
                     seq_ids,
@@ -426,13 +495,17 @@ class BlockDiffusionRunner(ModelRunner):
                 x[seq_ids] = decoding_x.data
 
                 if self.early_stop:
+                    # Branchless on purpose: an `if eos_mask.any()` here forces
+                    # a GPU->CPU sync every decode iteration.
                     eos_mask = torch.any(
                         x[seq_ids] == self.decoder.eos_id, dim=1
                     ) & block_finished
-                    if eos_mask.any():
-                        stop_seq_ids = seq_ids[eos_mask.nonzero(as_tuple=True)[0]]
-                        decoding_start[stop_seq_ids] = total_length
-                        decoding_flag[stop_seq_ids] = False
+                    decoding_start[seq_ids] = torch.where(
+                        eos_mask,
+                        torch.full_like(decoding_start[seq_ids], total_length),
+                        decoding_start[seq_ids],
+                    )
+                    decoding_flag[seq_ids] = decoding_flag[seq_ids] & ~eos_mask
 
                 self.num_forwards += 1
                 decoding_flag = decoding_flag & (

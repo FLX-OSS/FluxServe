@@ -272,7 +272,7 @@ def build_server_args(args, model_config):
     )
 
 
-def build_runner_config(args, batch_info):
+def build_runner_config(args, batch_info, model_config=None):
     cache_length = 128
     cache_lengths = []
     while cache_length < batch_info.max_length:
@@ -297,6 +297,12 @@ def build_runner_config(args, batch_info):
         parallel_decoding=args.parallel_decoding,
         threshold=args.threshold,
         low_threshold=args.low_threshold,
+        editing_threshold=getattr(args, "editing_threshold", 0.5),
+        max_post_steps=getattr(args, "max_post_steps", 16),
+        steps=getattr(args, "steps", 0),
+        max_steps_per_block=getattr(args, "max_steps_per_block", 1000),
+        delete_token_id=int(getattr(model_config, "delete_token_id", 156930)),
+        split_token_id=int(getattr(model_config, "split_token_id", 156931)),
         use_credit=args.use_credit,
         attention_backend=args.attention_backend,
         flashinfer_decode_batch_mode=getattr(
@@ -581,6 +587,9 @@ def run_worker(args, *, init_method: str = "env://"):
     log_input_shape_summary(input_lengths, batch_info, args, logger)
 
     logger.info("[Loading model]")
+    from fluxserve.cli import _check_block_routing_alignment
+
+    _check_block_routing_alignment(model_config, args.block_length)
 
     server_args = build_server_args(args, model_config)
     server_args.device = device
@@ -593,7 +602,7 @@ def run_worker(args, *, init_method: str = "env://"):
         initialize_dp_attention(server_args=server_args, model_config=model_config)
         initialize_moe_config(server_args)
 
-        runner_config = build_runner_config(args, batch_info)
+        runner_config = build_runner_config(args, batch_info, model_config)
         runner_config.cuda_graph_log_callback = logger.info
         if is_diffusion_gemma:
             runner_cls = DiffusionGemmaRunner
@@ -843,6 +852,37 @@ def add_bench_offline_subparser(subparsers) -> None:
     parser.add_argument("--threshold", type=float, default=0.9)
     parser.add_argument("--low-threshold", "--low_threshold", dest="low_threshold", type=float, default=0.3)
     parser.add_argument("--parallel-decoding", "--parallel_decoding", dest="parallel_decoding", default="threshold")
+    parser.add_argument(
+        "--editing-threshold",
+        "--editing_threshold",
+        dest="editing_threshold",
+        type=float,
+        default=0.5,
+        help="LLaDA2.1 T2T editing threshold (joint_threshold decoding).",
+    )
+    parser.add_argument(
+        "--max-post-steps",
+        "--max_post_steps",
+        dest="max_post_steps",
+        type=int,
+        default=16,
+        help="Max post-mask editing iterations per block (joint_threshold).",
+    )
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=0,
+        help="LLaDA2.2 M2T transfer-schedule steps (levenshtein_joint); "
+        "0 means block_length.",
+    )
+    parser.add_argument(
+        "--max-steps-per-block",
+        "--max_steps_per_block",
+        dest="max_steps_per_block",
+        type=int,
+        default=1000,
+        help="Hard per-block iteration cap (levenshtein_joint).",
+    )
     parser.add_argument("--use-credit", "--use_credit", dest="use_credit", action="store_true")
     parser.add_argument("--dataset-format", "--dataset_format", dest="dataset_format", choices=("auto", "legacy", "openai"), default="openai")
     parser.add_argument(

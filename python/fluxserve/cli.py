@@ -158,6 +158,32 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--parallel-decoding", default="threshold")
     serve.add_argument("--threshold", type=float, default=0.9)
     serve.add_argument("--low-threshold", type=float, default=0.3)
+    serve.add_argument(
+        "--editing-threshold",
+        type=float,
+        default=0.5,
+        help="LLaDA2.1 T2T editing threshold (joint_threshold decoding). "
+        "Official presets: 0.5 (Quality), 0.0 (Speed).",
+    )
+    serve.add_argument(
+        "--max-post-steps",
+        type=int,
+        default=16,
+        help="Max post-mask editing iterations per block (joint_threshold).",
+    )
+    serve.add_argument(
+        "--steps",
+        type=int,
+        default=0,
+        help="LLaDA2.2 M2T transfer-schedule steps (levenshtein_joint); "
+        "0 means block_length.",
+    )
+    serve.add_argument(
+        "--max-steps-per-block",
+        type=int,
+        default=1000,
+        help="Hard per-block iteration cap (levenshtein_joint).",
+    )
     serve.add_argument("--tp-size", type=int, default=1)
     serve.add_argument("--dp-size", type=int, default=1)
     serve.add_argument("--ep-size", type=int, default=1)
@@ -215,6 +241,20 @@ def _reject_unsupported_quantization(model_config) -> None:
                 "FluxServe does not currently support FP8 or FP4 quantized checkpoints. "
                 "Use an unquantized BF16/FP16 checkpoint."
             )
+
+
+def _check_block_routing_alignment(model_config, block_length: int) -> None:
+    """LLaDA2.2 MoE block routing selects experts per config.block_size-token
+    window; serving blocks must tile those windows exactly."""
+    if not getattr(model_config, "expert_capacity", 0):
+        return
+    model_block_size = int(getattr(model_config, "block_size", 0) or 0)
+    if model_block_size and int(block_length) % model_block_size != 0:
+        raise ValueError(
+            f"this checkpoint uses MoE block routing with block_size="
+            f"{model_block_size}; --block-length ({block_length}) must be a "
+            "multiple of it."
+        )
 
 
 def normalize_diffusion_gemma_serve_args(args, model_config) -> bool:
@@ -287,6 +327,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         )
     _reject_unsupported_quantization(model_config)
     model_config.quant_config = None
+    _check_block_routing_alignment(model_config, args.block_length)
     if args.scheduler_policy == "paged" and (
         args.attention_backend != "flashinfer"
         or args.kv_cache_layout != "paged"
@@ -417,6 +458,12 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             parallel_decoding=args.parallel_decoding,
             threshold=args.threshold,
             low_threshold=args.low_threshold,
+            editing_threshold=args.editing_threshold,
+            max_post_steps=args.max_post_steps,
+            steps=args.steps,
+            max_steps_per_block=args.max_steps_per_block,
+            delete_token_id=int(getattr(model_config, "delete_token_id", 156930)),
+            split_token_id=int(getattr(model_config, "split_token_id", 156931)),
         )
         if is_diffusion_gemma:
             runner_cls = DiffusionGemmaRunner

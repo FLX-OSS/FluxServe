@@ -22,11 +22,14 @@ from fluxserve.backend.execution.forward_batch_info import RunnerConfig
 from fluxserve.backend.utils.server_args import ServerArgs
 
 from .hierarchy import HierarchyDecoder
+from .joint_threshold import JointThresholdDecoder
 from .threshold import CreditThresholdParallelDecoder, ThresholdParallelDecoder
+
+KNOWN_DECODERS = ("threshold", "joint_threshold", "hierarchy")
 
 
 def load_decoder(config: RunnerConfig | ServerArgs):
-    parallel_decoding = getattr(config, "parallel_decoding", "hierarchy")
+    parallel_decoding = getattr(config, "parallel_decoding", "threshold")
     threshold = getattr(config, "threshold", 0.9)
     low_threshold = getattr(config, "low_threshold", 0.3)
     use_credit = getattr(config, "use_credit", False)
@@ -48,10 +51,34 @@ def load_decoder(config: RunnerConfig | ServerArgs):
             eos_id=eos_id,
         )
 
-    return HierarchyDecoder(
-        temperature=0,
-        threshold=threshold,
-        low_threshold=low_threshold,
-        mask_id=mask_id,
-        eos_id=eos_id,
+    if parallel_decoding == "joint_threshold":
+        num_to_transfer = getattr(config, "num_to_transfer", 1)
+        if num_to_transfer != 1:
+            raise ValueError(
+                "joint_threshold only implements num_to_transfer=1 "
+                f"(got {num_to_transfer}); the reference two-branch selection "
+                "for larger values is not implemented."
+            )
+        return JointThresholdDecoder(
+            temperature=0,
+            threshold=threshold,
+            editing_threshold=getattr(config, "editing_threshold", 0.5),
+            mask_id=mask_id,
+            eos_id=eos_id,
+        )
+
+    if parallel_decoding == "hierarchy":
+        # HierarchyDecoder has no batch_decode and cannot run under the
+        # current runners; it is kept only for explicit opt-in use.
+        return HierarchyDecoder(
+            temperature=0,
+            threshold=threshold,
+            low_threshold=low_threshold,
+            mask_id=mask_id,
+            eos_id=eos_id,
+        )
+
+    raise ValueError(
+        f"Unknown parallel_decoding {parallel_decoding!r}; "
+        f"expected one of {KNOWN_DECODERS}."
     )

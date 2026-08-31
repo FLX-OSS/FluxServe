@@ -11,11 +11,13 @@ python -m venv "${EVALSCOPE_VENV}"
 
 CONFIGS=(
     tp1_ep1_mini
+    tp1_ep1_llada21_mini
     tp1_ep1_gemma
 )
 
 MODELS=(
     inclusionAI/LLaDA2.0-mini
+    inclusionAI/LLaDA2.1-mini
     google/diffusiongemma-26B-A4B-it
 )
 
