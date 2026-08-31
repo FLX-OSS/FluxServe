@@ -6,7 +6,7 @@
 TP=4, EP=4, Paged Flashinfer (H100, 4 x SM90)
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 fluxserve serve \
+fluxserve serve \
   --model inclusionAI/LLaDA2.0-flash \
   --host 127.0.0.1 \
   --port 8000 \
@@ -24,5 +24,5 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 fluxserve serve \
   --scheduler-policy paged \
   --use-decode-cuda-graph \
   --cuda-graph-decode-mode padded \
-  --cuda-graph-capture-bs 1 2 4 8
+  --cuda-graph-capture-bs 1 2 4 6 8
 ```

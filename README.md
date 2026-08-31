@@ -20,4 +20,4 @@ Its core features include:
 <img src="./assets/figures/result.png" alt="FluxServe vs. SGLang-dLLM on LLaDA-2.0-mini/flash" width="960px" margin="10px"></img>
 
 ## Acknowledgments
-We learned the system design and reused code from the following projects: [vllm](https://github.com/vllm-project/vllm), [SGLang](https://github.com/sgl-project/sglang), [TokenSpeed](https://github.com/lightseekorg/tokenspeed), and [dInfer](https://github.com/inclusionAI/dInfer).
+We learned the system design and reused code from the following projects: [vLLM](https://github.com/vllm-project/vllm), [SGLang](https://github.com/sgl-project/sglang), [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM), [TokenSpeed](https://github.com/lightseekorg/tokenspeed), [FlashAttention](https://github.com/dao-ailab/flash-attention), [FlashInfer](https://github.com/flashinfer-ai/flashinfer), [FlashInfer-dllm](https://github.com/fdz-1999/flashinfer/tree/feature/block-extend) and [dInfer](https://github.com/inclusionAI/dInfer).

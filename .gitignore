@@ -39,6 +39,7 @@ code_reorg.md
 
 # slurm related
 **/slurm/
+**/test.sh
 
 # kernel related
 **/profiling/
@@ -49,9 +50,6 @@ code_reorg.md
 # dataset related
 **/swebench_pro/
 **/swebench_pro.jsonl
-**/agentic_dataset_flash.json
-**/agentic_dataset.sh
-**/build_swe_smith_dataset.py
 **.parquet
 
 # GH200 related
@@ -84,9 +82,9 @@ docker/commands/*
 
 # evalscope
 **/outputs/
-**/agentic_bench.sh
 **/mbpp_batched_bench.sh
 **/gsm8k_batched_bench.sh
+**/bench_alpaca.sh
 **/alpaca_bench_batched.sh
 **/bigcode_bench_batched.sh
 **/bigcode_batched_bench.sh
@@ -98,7 +96,6 @@ docker/commands/*
 # tools
 **/tools/
 **/*_audit.**
-**.jinja
 
 # mysql
 mysql

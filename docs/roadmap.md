@@ -1,5 +1,4 @@
 ### Model Support
-- [ ] LLaDA2.1
 - [ ] LLaDA2.2
 
 
@@ -7,7 +6,7 @@
 - [ ] Flash-Attn-4
 
 ### Quantization Support
-- [ ] FP8
+- [ ] FP8 (WIP)
 - [ ] NVFP4
 
 ### Hardware Support

@@ -4,6 +4,9 @@
 - [x] LLaDA2.0
   - [x] [LLaDA2.0-mini](https://huggingface.co/inclusionAI/LLaDA2.0-mini)
   - [x] [LLaDA2.0-flash](https://huggingface.co/inclusionAI/LLaDA2.0-flash)
+- [x] LLaDA2.1
+  - [x] [LLaDA2.1-mini](https://huggingface.co/inclusionAI/LLaDA2.1-mini)
+  - [x] [LLaDA2.1-flash](https://huggingface.co/inclusionAI/LLaDA2.1-flash)
 - [x] DiffusionGemma
 
 

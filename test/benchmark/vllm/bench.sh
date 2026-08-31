@@ -125,8 +125,9 @@ run_perf() {
 trap stop_server EXIT
 
 run_perf gsm8k tp1_ep1_gemma google/diffusiongemma-26B-A4B-it openai/gsm8k_openai.jsonl
-run_perf bigcodebench tp1_ep1_gemma google/diffusiongemma-26B-A4B-it openai/gsm8k_openai.jsonl
 run_perf gsm8k tp4_ep4_gemma google/diffusiongemma-26B-A4B-it openai/gsm8k_openai.jsonl
+
+run_perf bigcodebench tp1_ep1_gemma google/diffusiongemma-26B-A4B-it openai/gsm8k_openai.jsonl
 run_perf bigcodebench tp4_ep4_gemma google/diffusiongemma-26B-A4B-it openai/bigcodebench.jsonl
 
 exit 0

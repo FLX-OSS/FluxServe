@@ -54,7 +54,7 @@ setup(
     # Metadata
     name='fluxserve',
     version=VERSION,
-    python_requires='>=3.6',
+    python_requires='>=3.9',
     description='A High-Performance Inference Serving Library for Diffusion Language Model',
     long_description_content_type='text/markdown',
     license='MIT License',

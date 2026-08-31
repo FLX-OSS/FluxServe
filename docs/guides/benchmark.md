@@ -1,3 +1,5 @@
+## Notice: This is for internal benchamrk only!
+
 ## Offline Benchmark
 FluxServe supports offline thorughput benchamrk with json-style input files.
 ```bash

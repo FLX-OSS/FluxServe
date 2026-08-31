@@ -1,0 +1,73 @@
+name: CPU PR Tests
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**.py"
+      - "setup.py"
+      - ".github/workflows/pr-test-cpu.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Python ${{ matrix.python-version }} syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11"]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Parse every tracked Python file
+        run: |
+          python - <<'PY'
+          import ast
+          import subprocess
+
+          files = subprocess.check_output(
+              ["git", "ls-files", "-z", "--", "*.py"]
+          ).decode().split("\0")
+          files = [path for path in files if path]
+          for path in files:
+              try:
+                  with open(path, encoding="utf-8") as source:
+                      ast.parse(source.read().replace("from __future__ import annotations", ""), filename=path)
+              except SyntaxError as error:
+                  raise SystemExit(f"{path}:{error.lineno}: {error.msg}") from error
+          print(f"Parsed {len(files)} Python files successfully")
+          PY
+
+      - name: Check tracked native source encoding
+        run: |
+          python - <<'PY'
+          import subprocess
+
+          files = subprocess.check_output(
+              ["git", "ls-files", "-z", "--", "*.cc", "*.cpp", "*.cxx", "*.cu", "*.cuh"]
+          ).decode().split("\0")
+          for name in (path for path in files if path):
+              data = open(name, "rb").read()
+              if b"\0" in data:
+                  raise SystemExit(f"NUL byte found in {name}")
+              data.decode("utf-8")
+          print(f"Checked {sum(bool(path) for path in files)} native source files")
+          PY

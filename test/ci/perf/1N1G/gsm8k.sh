@@ -2,7 +2,8 @@
 
 set -euo pipefail
 
-export PYTHONNOUSERSITE=1
+# Keep lazy native builds deterministic for the RTX PRO 6000 benchmark.
+# export FLUX_KERNEL_CUDA_ARCH="${FLUX_KERNEL_CUDA_ARCH:-120}"
 
 EVALSCOPE_COMMIT=acd09b44384d53174768bb1063f675420f76fae9
 EVALSCOPE_VENV="${EVALSCOPE_VENV:-/tmp/evalscope-venv}"
@@ -18,7 +19,7 @@ usage() {
     echo "       RATES='RATE RATE ...' $0"
 }
 
-rates_arg="${RATES:-0.4 0.8}"
+rates_arg="${RATES:-0.8}"
 while (( $# > 0 )); do
     case "$1" in
         --rates)
@@ -61,7 +62,7 @@ python -m venv "${EVALSCOPE_VENV}"
 
 stop_server() {
     if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
-        echo "Stopping SGLang (pgid $SERVER_PID)..."
+        echo "Stopping FluxServe (pgid $SERVER_PID)..."
         kill -TERM -"$SERVER_PID" 2>/dev/null || true
         wait "$SERVER_PID" 2>/dev/null || true
     fi
@@ -100,11 +101,8 @@ run_perf() {
     local config=$2
     local model=$3
     local dataset=$4
-    # The optional benchmark-size override is not supplied by every run.
-    # Use a default here because this script enables `set -u` and an omitted
-    # positional parameter would otherwise abort before the benchmark starts.
-    local number_flag="${5:-}"
-    local number_arg="${6:-}"
+    local number_flag=${5:-}
+    local number_arg=${6:-}
     local output_dir="${OUTPUTS_DIR}/${benchmark}/${config}"
     local dataset_path="${REPO_ROOT}/data/${dataset}"
 
@@ -156,12 +154,6 @@ run_perf() {
 trap stop_server EXIT
 
 run_perf gsm8k tp1_ep1_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
-run_perf gsm8k tp4_ep4_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
-run_perf gsm8k tp4_ep4_flash inclusionAI/LLaDA2.0-flash gsm8k.jsonl 
-
-
-run_perf bigcodebench tp1_ep1_mini inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
-run_perf bigcodebench tp4_ep4_mini inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
-run_perf bigcodebench tp4_ep4_flash inclusionAI/LLaDA2.0-flash bigcodebench.jsonl
+run_perf gsm8k tp1_ep1_mini google/diffusiongemma-26B-A4B-it gsm8k.jsonl 
 
 exit 0
