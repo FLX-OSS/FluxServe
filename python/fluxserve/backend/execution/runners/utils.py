@@ -13,7 +13,13 @@ class DecodeEditBudget:
 
     ``block_iters`` bounds the per-block iteration count
     (``block_length + max_post_steps + 1``); exceeding it means the decode
-    loop is not converging and is reported instead of spinning forever.
+    loop is not converging and is reported instead of spinning forever. The
+    stuck check reads GPU state, so it runs only every ``max_block_iters``
+    calls to ``update`` — a per-call check would force a GPU->CPU sync on
+    every decode iteration. Detection is therefore delayed by at most one
+    check interval; a row can never exceed the budget without eventually
+    tripping a periodic check, because a stuck row keeps the decode loop
+    (and this counter) running.
     """
 
     def __init__(
@@ -29,6 +35,7 @@ class DecodeEditBudget:
         self._max_block_iters_override = max_block_iters_override
         self.post_steps = torch.zeros(num_rows, dtype=torch.long, device=device)
         self.block_iters = torch.zeros(num_rows, dtype=torch.long, device=device)
+        self._update_calls = 0
 
     @property
     def max_block_iters(self) -> int:
@@ -54,16 +61,19 @@ class DecodeEditBudget:
         self.post_steps[finished_ids] = 0
         self.block_iters[finished_ids] = 0
         # A row that finishes on the last budgeted iteration was reset above;
-        # any row still counting at the full budget is genuinely stuck.
-        over = self.block_iters[seq_ids] >= self.max_block_iters
-        if bool(over.any()):
-            stuck = seq_ids[over].tolist()
-            raise RuntimeError(
-                "decode block did not finish within "
-                f"block_length + max_post_steps + 1 = {self.max_block_iters} "
-                f"iterations for seq_ids {stuck} "
-                f"(post_steps={self.post_steps[seq_ids][over].tolist()})."
-            )
+        # any row still counting at the full budget is genuinely stuck. The
+        # check syncs the GPU, so run it only periodically (see class doc).
+        self._update_calls += 1
+        if self._update_calls % self.max_block_iters == 0:
+            over = self.block_iters >= self.max_block_iters
+            if bool(over.any()):
+                stuck = torch.nonzero(over, as_tuple=True)[0]
+                raise RuntimeError(
+                    "decode block did not finish within "
+                    f"block_length + max_post_steps + 1 = {self.max_block_iters} "
+                    f"iterations for seq_ids {stuck.tolist()} "
+                    f"(post_steps={self.post_steps[stuck].tolist()})."
+                )
 
 
 def align_exp2(x: torch.Tensor | int):

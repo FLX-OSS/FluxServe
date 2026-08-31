@@ -1,6 +1,6 @@
 # LLaDA2.1 Model Support Development Guide
 
-## 0. Implementation Status (2026-08-27)
+## 0. Implementation Status (2026-08-29)
 
 - **Phase 1: complete.** GPU smoke validated (job `llada21_real_3428096`):
   2.1-mini loads through `LLaDA2LLM` with zero unmatched weights and reaches
@@ -19,7 +19,26 @@
   agreement. The reference trace harness runs under a transformers-5.2
   sandbox (`tools/tf52_sandbox`) because the checkpoint's modeling code
   needs `create_bidirectional_mask`.
-- Phases 3-4: not started.
+- **Phase 2 GPU validation: complete** (dense/no-graph path, HumanEval-164):
+  2.1-mini joint Quality 0.7/0.5 = 0.774, joint Speed 0.5/0.0 = 0.793
+  (reference impl same presets: 0.690/0.675); 2.1-flash TP4/EP4 joint
+  Quality 0.829, Speed 0.835. Zero unmatched weights on both checkpoints.
+- **Phase 4 (CUDA graph) implemented, needs paged-GPU benchmark.** Review
+  feedback on B200 (GSM8K, paged + decode graphs) measured 2.1-mini at
+  1198 tok/s w/ graphs vs 1133 w/o, below 2.0-mini's 1335: the decode graph
+  captured only the transformer forward, leaving the lm_head, the joint
+  M2T/T2T selection, the block-finished predicate, and a per-iteration
+  GPU->CPU sync (`DecodeEditBudget.update`'s stuck check, plus the branchy
+  EOS early-stop) eager between replays. Fixes: the LLaDA2 decode graph now
+  captures the full iteration tail for decoders declaring
+  `graph_fused_step` (`joint_threshold_graph_step`; only the token-array
+  scatter stays eager), the stuck check runs every `max_block_iters` calls
+  instead of every call, and the EOS early-stop is branchless. CPU parity
+  tests: `TestGraphStepParity` in `test/runtime/test_joint_threshold_decoder.py`.
+  The `decode_fallback_count`/`decode_replay_count` counters verify graph
+  coverage on hardware; re-benchmark on the B200 paged path.
+- Phase 3 (batched/paged/distributed serving hardening): TP4/EP4 on flash
+  validated; remaining items unstarted.
 
 ## 1. Goal
 

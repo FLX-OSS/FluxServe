@@ -495,13 +495,17 @@ class BlockDiffusionRunner(ModelRunner):
                 x[seq_ids] = decoding_x.data
 
                 if self.early_stop:
+                    # Branchless on purpose: an `if eos_mask.any()` here forces
+                    # a GPU->CPU sync every decode iteration.
                     eos_mask = torch.any(
                         x[seq_ids] == self.decoder.eos_id, dim=1
                     ) & block_finished
-                    if eos_mask.any():
-                        stop_seq_ids = seq_ids[eos_mask.nonzero(as_tuple=True)[0]]
-                        decoding_start[stop_seq_ids] = total_length
-                        decoding_flag[stop_seq_ids] = False
+                    decoding_start[seq_ids] = torch.where(
+                        eos_mask,
+                        torch.full_like(decoding_start[seq_ids], total_length),
+                        decoding_start[seq_ids],
+                    )
+                    decoding_flag[seq_ids] = decoding_flag[seq_ids] & ~eos_mask
 
                 self.num_forwards += 1
                 decoding_flag = decoding_flag & (

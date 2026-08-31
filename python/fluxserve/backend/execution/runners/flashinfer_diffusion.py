@@ -4,6 +4,7 @@ import time
 
 import torch
 
+from fluxserve.backend.execution.decoders.utils import broadcast_if_needed
 from fluxserve.backend.execution.forward_batch_info import ForwardBatch, ForwardMode
 from fluxserve.backend.engine.request import RequestState
 from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner
@@ -1279,15 +1280,37 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 mode=self.runner_config.decode_cuda_graph_mode,
             )
         )
+        fused_decoder = bool(getattr(self.decoder, "graph_fused_step", False))
+        fused_replay = None
         if use_decode_graph:
-            hidden_states = self.flashinfer_graph_runner.replay_decode(
+            graph_prompt_positions = None
+            graph_allow_edit = None
+            if fused_decoder:
+                if prompt_lengths is None or edit_budget is None:
+                    raise RuntimeError(
+                        "joint_threshold decoding requires prompt_lengths and "
+                        "an edit budget; the decode loop was not given them."
+                    )
+                block_offsets = torch.arange(
+                    self.block_length, device=self.device
+                ).unsqueeze(0) + decoding_start[seq_ids].unsqueeze(1)
+                graph_prompt_positions = block_offsets < prompt_lengths[
+                    seq_ids
+                ].unsqueeze(1)
+                graph_allow_edit = edit_budget.allow_edit(seq_ids)
+            replayed = self.flashinfer_graph_runner.replay_decode(
                 runner=self,
                 input_ids=decoding_block,
                 position_ids=decoding_pos_ids,
                 forward_batch=forward_batch,
+                prompt_positions=graph_prompt_positions,
+                allow_edit=graph_allow_edit,
             )
-            logits = self.model._get_logits(hidden_states)[:actual_batch_size]
             output = None
+            if fused_decoder and replayed.x_updated is not None:
+                fused_replay = replayed
+            else:
+                logits = self.model._get_logits(replayed.hidden_states)
         else:
             if self.flashinfer_graph_runner is not None:
                 self.flashinfer_graph_runner.decode_fallback_count += 1
@@ -1300,29 +1323,44 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             )
             logits = output.logits[: len(seq_ids)]
 
-        decoder_kwargs = self._decoder_editing_kwargs(
-            seq_ids, prompt_lengths, edit_budget, row_state
-        )
-        self.decoder.batch_decode(
-            logits,
-            decoding_start[seq_ids],
-            decoding_x,
-            self.block_length,
-            **decoder_kwargs,
-        )
+        if fused_replay is not None:
+            # The lm_head, joint selection, and block-finished predicate all
+            # ran inside the replayed graph; only the scatter into the token
+            # array (dynamic total length) stays eager.
+            T = decoding_x.data.shape[1]
+            flat_idx = block_offsets.clamp(max=T - 1) + torch.arange(
+                actual_batch_size, device=self.device
+            ).unsqueeze(1) * T
+            decoding_x.data.view(-1)[flat_idx] = fused_replay.x_updated
+            broadcast_if_needed(decoding_x.data)
+            had_mask = fused_replay.had_mask
+            changed = fused_replay.changed
+            block_finished = fused_replay.block_finished
+        else:
+            decoder_kwargs = self._decoder_editing_kwargs(
+                seq_ids, prompt_lengths, edit_budget, row_state
+            )
+            self.decoder.batch_decode(
+                logits,
+                decoding_start[seq_ids],
+                decoding_x,
+                self.block_length,
+                **decoder_kwargs,
+            )
 
-        # A block is finished on an iteration whose pre-update tokens had no
-        # masks AND that applied no update. Equivalent to the old `no masks`
-        # test for the 2.0 decoders (they only write masked positions), and
-        # the per-row vectorization of the LLaDA2.1 reference's stability
-        # break. `after` is gathered from x.data after the decoder's
-        # broadcast, so every rank computes identical predicates.
-        after = gather_blocks(
-            decoding_x.data, decoding_start[seq_ids], self.block_length
-        )
-        had_mask = (decoding_block == self.decoder.mask_id).any(dim=1)
-        changed = (after != decoding_block).any(dim=1)
-        block_finished = (~had_mask) & (~changed)
+            # A block is finished on an iteration whose pre-update tokens had
+            # no masks AND that applied no update. Equivalent to the old `no
+            # masks` test for the 2.0 decoders (they only write masked
+            # positions), and the per-row vectorization of the LLaDA2.1
+            # reference's stability break. `after` is gathered from x.data
+            # after the decoder's broadcast, so every rank computes identical
+            # predicates.
+            after = gather_blocks(
+                decoding_x.data, decoding_start[seq_ids], self.block_length
+            )
+            had_mask = (decoding_block == self.decoder.mask_id).any(dim=1)
+            changed = (after != decoding_block).any(dim=1)
+            block_finished = (~had_mask) & (~changed)
         if edit_budget is not None:
             edit_budget.update(seq_ids, had_mask, changed, block_finished)
         if output is not None:
@@ -1339,10 +1377,14 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         x[seq_ids] = decoding_x.data
 
         if self.early_stop:
+            # Branchless on purpose: an `if eos_mask.any()` here forces a
+            # GPU->CPU sync every decode iteration and stalls the pipeline.
             eos_mask = torch.any(x[seq_ids] == self.decoder.eos_id, dim=1) & block_finished
-            if eos_mask.any():
-                stop_seq_ids = seq_ids[eos_mask.nonzero(as_tuple=True)[0]]
-                decoding_start[stop_seq_ids] = total_length
+            decoding_start[seq_ids] = torch.where(
+                eos_mask,
+                torch.full_like(decoding_start[seq_ids], total_length),
+                decoding_start[seq_ids],
+            )
 
         self.num_forwards += 1
 

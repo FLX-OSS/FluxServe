@@ -103,11 +103,61 @@ def joint_threshold_update(
     return x_updated, m2t_transfer, t2t_transfer
 
 
+def joint_threshold_graph_step(
+    logits,
+    x_block,
+    mask_id,
+    threshold,
+    editing_threshold,
+    prompt_positions,
+    allow_edit,
+):
+    """One decode-iteration tail as a single tensor program.
+
+    Runs the joint selection plus the runner's block-finished predicate with
+    no data-dependent control flow, so the whole thing can be captured inside
+    a CUDA graph together with the model forward. Must stay equivalent to
+    calling ``joint_threshold_update`` and then computing the predicate from
+    the written tokens (``test_joint_threshold_decoder.py`` asserts parity).
+
+    Returns ``(x_updated, had_mask, changed, block_finished)``; the first is
+    ``[B, L]`` and the rest are ``[B]`` bools.
+    """
+    had_mask = (x_block == mask_id).any(dim=1)
+    x_updated, _, _ = joint_threshold_update(
+        logits,
+        x_block,
+        mask_id,
+        threshold,
+        editing_threshold,
+        prompt_positions,
+        allow_edit,
+    )
+    changed = (x_updated != x_block).any(dim=1)
+    block_finished = (~had_mask) & (~changed)
+    return x_updated, had_mask, changed, block_finished
+
+
 class JointThresholdDecoder(ParallelDecoder):
     """LLaDA2.1 joint threshold decoding (M2T + T2T token editing)."""
 
     # Signals the runners to pass prompt_lengths / allow_edit to batch_decode.
     needs_editing_inputs = True
+    # The selection is a fixed-shape tensor program at temperature 0, so the
+    # decode CUDA graph can capture it together with the model forward.
+    graph_fused_step = True
+
+    def graph_step(self, logits, x_block, prompt_positions, allow_edit):
+        """Graph-capturable decode-iteration tail (see joint_threshold_graph_step)."""
+        return joint_threshold_graph_step(
+            logits,
+            x_block,
+            self.mask_id,
+            self.threshold,
+            self.editing_threshold,
+            prompt_positions,
+            allow_edit,
+        )
 
     def __init__(
         self,

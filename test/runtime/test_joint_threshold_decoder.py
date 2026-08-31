@@ -28,6 +28,7 @@ from fluxserve.backend.execution.decoders import (
     load_decoder,
 )
 from fluxserve.backend.execution.decoders.joint_threshold import (
+    joint_threshold_graph_step,
     joint_threshold_update,
 )
 from fluxserve.backend.execution.forward_batch_info import RunnerConfig
@@ -453,3 +454,117 @@ class TestDecodeEditBudget:
                     torch.tensor([False]),
                     torch.tensor([False]),
                 )
+
+    def test_stuck_check_is_periodic_not_per_call(self):
+        # The stuck check syncs the GPU, so it must not run on every update.
+        # A row that finishes before the check interval elapses never trips
+        # it, even though a per-call check with these inputs would not have
+        # raised either; assert the counter semantics directly.
+        budget = DecodeEditBudget(1, 1, 2, "cpu")
+        ids = torch.tensor([0])
+        for _ in range(budget.max_block_iters - 1):
+            budget.update(
+                ids,
+                torch.tensor([True]),
+                torch.tensor([False]),
+                torch.tensor([False]),
+            )
+        # One shy of the interval: no check has run yet despite block_iters
+        # sitting at max_block_iters - 1.
+        assert budget._update_calls == budget.max_block_iters - 1
+        # Finishing resets the row, so the check at the interval passes.
+        budget.update(
+            ids,
+            torch.tensor([False]),
+            torch.tensor([False]),
+            torch.tensor([True]),
+        )
+        assert budget.block_iters.tolist() == [0]
+
+
+class TestGraphStepParity:
+    """joint_threshold_graph_step must equal batch_decode + the runner's
+    block-finished predicate: it is the exact program the FlashInfer decode
+    CUDA graph captures in place of the eager per-iteration tail."""
+
+    def _reference(self, logits, x_block, prompt_positions, allow_edit, threshold, editing_threshold):
+        x_updated, _, _ = joint_threshold_update(
+            logits.clone(),
+            x_block,
+            MASK_ID,
+            threshold,
+            editing_threshold,
+            prompt_positions,
+            allow_edit,
+        )
+        had_mask = (x_block == MASK_ID).any(dim=1)
+        changed = (x_updated != x_block).any(dim=1)
+        block_finished = (~had_mask) & (~changed)
+        return x_updated, had_mask, changed, block_finished
+
+    def test_matches_reference_on_random_states(self):
+        torch.manual_seed(7)
+        B, L = 5, 8
+        for trial in range(20):
+            x_block = torch.randint(0, VOCAB - 4, (B, L))
+            mask_frac = torch.rand(B, L)
+            x_block[mask_frac < 0.4] = MASK_ID
+            logits = torch.randn(B, L, VOCAB) * 4
+            prompt_positions = torch.rand(B, L) < 0.2
+            allow_edit = torch.rand(B) < 0.7
+            threshold, editing_threshold = 0.7, 0.5
+
+            expected = self._reference(
+                logits, x_block, prompt_positions, allow_edit,
+                threshold, editing_threshold,
+            )
+            actual = joint_threshold_graph_step(
+                logits.clone(),
+                x_block,
+                MASK_ID,
+                threshold,
+                editing_threshold,
+                prompt_positions,
+                allow_edit,
+            )
+            for exp, act in zip(expected, actual, strict=True):
+                assert torch.equal(exp, act), f"trial {trial} diverged"
+
+    def test_decoder_graph_step_uses_configured_thresholds(self):
+        decoder = JointThresholdDecoder(
+            threshold=0.7,
+            editing_threshold=0.5,
+            temperature=0,
+            mask_id=MASK_ID,
+            eos_id=EOS_ID,
+        )
+        assert decoder.graph_fused_step is True
+        x_block = torch.tensor([[MASK_ID, 2, 3, 4]])
+        cand = torch.tensor([[5, 9, 3, 4]])
+        logits = make_logits(x_block, cand, 0.9)
+        x_updated, had_mask, changed, block_finished = decoder.graph_step(
+            logits, x_block, no_prompt(1, 4), all_edit(1)
+        )
+        # M2T fills position 0; T2T edits position 1 (0.9 > 0.5).
+        assert x_updated.tolist() == [[5, 9, 3, 4]]
+        assert had_mask.tolist() == [True]
+        assert changed.tolist() == [True]
+        assert block_finished.tolist() == [False]
+
+    def test_stable_block_reports_finished(self):
+        decoder = JointThresholdDecoder(
+            threshold=0.7,
+            editing_threshold=0.5,
+            temperature=0,
+            mask_id=MASK_ID,
+            eos_id=EOS_ID,
+        )
+        x_block = torch.tensor([[1, 2, 3, 4]])
+        logits = make_logits(x_block, x_block, 0.99)
+        x_updated, had_mask, changed, block_finished = decoder.graph_step(
+            logits, x_block, no_prompt(1, 4), all_edit(1)
+        )
+        assert x_updated.tolist() == x_block.tolist()
+        assert had_mask.tolist() == [False]
+        assert changed.tolist() == [False]
+        assert block_finished.tolist() == [True]
