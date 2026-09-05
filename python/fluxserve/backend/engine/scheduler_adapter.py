@@ -20,8 +20,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Iterable
+from dataclasses import dataclass, field
+from typing import Any, Iterable
 
 from .request import RequestState
 
@@ -216,3 +216,217 @@ class PagedSchedulerAdapter:
         event.add_event(ev)
         self._scheduler.advance(event)
         self._active.discard(request_id)
+
+
+@dataclass
+class SchedulerRank:
+    request_id: str
+    difficulty_score: float
+    convergence_score: float
+    evidence: float
+    observed_forwards: int
+    state: str
+
+
+@dataclass
+class _Trajectory:
+    observed_forwards: int = 0
+    previous_difficulty: float = 0.5
+    difficulty: float = 0.5
+    progress_ewma: float = 0.5
+    fallback_streak: float = 0.0
+    single_token_rate: float = 0.0
+    previous_median: float | None = None
+    previous_top1: Any = None
+    block: dict[str, float] = field(default_factory=dict)
+
+
+def _percentiles(values: list[float]) -> list[float]:
+    if len(values) <= 1:
+        return [0.5] * len(values)
+    ordered = sorted(enumerate(values), key=lambda item: item[1])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(ordered):
+        j = i + 1
+        while j < len(ordered) and ordered[j][1] == ordered[i][1]:
+            j += 1
+        percentile = ((i + j - 1) / 2) / (len(values) - 1)
+        for index, _ in ordered[i:j]:
+            ranks[index] = percentile
+        i = j
+    return ranks
+
+
+class DynamicSchedulingPolicy:
+    """Interpretable confidence-trajectory ranker."""
+
+    def __init__(self, *, convergence_first: bool = True):
+        self.convergence_first = convergence_first
+        self._states: dict[str, _Trajectory] = {}
+
+    def remove(self, request_id: str) -> None:
+        self._states.pop(request_id, None)
+
+    def observe_block(self, request_id: str, metrics: dict[str, Any] | None) -> None:
+        state = self._states.setdefault(request_id, _Trajectory())
+        state.observed_forwards += 1
+        metrics = metrics or {}
+
+        def number(*names: str, default: float = 0.0) -> float:
+            for name in names:
+                value = metrics.get(name)
+                if value is not None:
+                    try:
+                        return float(value)
+                    except (TypeError, ValueError):
+                        pass
+            return default
+
+        masks = number("remaining_masks", "masks_remaining", default=0.0)
+        block_length = max(number("block_length", default=1.0), 1.0)
+        transferred = number("transferred_tokens", "tokens_transferred", default=0.0)
+        remaining = number("remaining_mask_fraction", default=masks / block_length)
+        progress = number("progress", "transfer_fraction", default=transferred / max(masks + transferred, 1.0))
+        deficit = number("confidence_deficit", default=0.0)
+        margin = number("top2_margin", "margin", default=0.0)
+        fallback = bool(metrics.get("is_fallback_forward", metrics.get("fallback", False)))
+        state.fallback_streak = state.fallback_streak + 1 if fallback else 0.0
+        state.progress_ewma = 0.6 * progress + 0.4 * state.progress_ewma
+        state.single_token_rate = 0.8 * state.single_token_rate + 0.2 * float(transferred == 1)
+        state.block = {
+            "remaining": remaining,
+            "deficit": deficit,
+            "margin": margin,
+            "readiness": number("readiness_fraction", "readiness", default=0.0),
+            "flip_rate": number("flip_rate", default=0.0),
+        }
+
+    def rank(self, request_ids: Iterable[str]) -> list[SchedulerRank]:
+        request_ids = list(request_ids)
+        states = [self._states.setdefault(rid, _Trajectory()) for rid in request_ids]
+        fields = {
+            "remaining": [s.block.get("remaining", 0.0) for s in states],
+            "deficit": [s.block.get("deficit", 0.0) for s in states],
+            "margin": [s.block.get("margin", 0.0) for s in states],
+            "progress": [s.progress_ewma for s in states],
+            "fallback": [s.fallback_streak for s in states],
+            "single": [s.single_token_rate for s in states],
+            "readiness": [s.block.get("readiness", 0.0) for s in states],
+        }
+        normalized = {name: _percentiles(values) for name, values in fields.items()}
+        result = []
+        for i, (rid, state) in enumerate(zip(request_ids, states, strict=True)):
+            if state.observed_forwards == 0 and not state.block:
+                result.append(SchedulerRank(rid, 0.5, 0.5, 0.0, 0, "converging"))
+                continue
+            flip = state.block.get("flip_rate", 0.0)
+            stable = (1.0 - flip) * normalized["deficit"][i] * (1.0 - normalized["margin"][i])
+            raw = (
+                0.22 * normalized["remaining"][i]
+                + 0.18 * normalized["deficit"][i]
+                + 0.18 * (1.0 - normalized["margin"][i])
+                + 0.16 * (1.0 - normalized["progress"][i])
+                + 0.10 * normalized["fallback"][i]
+                + 0.07 * normalized["single"][i]
+                + 0.05 * (1.0 - normalized["readiness"][i])
+                + 0.04 * stable
+            )
+            state.difficulty = 0.7 * state.previous_difficulty + 0.3 * raw
+            state.previous_difficulty = state.difficulty
+            evidence = min(1.0, state.observed_forwards / 3.0)
+            result.append(SchedulerRank(rid, state.difficulty, 1.0 - state.difficulty, evidence, state.observed_forwards, self._classify(state)))
+        result.sort(key=lambda r: (-(r.convergence_score if self.convergence_first else r.difficulty_score), -r.evidence, r.request_id))
+        return result
+
+    @staticmethod
+    def _classify(state: _Trajectory) -> str:
+        block = state.block
+        if state.fallback_streak >= 3 and state.single_token_rate >= 0.4:
+            return "stalled"
+        if block.get("flip_rate", 0.0) < 0.25 and block.get("margin", 0.0) < 0.1 and block.get("deficit", 0.0) > 0.1:
+            return "stable ambiguity"
+        if block.get("flip_rate", 0.0) >= 0.25 and block.get("margin", 0.0) < 0.1:
+            return "unstable ambiguity"
+        if block.get("readiness", 0.0) > 0.5 and state.progress_ewma > 0.5:
+            return "converging"
+        if block.get("readiness", 0.0) > 0.25:
+            return "near-ready"
+        return "converging"
+
+
+class DynamicSchedulerAdapter(PagedSchedulerAdapter):
+    """Python admission policy layered over the native paged scheduler."""
+
+    uses_execution_plans = True
+
+    def __init__(self, native_scheduler, max_batch_size: int):
+        self.native = native_scheduler
+        self.max_batch_size = int(max_batch_size)
+        self.policy = DynamicSchedulingPolicy()
+        self._pending: dict[str, Any] = {}
+        self._active: set[str] = set()
+        self._cohort: set[str] = set()
+        self._cohort_completed: set[str] = set()
+
+    def submit(self, requests: Iterable[Any]) -> None:
+        for request in requests:
+            if request.rid not in self._active:
+                self._pending[request.rid] = request
+        self._admit_if_ready()
+
+    def _admit_if_ready(self) -> None:
+        if self._cohort or not self._pending:
+            return
+        ranked = self.policy.rank(self._pending)
+        selected = [self._pending[item.request_id] for item in ranked[: self.max_batch_size]]
+        self.native.submit(selected)
+        for request in selected:
+            self._pending.pop(request.rid, None)
+            self._active.add(request.rid)
+        self._cohort = {request.rid for request in selected}
+
+    def next_plan(self):
+        return self.native.next_plan()
+
+    def observe_results(self, results: Iterable[Any]) -> None:
+        completed = set()
+        finished = set()
+        for result in results:
+            if getattr(result, "decode_block_completed", False):
+                self.policy.observe_block(result.rid, getattr(result, "trajectory_metrics", None))
+                completed.add(result.rid)
+            if getattr(result, "finished", False):
+                finished.add(result.rid)
+                self._active.discard(result.rid)
+                self.policy.remove(result.rid)
+                self._cohort_completed.add(result.rid)
+        self._cohort_completed.update(completed)
+        if self._cohort and self._cohort_completed >= self._cohort:
+            self._cohort.clear()
+            self._cohort_completed.clear()
+            self._active.difference_update(finished)
+            self._admit_if_ready()
+
+    def advance_forward(self, **kwargs) -> None:
+        self.native.advance_forward(**kwargs)
+
+    def finish(self, request_id: str) -> None:
+        self._pending.pop(request_id, None)
+        self._active.discard(request_id)
+        self._cohort.discard(request_id)
+        self._cohort_completed.discard(request_id)
+        self.policy.remove(request_id)
+        self.native.finish(request_id)
+        self._admit_if_ready()
+
+    def abort(self, request_id: str) -> None:
+        was_active = request_id in self._active
+        self._pending.pop(request_id, None)
+        self._active.discard(request_id)
+        self._cohort.discard(request_id)
+        self._cohort_completed.discard(request_id)
+        self.policy.remove(request_id)
+        if was_active:
+            self.native.abort(request_id)
+        self._admit_if_ready()

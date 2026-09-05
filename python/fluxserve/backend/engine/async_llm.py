@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 import inspect
 import logging
 from collections.abc import AsyncIterator
@@ -32,6 +33,7 @@ from fluxserve.backend.engine.processor import InputProcessor, OutputProcessor
 from fluxserve.backend.engine.request import RequestState
 from fluxserve.backend.engine.scheduler_adapter import DefaultSchedulerAdapter
 from fluxserve.backend.metrics.engine import EngineMetrics
+from fluxserve.backend.engine.scheduler_trace import SchedulerTrace
 from fluxserve.backend.utils.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
@@ -63,6 +65,11 @@ class AsyncLLM:
         self.input_processor = InputProcessor(server_args, self.tokenizer)
         self.output_processor = OutputProcessor()
         self.metrics = EngineMetrics()
+        self.trace = SchedulerTrace(
+            getattr(server_args, "scheduler_trace_path", None),
+            metadata={"policy": getattr(server_args, "scheduler_policy", "default"),
+                      "model": getattr(server_args, "model_name", "")},
+        )
         self._states: dict[str, RequestState] = {}
         self._new_request_event = asyncio.Event()
         self._task: asyncio.Task | None = None
@@ -98,6 +105,7 @@ class AsyncLLM:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
+        self.trace.close()
 
     async def generate_request(self, obj: GenerateReqInput) -> AsyncIterator[GenerateReqOutput]:
         await self.start()
@@ -119,6 +127,9 @@ class AsyncLLM:
         self._states[state.rid] = state
         self.metrics.record_submitted(state.prompt_token_count)
         self.scheduler.submit([state])
+        self.trace.emit("admission", request_ids=[state.rid],
+                        pending_ids=list(getattr(self.scheduler, "_pending", {})),
+                        active_ids=list(getattr(self.scheduler, "_active", set())))
         self._new_request_event.set()
         try:
             while True:
@@ -133,6 +144,7 @@ class AsyncLLM:
     async def abort(self, rid: str, reason: str = "aborted") -> None:
         state = self._states.get(rid)
         self.scheduler.abort(rid)
+        self.trace.emit("abort", request_ids=[rid], reason=reason)
         await self._release_executor_requests([rid])
         if state is not None and not state.finished:
             output = self.output_processor.make_abort_output(state, reason)
@@ -238,6 +250,39 @@ class AsyncLLM:
                 continue
 
             forward_ops = list(plan.forward)
+            selected_ids = [rid for op in forward_ops for rid in getattr(op, "request_ids", ())]
+            active_ids = list(getattr(self.scheduler, "_active", self._states.keys()))
+            request_states = {
+                rid: ("Decoding" if self._states.get(rid, None) is not None and self._states[rid].plan_prefill_done
+                      else "Prefilling")
+                for rid in active_ids if rid in self._states
+            }
+            active_decode_ids = [rid for rid, state in request_states.items() if state == "Decoding"]
+            skipped_ids = sorted(set(active_ids) - set(selected_ids))
+            skipped_decode_ids = sorted(set(active_decode_ids) - set(selected_ids))
+            input_tokens = sum(sum(getattr(op, "input_lengths", ())) for op in forward_ops)
+            self.trace.emit(
+                "plan", request_ids=selected_ids, selected_request_ids=selected_ids,
+                active_request_ids=active_ids,
+                skipped_request_ids=sorted(set(active_ids) - set(selected_ids)),
+                active_count=len(active_ids), active_decode_count=len(active_decode_ids),
+                selected_count=len(selected_ids), skipped_count=len(skipped_ids),
+                skipped_decode_count=len(skipped_decode_ids),
+                active_decode_request_ids=active_decode_ids,
+                skipped_decode_request_ids=skipped_decode_ids,
+                skipped_prefill_request_ids=sorted(set(skipped_ids) - set(skipped_decode_ids)),
+                request_states=request_states,
+                skip_reasons={rid: ("batch_limit" if len(selected_ids) >= self.server_args.max_num_seqs
+                                    else "not_selected") for rid in skipped_ids},
+                batch_size=len(selected_ids), forward_op_count=len(forward_ops),
+                input_token_count=input_tokens,
+                max_batch_size=getattr(getattr(self.scheduler, "native", self.scheduler), "max_batch_size", None),
+                forward_ops=[{"request_ids": list(getattr(op, "request_ids", ())),
+                              "kind": str(getattr(op, "forward_type", "forward")),
+                              "input_lengths": list(getattr(op, "input_lengths", ())),
+                              "prefill_lengths": list(getattr(op, "prefill_lengths", ())),
+                              "input_token_count": sum(getattr(op, "input_lengths", ())) }
+                             for op in forward_ops])
             if not forward_ops:
                 self._new_request_event.clear()
                 with contextlib.suppress(asyncio.TimeoutError):
@@ -264,6 +309,7 @@ class AsyncLLM:
         if first_scheduled:
             self.metrics.record_scheduled(len(first_scheduled))
 
+        execution_start = time.monotonic_ns()
         try:
             results = await self._execute(
                 self.executor.execute_forward_plan, op, states_by_id
@@ -281,6 +327,11 @@ class AsyncLLM:
             state = self._states.get(result.rid)
             if state is None or state.finished:
                 continue
+
+            if result.decode_block_completed:
+                self.trace.emit("block_completion", request_ids=[result.rid],
+                                trajectory_metrics=result.trajectory_metrics or {},
+                                finished=bool(result.finished))
 
             if result.finished:
                 state.mark_execution_done()
@@ -300,6 +351,8 @@ class AsyncLLM:
                 await state.queue.put(output)
                 self.metrics.record_finished(state)
                 self._states.pop(state.rid, None)
+                self.trace.emit("finish", request_ids=[state.rid],
+                                finish_reason=result.finish_reason)
             elif result.reserve_tokens > 0:
                 reserve_tokens[result.rid] = result.reserve_tokens
                 if output.text or output.token_ids:
@@ -310,7 +363,15 @@ class AsyncLLM:
             reserve_tokens=reserve_tokens,
             finished_ids=finished_ids,
         )
+        observe = getattr(self.scheduler, "observe_results", None)
+        if observe is not None:
+            observe(results)
         await self._release_executor_requests(finished_ids)
+        self.trace.emit("execution", request_ids=list(states_by_id),
+                        execution_elapsed_ns=time.monotonic_ns() - execution_start,
+                        completed_request_ids=[r.rid for r in results if r.decode_block_completed],
+                        finished_request_ids=finished_ids,
+                        generated_token_count=sum(len(r.token_ids) for r in results))
 
     async def _fail_states(self, states, error: str) -> None:
         failed_ids = []
@@ -321,6 +382,7 @@ class AsyncLLM:
             await state.queue.put(self.output_processor.make_error_output(state, error))
             self.metrics.record_finished(state, error=True)
             self.scheduler.abort(state.rid)
+            self.trace.emit("abort", request_ids=[state.rid], reason=error)
             self._states.pop(state.rid, None)
             failed_ids.append(state.rid)
         await self._release_executor_requests(failed_ids)

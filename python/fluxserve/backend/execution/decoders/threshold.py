@@ -24,6 +24,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from fluxserve.backend.execution.block_profile import ThresholdDecodeStepStats
 from fluxserve.backend.execution.decoders.base import ParallelDecoder
 from fluxserve.backend.execution.decoders.utils import (
     add_gumbel_noise,
@@ -40,6 +41,8 @@ def get_transfer_index_threshold(
     threshold,
     rm_mask=True,
     use_float64=False,
+    return_confidence=False,
+    return_margin=False,
     **kwargs,
 ):
     if use_float64:
@@ -66,7 +69,28 @@ def get_transfer_index_threshold(
         torch.max(confidence, dim=1)[0] - 1e-5
     ).clamp(-1000, threshold).unsqueeze(-1)
     transfer_index = confidence >= actual_threshold
+    if return_margin:
+        top2 = torch.topk(p, k=2, dim=-1).values
+        return x0, transfer_index, x0_p, top2[..., 0] - top2[..., 1]
+    if return_confidence:
+        return x0, transfer_index, x0_p
     return x0, transfer_index
+
+
+def _masked_linear_quantiles(values, mask, quantiles):
+    """Compute per-row linear quantiles without moving variable rows to CPU."""
+    count = mask.sum(dim=1)
+    sorted_values = torch.sort(
+        torch.where(mask, values, torch.full_like(values, torch.inf)), dim=1
+    ).values
+    q = torch.tensor(quantiles, dtype=values.dtype, device=values.device)
+    positions = (count.clamp(min=1) - 1).unsqueeze(1) * q.unsqueeze(0)
+    lower = positions.floor().long()
+    upper = positions.ceil().long()
+    lower_values = torch.gather(sorted_values, 1, lower)
+    upper_values = torch.gather(sorted_values, 1, upper)
+    result = lower_values + (upper_values - lower_values) * (positions - lower)
+    return torch.where(count.unsqueeze(1) > 0, result, torch.zeros_like(result))
 
 
 class ThresholdParallelDecoder(ParallelDecoder):
@@ -124,15 +148,29 @@ class ThresholdParallelDecoder(ParallelDecoder):
 
         mask_index = (x_block == self.mask_id)
 
-        x0, transfer_index = get_transfer_index_threshold(
-            logits,
-            self.temperature,
-            mask_index,
-            x_block,
-            self.mask_id,
-            threshold=iter_threshold,
-            use_float64=self.use_float64,
-        )
+        profile_metrics = getattr(self, "profile_block_metrics", False)
+        if profile_metrics:
+            x0, transfer_index, x0_p, top2_margin = get_transfer_index_threshold(
+                logits,
+                self.temperature,
+                mask_index,
+                x_block,
+                self.mask_id,
+                threshold=iter_threshold,
+                use_float64=self.use_float64,
+                return_confidence=True,
+                return_margin=True,
+            )
+        else:
+            x0, transfer_index = get_transfer_index_threshold(
+                logits,
+                self.temperature,
+                mask_index,
+                x_block,
+                self.mask_id,
+                threshold=iter_threshold,
+                use_float64=self.use_float64,
+            )
 
         transfer_index = transfer_index & mask_index
 
@@ -143,6 +181,106 @@ class ThresholdParallelDecoder(ParallelDecoder):
         x_flat[flat_idx] = x_updated
 
         broadcast_if_needed(x.data)
+        if not profile_metrics:
+            return None
+        transferred = transfer_index.sum(dim=1)
+        confidence_sum = torch.where(transfer_index, x0_p, 0).sum(dim=1)
+        confidence_min = torch.where(
+            transfer_index, x0_p, torch.full_like(x0_p, torch.inf)
+        ).min(dim=1).values
+        confidence_max = torch.where(
+            transfer_index, x0_p, torch.full_like(x0_p, -torch.inf)
+        ).max(dim=1).values
+        masked_count = mask_index.sum(dim=1)
+        transferable_confidence = torch.where(
+            x0 != self.mask_id, x0_p, torch.zeros_like(x0_p)
+        )
+        masked_confidence_sum = torch.where(
+            mask_index, transferable_confidence, 0
+        ).sum(dim=1)
+        masked_confidence_quantiles = _masked_linear_quantiles(
+            transferable_confidence, mask_index, (0.1, 0.5, 0.9)
+        )
+        masked_confidence_min = torch.where(
+            mask_index,
+            transferable_confidence,
+            torch.full_like(transferable_confidence, torch.inf),
+        ).min(dim=1).values
+        masked_confidence_max = torch.where(
+            mask_index,
+            transferable_confidence,
+            torch.full_like(transferable_confidence, -torch.inf),
+        ).max(dim=1).values
+        masked_confidence_min = torch.where(
+            masked_count > 0,
+            masked_confidence_min,
+            torch.zeros_like(masked_confidence_min),
+        )
+        masked_confidence_max = torch.where(
+            masked_count > 0,
+            masked_confidence_max,
+            torch.zeros_like(masked_confidence_max),
+        )
+
+        threshold = torch.full(
+            (B,),
+            float(iter_threshold),
+            dtype=transferable_confidence.dtype,
+            device=device,
+        )
+        threshold_column = threshold.unsqueeze(1)
+        readiness_at_or_above = (
+            mask_index & (transferable_confidence >= threshold_column)
+        ).sum(dim=1)
+        readiness_within_001_below = (
+            mask_index
+            & (transferable_confidence < threshold_column)
+            & (transferable_confidence >= threshold_column - 0.01)
+        ).sum(dim=1)
+        readiness_within_005_below = (
+            mask_index
+            & (transferable_confidence < threshold_column)
+            & (transferable_confidence >= threshold_column - 0.05)
+        ).sum(dim=1)
+        below_threshold = mask_index & (
+            transferable_confidence < threshold_column
+        )
+        deficits = torch.where(
+            below_threshold, threshold_column - transferable_confidence, 0
+        )
+        deficit_count = below_threshold.sum(dim=1)
+        deficit_sum = deficits.sum(dim=1)
+        deficit_max = deficits.max(dim=1).values
+
+        margin_sum = torch.where(mask_index, top2_margin, 0).sum(dim=1)
+        margin_quantiles = _masked_linear_quantiles(
+            top2_margin, mask_index, (0.1, 0.5, 0.9)
+        )
+        unresolved_after = x_updated == self.mask_id
+        return ThresholdDecodeStepStats(
+            transferred=transferred,
+            confidence_sum=confidence_sum,
+            confidence_min=confidence_min,
+            confidence_max=confidence_max,
+            remaining_masks=unresolved_after.sum(dim=1),
+            masked_count=masked_count,
+            masked_confidence_sum=masked_confidence_sum,
+            masked_confidence_min=masked_confidence_min,
+            masked_confidence_quantiles=masked_confidence_quantiles,
+            masked_confidence_max=masked_confidence_max,
+            threshold=threshold,
+            readiness_at_or_above=readiness_at_or_above,
+            readiness_within_001_below=readiness_within_001_below,
+            readiness_within_005_below=readiness_within_005_below,
+            deficit_count=deficit_count,
+            deficit_sum=deficit_sum,
+            deficit_max=deficit_max,
+            margin_sum=margin_sum,
+            margin_quantiles=margin_quantiles,
+            candidate_top1=x0,
+            unresolved_before=mask_index,
+            unresolved_after=unresolved_after,
+        )
 
 
 class CreditThresholdParallelDecoder(ThresholdParallelDecoder):

@@ -133,12 +133,47 @@ def test_input_processor_rejects_prompt_without_room_for_generation_block():
         )
 
 
-@pytest.mark.parametrize("policy", ["default", "paged"])
+@pytest.mark.parametrize("policy", ["default", "paged", "dynamic"])
 def test_cli_accepts_supported_scheduler_policies(policy):
     args = build_parser().parse_args(
         ["serve", "--model", "model", "--scheduler-policy", policy]
     )
     assert args.scheduler_policy == policy
+
+
+def test_dynamic_policy_uses_paged_page_profiling(monkeypatch):
+    import fluxserve.cli as cli
+
+    args = build_parser().parse_args(
+        ["serve", "--model", "model", "--scheduler-policy", "dynamic"]
+    )
+    server_args = ServerArgs(scheduler_num_device_pages=0)
+    runner = object()
+    monkeypatch.setattr(cli, "profile_paged_kv_pages", lambda **kwargs: 17)
+    # The production condition is shared by paged and dynamic policies.
+    if args.scheduler_policy in ("paged", "dynamic") and server_args.scheduler_num_device_pages <= 0:
+        server_args.scheduler_num_device_pages = cli.profile_paged_kv_pages(runner=runner, page_size=64, utilization=0.9, safety_reserve=0.05)
+    assert server_args.scheduler_num_device_pages == 17
+
+
+def test_default_policy_profiles_pages_when_flashinfer_graph_runner_requires_them(
+    monkeypatch,
+):
+    import fluxserve.cli as cli
+
+    monkeypatch.setattr(cli, "profile_paged_kv_pages", lambda **kwargs: 19)
+    args = build_parser().parse_args(["serve", "--model", "model"])
+    server_args = ServerArgs(scheduler_num_device_pages=0)
+    runner = type("Runner", (), {"enable_flashinfer_attention_graph": True})()
+    needs_pages = (
+        args.scheduler_policy in ("paged", "dynamic")
+        or bool(getattr(runner, "enable_flashinfer_attention_graph", False))
+    )
+    if needs_pages and server_args.scheduler_num_device_pages <= 0:
+        server_args.scheduler_num_device_pages = cli.profile_paged_kv_pages(
+            runner=runner, page_size=64, utilization=0.9, safety_reserve=0.05
+        )
+    assert server_args.scheduler_num_device_pages == 19
 
 
 @pytest.mark.parametrize("policy", ["fifo", "cpp_plan", "unknown"])

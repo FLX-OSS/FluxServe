@@ -7,6 +7,8 @@
 - [x] LLaDA2.1
   - [x] [LLaDA2.1-mini](https://huggingface.co/inclusionAI/LLaDA2.1-mini)
   - [x] [LLaDA2.1-flash](https://huggingface.co/inclusionAI/LLaDA2.1-flash)
+- [ ] LLaDA2.2
+  - [ ] [LLaDA2.2-flash](https://huggingface.co/inclusionAI/LLaDA2.2-flash)
 - [x] DiffusionGemma
 
 
@@ -16,7 +18,8 @@
         - [x] Torch-SDPA
         - [x] Torch-Flex
         - [x] Flashinfer-Paged
-        - [ ] Flash-Attn-4
+    - [x] Quantizaion
+        - [ ] FP8
     - [x] MoE Fused Kernels
         - [x] sgl-kernel
     - [x] Flux-Kernels
@@ -47,6 +50,8 @@
 ### PR Support
 - [ ] CI/CD Suites (WIP)
 
+## Docker Support
+- [ ] Docker Build Files
 
 
 ## Performance Results
@@ -58,4 +63,5 @@
 - [x] Env Setup (Docker)
 - [x] Benchmark Guide
 - [x] Bug Report
-- [ ] Contribution Guide
+- [x] Contribution Guide
+- [ ] Github Pages

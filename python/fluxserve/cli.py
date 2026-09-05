@@ -45,7 +45,11 @@ from fluxserve.backend.distributed.launch import (
 from fluxserve.backend.engine import AsyncLLM
 from fluxserve.backend.engine.distributed_executor import DistributedGenerationExecutor
 from fluxserve.backend.engine.executor import BlockDiffusionExecutor
-from fluxserve.backend.engine.scheduler_adapter import PagedSchedulerAdapter
+from fluxserve.backend.engine.scheduler_adapter import (
+    DefaultSchedulerAdapter,
+    DynamicSchedulerAdapter,
+    PagedSchedulerAdapter,
+)
 from fluxserve.backend.entrypoints.http_server import run
 from fluxserve.backend.execution.forward_batch_info import RunnerConfig
 from fluxserve.backend.execution.runners import (
@@ -101,10 +105,12 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--max-new-tokens", type=int, default=128)
     serve.add_argument(
         "--scheduler-policy",
-        choices=("default", "paged"),
+        choices=("default", "paged", "dynamic"),
         default="default",
     )
     serve.add_argument("--scheduler-num-device-pages", type=int, default=0)
+    serve.add_argument("--scheduler-trace-path", default=None,
+                       help="Write an opt-in JSONL scheduler trace to PATH.")
     serve.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     serve.add_argument("--gpu-memory-safety-reserve", type=float, default=0.05)
     serve.add_argument("--block-length", type=int, default=64)
@@ -321,21 +327,21 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
     apply_template = bool(args.apply_template or is_diffusion_gemma)
     if is_diffusion_gemma and not args.apply_template:
         logger.info("Diffusion-Gemma chat requests use the checkpoint chat template.")
-    if is_diffusion_gemma and args.scheduler_policy == "paged":
+    if is_diffusion_gemma and args.scheduler_policy in ("paged", "dynamic"):
         raise RuntimeError(
             "Diffusion-Gemma FlashInfer does not support scheduler_policy='paged' yet."
         )
     _reject_unsupported_quantization(model_config)
     model_config.quant_config = None
     _check_block_routing_alignment(model_config, args.block_length)
-    if args.scheduler_policy == "paged" and (
+    if args.scheduler_policy in ("default", "paged", "dynamic") and (
         args.attention_backend != "flashinfer"
         or args.kv_cache_layout != "paged"
         or args.flashinfer_cache_mode != "paged"
         or args.flashinfer_prefill_mode != "paged"
     ):
         raise RuntimeError(
-            "scheduler_policy='paged' requires attention_backend='flashinfer', "
+            "scheduler_policy requires attention_backend='flashinfer', "
             "kv_cache_layout='paged', flashinfer_cache_mode='paged', and "
             "flashinfer_prefill_mode='paged'."
         )
@@ -361,6 +367,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         scheduler_policy=args.scheduler_policy,
         scheduler_page_size=args.page_size or args.block_length,
         scheduler_num_device_pages=args.scheduler_num_device_pages,
+        scheduler_trace_path=args.scheduler_trace_path,
         gpu_memory_utilization=args.gpu_memory_utilization,
         gpu_memory_safety_reserve=args.gpu_memory_safety_reserve,
         trust_remote_code=args.trust_remote_code,
@@ -392,20 +399,20 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         initialize_dp_attention(server_args=server_args, model_config=model_config)
         initialize_moe_config(server_args)
 
-        if args.scheduler_policy == "paged":
+        if args.scheduler_policy in ("default", "paged", "dynamic"):
             page_size = int(args.page_size or args.block_length)
             if page_size != int(args.block_length):
                 raise ValueError(
-                    "paged block diffusion requires page_size == block_length"
+                    "paged scheduler policies require page_size == block_length"
                 )
             if int(args.max_model_len) % int(args.block_length) != 0:
                 raise ValueError(
-                    "paged block diffusion requires max_model_len to be "
+                    "paged scheduler policies require max_model_len to be "
                     "divisible by block_length"
                 )
             if int(args.max_scheduled_tokens) % int(args.block_length) != 0:
                 raise ValueError(
-                    "paged block diffusion requires max_scheduled_tokens to be "
+                    "paged scheduler policies require max_scheduled_tokens to be "
                     "divisible by block_length"
                 )
             num_device_pages = int(args.scheduler_num_device_pages)
@@ -479,7 +486,11 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             runner_config=runner_config,
             device=args.device,
         )
-        if args.scheduler_policy == "paged" and int(server_args.scheduler_num_device_pages) <= 0:
+        needs_paged_kv_pages = (
+            args.scheduler_policy in ("paged", "dynamic")
+            or bool(getattr(runner, "enable_flashinfer_attention_graph", False))
+        )
+        if needs_paged_kv_pages and int(server_args.scheduler_num_device_pages) <= 0:
             server_args.scheduler_num_device_pages = profile_paged_kv_pages(
                 runner=runner, page_size=int(args.page_size or args.block_length),
                 utilization=server_args.gpu_memory_utilization,
@@ -488,15 +499,22 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         executor = DistributedGenerationExecutor(base_executor, context)
         if context.is_rank0:
             scheduler = None
-            if args.scheduler_policy == "paged":
+            if args.scheduler_policy == "default":
+                scheduler = DefaultSchedulerAdapter(args.max_num_seqs)
+            elif args.scheduler_policy in ("paged", "dynamic"):
                 page_size = int(args.page_size or args.block_length)
                 num_device_pages = int(server_args.scheduler_num_device_pages)
-                scheduler = PagedSchedulerAdapter(
+                native_scheduler = PagedSchedulerAdapter(
                     max_batch_size=args.max_num_seqs,
                     max_scheduled_tokens=args.max_scheduled_tokens,
                     page_size=page_size,
                     num_device_pages=num_device_pages,
                     max_model_len=args.max_model_len,
+                )
+                scheduler = (
+                    DynamicSchedulerAdapter(native_scheduler, args.max_num_seqs)
+                    if args.scheduler_policy == "dynamic"
+                    else native_scheduler
                 )
             engine = AsyncLLM(
                 server_args=server_args,

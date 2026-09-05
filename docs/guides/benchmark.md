@@ -17,6 +17,16 @@ fluxserve bench_offline \
   --cuda-graph-capture-bs 1 2 4 
 ```
 
+For LLaDA 2.0 threshold decoding, add `--profile-block-metrics` to write a
+separate `*_block_profile.jsonl` sidecar. Each request contains per-block
+forward counts, mask-to-token transfers, and transferred-token confidence
+summaries. Each forward also reports the unresolved-token confidence
+distribution, threshold readiness and deficit, top-2 margin, prediction flip
+rate, and fallback streak; blocks summarize their fallback and single-token
+forwards. The final zero-transfer KV-commit forward is included. Because the
+instrumented run performs extra reductions and retains profiling metadata, use
+an uninstrumented run for latency and throughput comparisons.
+
 ## Online Benchmark
 
 1. Launch FluxServe engine
@@ -57,3 +67,8 @@ fluxserve serve \
   --max-concurrency 32 \
   --metric-percentiles 50,90,99 \
 ```
+
+
+## Third-party API Benchmark
+To measure the performance in real-world serving, we also provide scripts to benchmark FluxServe through third-party tools (evalscope-perf). 
+To reproduce the results in the figure, refer to [bench.sh](./test/benchmark/fluxserve/bench.sh) and [agentic_bench.sh](./test/benchmark/fluxserve/agentic_bench.sh)

@@ -1,6 +1,10 @@
 ### Model Support
 - [ ] LLaDA2.2
+- [ ] Nemotron-Labs-Diffusion
 
+### Tokenizer Support
+- [ ] FastTokens
+- [ ] Gigatokens
 
 ### Kernel Support
 - [ ] Flash-Attn-4

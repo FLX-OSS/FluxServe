@@ -654,7 +654,7 @@ async def run_serving_benchmark(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def add_bench_subparser(subparsers: argparse._SubParsersAction) -> None:
-    bench = subparsers.add_parser("bench", help="Online serving benchmark.")
+    bench = subparsers.add_parser("bench", help="Online serving benchmark (experimental).")
     bench_sub = bench.add_subparsers(dest="bench_type", required=True)
     serve = bench_sub.add_parser("serve")
     serve.add_argument("--model", required=True)

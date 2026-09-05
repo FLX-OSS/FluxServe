@@ -19,5 +19,7 @@
 # SOFTWARE.
 
 
-"""FluxServe backend primitives."""
+"""
+    Backend primitives.
+"""
 

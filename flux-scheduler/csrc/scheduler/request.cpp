@@ -27,8 +27,9 @@
 
 namespace flux {
 
-Request::Request(const RequestSpec& spec, std::int32_t page_size)
+Request::Request(const RequestSpec& spec, std::int32_t page_size, std::uint64_t arrival_sequence)
     : id_{spec.request_id},
+      arrival_sequence_{arrival_sequence},
       token_container_{spec.tokens, spec.prefill_length},
       page_size_{page_size},
       state_{fsm::State{fsm::Submitted{&token_container_, page_size}}},

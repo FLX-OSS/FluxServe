@@ -406,16 +406,15 @@ Scheduler::newForwardOperation(std::vector<Request*> candidates) {
         if (req->Is<fsm::Retracted>()) return 4;
         return 9;
     };
-    // TP-determinism: tie-break on Request::Id() so the relative order within a
-    // priority class is identical across ranks. requests_ is an unordered_map
-    // keyed by string id; libstdc++ randomizes string hashing per process, so
-    // without the tiebreaker each rank visits candidates in a different order
-    // and when token_budget / page constraints are tight, picks
-    // a different subset to schedule. That made forward_op None on some ranks
-    // and non-None on others, deadlocking the next NCCL collective.
+    // FIFO within each priority class. Replicas must receive identical ordered
+    // submissions so arrival sequences, and therefore plans, agree across ranks.
     std::sort(candidates.begin(), candidates.end(), [&](const auto& a, const auto& b) {
         int pa = priority(a), pb = priority(b);
-        return pa != pb ? pa < pb : a->Id() < b->Id();
+        if (pa != pb) return pa < pb;
+        if (a->ArrivalSequence() != b->ArrivalSequence()) {
+            return a->ArrivalSequence() < b->ArrivalSequence();
+        }
+        return a->Id() < b->Id();
     });
 
     std::vector<ForwardOperation> ops;

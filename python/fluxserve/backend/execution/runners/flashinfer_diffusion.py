@@ -619,6 +619,12 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                     finish_reason=finish_reason,
                     reserve_tokens=0 if finished else block_length,
                     decode_block_completed=True,
+                    trajectory_metrics={
+                        "block_length": block_length,
+                        "transferred_tokens": len(generated),
+                        "remaining_masks": max(0, block_length - len(generated)),
+                        "progress": len(generated) / max(block_length, 1),
+                    },
                 )
             )
         return results
@@ -1340,7 +1346,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             decoder_kwargs = self._decoder_editing_kwargs(
                 seq_ids, prompt_lengths, edit_budget, row_state
             )
-            self.decoder.batch_decode(
+            step_stats = self.decoder.batch_decode(
                 logits,
                 decoding_start[seq_ids],
                 decoding_x,
@@ -1361,6 +1367,14 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             had_mask = (decoding_block == self.decoder.mask_id).any(dim=1)
             changed = (after != decoding_block).any(dim=1)
             block_finished = (~had_mask) & (~changed)
+        if fused_replay is not None:
+            step_stats = None
+        self._record_block_profile(
+            seq_ids,
+            decoding_start[seq_ids],
+            step_stats,
+            block_finished,
+        )
         if edit_budget is not None:
             edit_budget.update(seq_ids, had_mask, changed, block_finished)
         if output is not None:

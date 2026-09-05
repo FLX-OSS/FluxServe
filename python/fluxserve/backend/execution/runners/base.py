@@ -147,6 +147,9 @@ class ModelRunner:
 
     def init_decoder(self):
         self.decoder = load_decoder(self.runner_config)
+        self.decoder.profile_block_metrics = bool(
+            self.runner_config.profile_block_metrics
+        )
 
     def warmup_run(self):
         if not self.enable_cuda_graph:

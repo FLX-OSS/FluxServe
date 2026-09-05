@@ -30,7 +30,7 @@ git clone https://github.com/FLX-OSS/FluxServe
 cd FluxServe
 ```
 
-Install the fluxserver related package:
+Install the fluxserve related package:
 
 ```bash
 export PIP_BREAK_SYSTEM_PACKAGES=1
@@ -38,6 +38,13 @@ pip install -e flux-kernel/python/ --no-build-isolation
 pip install -e flux-scheduler
 pip install -e .
 ```
+
+Verify the fluxserve installation and environment pkgs:
+
+```bash
+fluxserve env 
+```
+
 
 Launch FluxServe engine:
 
