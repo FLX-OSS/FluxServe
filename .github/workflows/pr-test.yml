@@ -83,7 +83,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$WORK_DIR/.ci-artifacts"
           if [[ "$RUNTIME" == "gh200-apptainer" ]]; then
-            bash "$WORK_DIR/gh200/run_flux_container.sh" bash -lc '
+            bash "$WORK_DIR/test/ci_system/env/gh200.sh" bash -lc '
               cd "$PWD"
               python3 test/ci_system/pipeline.py execute \
                 --config "$CONFIG" \
@@ -109,7 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$RUNTIME" == "gh200-apptainer" ]]; then
-            bash "$WORK_DIR/gh200/run_flux_container.sh" bash -lc '
+            bash "$WORK_DIR/test/ci_system/env/gh200.sh" bash -lc '
               cd "$PWD"
               python3 test/ci_system/pipeline.py execute \
                 --config "$CONFIG" \

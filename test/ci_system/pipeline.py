@@ -352,7 +352,7 @@ def setup_runner(
     pgm: Optional[ProcessGroupManager] = None
 
     # GH200 jobs run inside the preconfigured Apptainer environment supplied
-    # by test/ci/env/gh200.sh. Do not mutate the host or install CUDA 13
+    # by test/ci_system/env/gh200.sh. Do not mutate the host or install CUDA 13
     # dependencies from inside that container.
     if runner.startswith("gh200-"):
         return local_env, pgm
