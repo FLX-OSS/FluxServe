@@ -1,6 +1,9 @@
 name: PR Tests
 
 on:
+  pull_request:
+    types: [labeled]
+    branches: [main]
   workflow_dispatch:
     inputs:
       trigger:
@@ -17,6 +20,11 @@ permissions:
   contents: read
 jobs:
   scan:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.action == 'labeled' &&
+       github.event.label.name == 'ci:run')
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.scan.outputs.matrix }}
@@ -31,9 +39,14 @@ jobs:
         id: scan
         env:
           DISPATCH_TRIGGER: ${{ inputs.trigger }}
+          LABEL_NAME: ${{ github.event.label.name }}
         run: |
           set -euo pipefail
-          trigger="${DISPATCH_TRIGGER:-manual}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            trigger="${DISPATCH_TRIGGER:-manual}"
+          else
+            trigger=per-commit
+          fi
 
           matrix=$(python3 test/ci_system/pipeline.py scan \
             --root test/ci \
@@ -130,7 +143,12 @@ jobs:
         run: rm -rf "$WORK_DIR"
 
   finish:
-    if: always()
+    if: >
+      always() &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'pull_request' &&
+        github.event.action == 'labeled' &&
+        github.event.label.name == 'ci:run'))
     needs:
       - scan
       - ci-task
