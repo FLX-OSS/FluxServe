@@ -1,12 +1,39 @@
 name: GH200 PR Tests (Apptainer)
 
+on:
+  push:
+    branches: [main]
+    paths:
+      - "python/fluxserve/**"
+      - "flux-kernel/**"
+      - "flux-scheduler/**"
+      - "test/**"
+      - ".github/workflows/pr-test.yml"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+    branches: [main]
+    paths:
+      - "python/fluxserve/**"
+      - "flux-kernel/**"
+      - "flux-scheduler/**"
+      - "test/**"
+      - ".github/workflows/pr-test.yml"
+  workflow_dispatch:
+    inputs:
+      trigger:
+        description: "CI task trigger to run"
+        required: false
+        default: manual
+        type: choice
+        options:
+          - manual
+          - debug
+
+
 # Add this concurrency block
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-  
-on:
-  workflow_dispatch:
 
 permissions:
   contents: read

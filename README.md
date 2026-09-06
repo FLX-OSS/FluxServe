@@ -8,9 +8,10 @@
 
 Its core features include:
 
-- **Block Causal Attention**: Provides efficient attention runtime with a block-casual attention mechanism suitable for AR diffusion in real-world scenarios, including *varlen prefill* and *varlen block-deocde* with CUDA graph support.
-- **Dynamic Scheduler**: Provides scheduler with low-overhead C++ control plane and Python execution plane with fine-grained block-level request management suitable for block diffusion models.
-- **Multi-GPU Serving**: Provides tensor paralllel (TP), data parallel (DP) and expert parallel (EP) support for large-scale models.
+- **Native Block-Causal Attention**: Provides efficient flashinfer runtime with a block-casual attention mechanism suitable for AR diffusion in real-world scenarios, including *varlen prefill* and *varlen block-deocde* with CUDA graph support.
+- **Dynamic Request Scheduler**: Provides scheduler with low-overhead C++ control plane and Python execution plane with fine-grained block-level request management suitable for block diffusion models.
+- **Open Model Support**: Provides native support for a wide range of open diffusion language models, such as LLaDA2.X and Diffusion-Gemma.
+- **Efficient Multi-GPU Serving**: Provides tensor paralllel (TP), data parallel (DP) and expert parallel (EP) support for large-scale models.
 
 ## [Getting Started](docs/guides/getting_started.md)
 
@@ -19,5 +20,6 @@ Its core features include:
 ## Performance Results
 <img src="./assets/figures/result.png" alt="FluxServe vs. SGLang-dLLM on LLaDA-2.0-mini/flash" width="960px" margin="10px"></img>
 
+
 ## Acknowledgments
-We learned the system design and reused code from the following projects: [vLLM](https://github.com/vllm-project/vllm), [SGLang](https://github.com/sgl-project/sglang), [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM), [TokenSpeed](https://github.com/lightseekorg/tokenspeed), [FlashAttention](https://github.com/dao-ailab/flash-attention), [FlashInfer](https://github.com/flashinfer-ai/flashinfer), [FlashInfer-dllm](https://github.com/fdz-1999/flashinfer/tree/feature/block-extend) and [dInfer](https://github.com/inclusionAI/dInfer).
+We learned the system design and reused code from the following projects: [vllm](https://github.com/vllm-project/vllm), [SGLang](https://github.com/sgl-project/sglang), [TokenSpeed](https://github.com/lightseekorg/tokenspeed), [dInfer](https://github.com/inclusionAI/dInfer), [FlashInfer](https://github.com/flashinfer-ai/flashinfer/pull/2722), and [Flash-Attention](https://github.com/dao-ailab/flash-attention).

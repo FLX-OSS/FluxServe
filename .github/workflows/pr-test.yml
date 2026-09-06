@@ -1,0 +1,172 @@
+name: PR Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "python/fluxserve/**"
+      - "flux-kernel/**"
+      - "flux-scheduler/**"
+      - "test/**"
+      - ".github/workflows/pr-test.yml"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+    branches: [main]
+    paths:
+      - "python/fluxserve/**"
+      - "flux-kernel/**"
+      - "flux-scheduler/**"
+      - "test/**"
+      - ".github/workflows/pr-test.yml"
+  workflow_dispatch:
+    inputs:
+      trigger:
+        required: false
+        default: manual
+        type: choice
+        options:
+          - manual
+          - debug
+concurrency:
+  group: pr-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+permissions:
+  contents: read
+jobs:
+  # Closed PRs only need the cancellation path.
+  cancel-on-close:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR #${{ github.event.pull_request.number }} was closed."
+  scan:
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.scan.outputs.matrix }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install scan dependency
+        run: python3 -m pip install pyyaml
+
+      - name: Build task matrix
+        id: scan
+        env:
+          DISPATCH_TRIGGER: ${{ inputs.trigger }}
+        run: |
+          set -euo pipefail
+          trigger=per-commit
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            trigger="${DISPATCH_TRIGGER:-manual}"
+          fi
+
+          matrix=$(python3 test/ci_system/pipeline.py scan \
+            --root test/ci \
+            --trigger "$trigger")
+
+          {
+            echo 'matrix<<EOF'
+            echo "$matrix"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+  ci-task:
+    needs: scan
+    if: needs.scan.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.scan.outputs.matrix) }}
+    name: ${{ matrix.name }} / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 240
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      WORK_DIR: ${{ github.workspace }}/run-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}-${{ matrix.runner }}
+      CONFIG: ${{ matrix.config }}
+      RUNNER_LABEL: ${{ matrix.runner }}
+      RUNTIME: ${{ matrix.runtime }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          path: run-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}-${{ matrix.runner }}
+      - name: Install task
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORK_DIR/.ci-artifacts"
+          if [[ "$RUNTIME" == "gh200-apptainer" ]]; then
+            bash "$WORK_DIR/gh200/run_flux_container.sh" bash -lc '
+              cd "$PWD"
+              python3 test/ci_system/pipeline.py execute \
+                --config "$CONFIG" \
+                --runner "$RUNNER_LABEL" \
+                --work-dir "$PWD" \
+                --print-plan \
+                --only-stage install \
+                --keep-runner-state \
+                --result-json .ci-artifacts/install-result.json
+            '
+          else
+            cd "$WORK_DIR"
+            python3 test/ci_system/pipeline.py execute \
+              --config "$CONFIG" \
+              --runner "$RUNNER_LABEL" \
+              --work-dir "$WORK_DIR" \
+              --print-plan \
+              --only-stage install \
+              --keep-runner-state \
+              --result-json .ci-artifacts/install-result.json
+          fi
+      - name: Execute task
+        run: |
+          set -euo pipefail
+          if [[ "$RUNTIME" == "gh200-apptainer" ]]; then
+            bash "$WORK_DIR/gh200/run_flux_container.sh" bash -lc '
+              cd "$PWD"
+              python3 test/ci_system/pipeline.py execute \
+                --config "$CONFIG" \
+                --runner "$RUNNER_LABEL" \
+                --work-dir "$PWD" \
+                --print-plan \
+                --skip-stage install \
+                --reuse-runner-state \
+                --result-json .ci-artifacts/result.json
+            '
+          else
+            cd "$WORK_DIR"
+            python3 test/ci_system/pipeline.py execute \
+              --config "$CONFIG" \
+              --runner "$RUNNER_LABEL" \
+              --work-dir "$WORK_DIR" \
+              --print-plan \
+              --skip-stage install \
+              --reuse-runner-state \
+              --result-json .ci-artifacts/result.json
+          fi
+      - name: Upload task artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-test-${{ matrix.name }}-${{ matrix.runner }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.WORK_DIR }}/.ci-artifacts/
+          if-no-files-found: warn
+      - name: Cleanup work directory
+        if: always()
+        run: rm -rf "$WORK_DIR"
+
+  finish:
+    if: always() && (github.event_name != 'pull_request' || github.event.action != 'closed')
+    needs:
+      - scan
+      - ci-task
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report aggregate status
+        env:
+          SCAN_RESULT: ${{ needs.scan.result }}
+          TASK_RESULT: ${{ needs.ci-task.result }}
+        run: |
+          echo "scan=$SCAN_RESULT ci-task=$TASK_RESULT"
+          [[ "$SCAN_RESULT" == success && ( "$TASK_RESULT" == success || "$TASK_RESULT" == skipped ) ]]

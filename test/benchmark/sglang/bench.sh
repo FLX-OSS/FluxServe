@@ -18,7 +18,7 @@ usage() {
     echo "       RATES='RATE RATE ...' $0"
 }
 
-rates_arg="${RATES:-0.4 0.8}"
+rates_arg="${RATES:-16}"
 while (( $# > 0 )); do
     case "$1" in
         --rates)
@@ -155,15 +155,12 @@ run_perf() {
 
 trap stop_server EXIT
 
-run_perf gsm8k tp1_ep1_llada21_mini inclusionAI/LLaDA2.1-mini gsm8k.jsonl 
-run_perf bigcodebench tp1_ep1_llada21_mini inclusionAI/LLaDA2.1-mini bigcodebench.jsonl 
-
-# run_perf gsm8k tp1_ep1__mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
+# run_perf gsm8k tp1_ep1_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
 # run_perf gsm8k tp4_ep4_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
 # run_perf gsm8k tp4_ep4_flash inclusionAI/LLaDA2.0-flash gsm8k.jsonl 
 
 
-# run_perf bigcodebench tp1_ep1_mini inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
+run_perf bigcodebench tp1_ep1_mini inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
 # run_perf bigcodebench tp4_ep4_mini inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
 # run_perf bigcodebench tp4_ep4_flash inclusionAI/LLaDA2.0-flash bigcodebench.jsonl
 

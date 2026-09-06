@@ -19,7 +19,7 @@ usage() {
     echo "       RATES='RATE RATE ...' $0"
 }
 
-rates_arg="${RATES:-16}"
+rates_arg="${RATES:-32}"
 while (( $# > 0 )); do
     case "$1" in
         --rates)
@@ -135,7 +135,7 @@ run_perf() {
             --max-tokens 2048
             --no-stream
             --num 1000
-            --parallel 16
+            --parallel 32
             --rate "$rate"
             --name "${benchmark}_${config}_rate_${rate}"
             --outputs-dir "$rate_output_dir"
@@ -164,8 +164,12 @@ trap stop_server EXIT
 
 # run_perf bigcodebench tp1_ep1_mini inclusionAI/LLaDA2.0-mini bigcodebench.jsonl
 # run_perf bigcodebench tp1_ep1_mini_fifo inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
-run_perf bigcodebench tp1_ep1_mini_paged inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
-run_perf bigcodebench tp1_ep1_mini_dynamic inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
+# run_perf bigcodebench tp1_ep1_mini_paged inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
+# run_perf bigcodebench tp1_ep1_mini_dynamic inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
+
+
+run_perf bigcodebench tp4_ep4_flash_paged inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
+run_perf bigcodebench tp4_ep4_flash_dynamic inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
 
 # run_perf humaneval tp1_ep1_mini_paged inclusionAI/LLaDA2.0-mini humaneval.jsonl
 
