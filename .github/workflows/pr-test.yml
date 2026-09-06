@@ -1,23 +1,6 @@
 name: PR Tests
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "python/fluxserve/**"
-      - "flux-kernel/**"
-      - "flux-scheduler/**"
-      - "test/**"
-      - ".github/workflows/pr-test.yml"
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
-    branches: [main]
-    paths:
-      - "python/fluxserve/**"
-      - "flux-kernel/**"
-      - "flux-scheduler/**"
-      - "test/**"
-      - ".github/workflows/pr-test.yml"
   workflow_dispatch:
     inputs:
       trigger:
@@ -28,19 +11,12 @@ on:
           - manual
           - debug
 concurrency:
-  group: pr-test-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  group: pr-test-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
-  # Closed PRs only need the cancellation path.
-  cancel-on-close:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "PR #${{ github.event.pull_request.number }} was closed."
   scan:
-    if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.scan.outputs.matrix }}
@@ -57,10 +33,7 @@ jobs:
           DISPATCH_TRIGGER: ${{ inputs.trigger }}
         run: |
           set -euo pipefail
-          trigger=per-commit
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            trigger="${DISPATCH_TRIGGER:-manual}"
-          fi
+          trigger="${DISPATCH_TRIGGER:-manual}"
 
           matrix=$(python3 test/ci_system/pipeline.py scan \
             --root test/ci \
@@ -74,7 +47,7 @@ jobs:
 
   ci-task:
     needs: scan
-    if: needs.scan.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: needs.scan.result == 'success'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.scan.outputs.matrix) }}
@@ -157,7 +130,7 @@ jobs:
         run: rm -rf "$WORK_DIR"
 
   finish:
-    if: always() && (github.event_name != 'pull_request' || github.event.action != 'closed')
+    if: always()
     needs:
       - scan
       - ci-task
