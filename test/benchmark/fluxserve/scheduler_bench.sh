@@ -149,7 +149,7 @@ run_perf() {
         "${EVALSCOPE_VENV}/bin/python" "${perf_args[@]}"
     done
     if [[ -f "${output_dir}/scheduler_trace.jsonl" ]]; then
-        python3 -m fluxserve.backend.engine.trace_parser \
+        python3 -m fluxserve.backend.metrics.trace \
             "${output_dir}/scheduler_trace.jsonl" > "${output_dir}/trace_summary.json"
     fi
     stop_server

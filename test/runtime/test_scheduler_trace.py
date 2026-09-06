@@ -1,7 +1,6 @@
 import json
 
-from fluxserve.backend.engine.scheduler_trace import SchedulerTrace
-from fluxserve.backend.engine.trace_parser import summarize_trace
+from fluxserve.backend.metrics.trace import SchedulerTrace, summarize_trace
 
 
 def test_trace_writes_jsonl_and_flushes(tmp_path):
@@ -35,4 +34,3 @@ def test_trace_parser_detects_lifecycle_errors(tmp_path):
     summary = summarize_trace(path)
     assert any("terminal-before-admission:b" in error for error in summary["errors"])
     assert any("plan-after-terminal:a" in error for error in summary["errors"])
-

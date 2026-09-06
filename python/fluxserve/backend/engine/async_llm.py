@@ -32,7 +32,7 @@ from fluxserve.backend.engine.io_struct import GenerateReqInput, GenerateReqOutp
 from fluxserve.backend.engine.processor import InputProcessor, OutputProcessor
 from fluxserve.backend.engine.request import RequestState
 from fluxserve.backend.metrics.engine import EngineMetrics
-from fluxserve.backend.engine.scheduler_trace import SchedulerTrace
+from fluxserve.backend.metrics.trace import SchedulerTrace
 from fluxserve.backend.utils.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
@@ -150,11 +150,10 @@ class AsyncLLM:
             await state.queue.put(output)
 
     def get_metrics_snapshot(self) -> dict[str, int | float]:
-        snapshot = self.metrics.snapshot()
         stats = getattr(self.executor, "cuda_graph_stats", None)
         if stats is not None:
-            snapshot.update({f"cuda_graph_{k}": v for k, v in stats().items()})
-        return snapshot
+            self.metrics.record_cuda_graph_stats(stats())
+        return self.metrics.snapshot()
 
     async def _collect_one(self, state: RequestState) -> GenerateReqOutput:
         output = None

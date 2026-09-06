@@ -18,13 +18,12 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from .performance import (
+from .perf import (
     BatchPerformanceMetrics,
-    DecodeBlockMetric,
     count_completion_tokens,
     record_batch_performance_metrics,
-    summarize_decode_block_metrics,
 )
+from .trace import DecodeBlockMetric, SchedulerTrace, summarize_decode_block_metrics, summarize_trace
 
 __all__ = [
     "BatchPerformanceMetrics",
@@ -32,4 +31,6 @@ __all__ = [
     "count_completion_tokens",
     "record_batch_performance_metrics",
     "summarize_decode_block_metrics",
+    "SchedulerTrace",
+    "summarize_trace",
 ]
