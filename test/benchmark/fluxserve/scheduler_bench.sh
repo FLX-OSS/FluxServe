@@ -19,7 +19,7 @@ usage() {
     echo "       RATES='RATE RATE ...' $0"
 }
 
-rates_arg="${RATES:-8}"
+rates_arg="${RATES:-16}"
 while (( $# > 0 )); do
     case "$1" in
         --rates)
@@ -134,7 +134,7 @@ run_perf() {
             --dataset-path "$dataset_path"
             --max-tokens 2048
             --no-stream
-            --num 164
+            --num 1000
             --parallel 16
             --rate "$rate"
             --name "${benchmark}_${config}_rate_${rate}"
@@ -164,7 +164,7 @@ trap stop_server EXIT
 
 # run_perf bigcodebench tp1_ep1_mini inclusionAI/LLaDA2.0-mini bigcodebench.jsonl
 # run_perf bigcodebench tp1_ep1_mini_fifo inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
-# run_perf bigcodebench tp1_ep1_mini_paged inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
+run_perf bigcodebench tp1_ep1_mini_paged inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
 run_perf bigcodebench tp1_ep1_mini_dynamic inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
 
 # run_perf humaneval tp1_ep1_mini_paged inclusionAI/LLaDA2.0-mini humaneval.jsonl

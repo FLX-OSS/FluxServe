@@ -59,7 +59,7 @@ class ServerArgs:
     generation_block_size: int = 1
     stream_interval: int = 1
     enable_prefix_caching: bool = False
-    scheduler_policy: str = "default"
+    scheduler_policy: str = "paged"
     scheduler_page_size: int | None = None
     scheduler_num_device_pages: int = 0
     scheduler_trace_path: str | None = None

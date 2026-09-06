@@ -46,7 +46,6 @@ from fluxserve.backend.engine import AsyncLLM
 from fluxserve.backend.engine.distributed_executor import DistributedGenerationExecutor
 from fluxserve.backend.engine.executor import BlockDiffusionExecutor
 from fluxserve.backend.engine.scheduler_adapter import (
-    DefaultSchedulerAdapter,
     DynamicSchedulerAdapter,
     PagedSchedulerAdapter,
 )
@@ -105,8 +104,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--max-new-tokens", type=int, default=128)
     serve.add_argument(
         "--scheduler-policy",
-        choices=("default", "paged", "dynamic"),
-        default="default",
+        choices=("paged", "dynamic"),
+        default="paged",
     )
     serve.add_argument("--scheduler-num-device-pages", type=int, default=0)
     serve.add_argument("--scheduler-trace-path", default=None,
@@ -334,7 +333,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
     _reject_unsupported_quantization(model_config)
     model_config.quant_config = None
     _check_block_routing_alignment(model_config, args.block_length)
-    if args.scheduler_policy in ("default", "paged", "dynamic") and (
+    if args.scheduler_policy in ("paged", "dynamic") and (
         args.attention_backend != "flashinfer"
         or args.kv_cache_layout != "paged"
         or args.flashinfer_cache_mode != "paged"
@@ -399,7 +398,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         initialize_dp_attention(server_args=server_args, model_config=model_config)
         initialize_moe_config(server_args)
 
-        if args.scheduler_policy in ("default", "paged", "dynamic"):
+        if args.scheduler_policy in ("paged", "dynamic"):
             page_size = int(args.page_size or args.block_length)
             if page_size != int(args.block_length):
                 raise ValueError(
@@ -499,9 +498,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         executor = DistributedGenerationExecutor(base_executor, context)
         if context.is_rank0:
             scheduler = None
-            if args.scheduler_policy == "default":
-                scheduler = DefaultSchedulerAdapter(args.max_num_seqs)
-            elif args.scheduler_policy in ("paged", "dynamic"):
+            if args.scheduler_policy in ("paged", "dynamic"):
                 page_size = int(args.page_size or args.block_length)
                 num_device_pages = int(server_args.scheduler_num_device_pages)
                 native_scheduler = PagedSchedulerAdapter(

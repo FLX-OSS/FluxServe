@@ -31,7 +31,6 @@ from fluxserve.backend.engine.executor import GenerationExecutor
 from fluxserve.backend.engine.io_struct import GenerateReqInput, GenerateReqOutput
 from fluxserve.backend.engine.processor import InputProcessor, OutputProcessor
 from fluxserve.backend.engine.request import RequestState
-from fluxserve.backend.engine.scheduler_adapter import DefaultSchedulerAdapter
 from fluxserve.backend.metrics.engine import EngineMetrics
 from fluxserve.backend.engine.scheduler_trace import SchedulerTrace
 from fluxserve.backend.utils.server_args import ServerArgs
@@ -57,17 +56,15 @@ class AsyncLLM:
                 trust_remote_code=server_args.trust_remote_code,
             )
         self.tokenizer = tokenizer
-        self.scheduler = (
-            DefaultSchedulerAdapter(server_args.max_num_seqs)
-            if scheduler is None
-            else scheduler
-        )
+        if scheduler is None:
+            raise ValueError("A paged or dynamic scheduler must be provided")
+        self.scheduler = scheduler
         self.input_processor = InputProcessor(server_args, self.tokenizer)
         self.output_processor = OutputProcessor()
         self.metrics = EngineMetrics()
         self.trace = SchedulerTrace(
             getattr(server_args, "scheduler_trace_path", None),
-            metadata={"policy": getattr(server_args, "scheduler_policy", "default"),
+            metadata={"policy": getattr(server_args, "scheduler_policy", "paged"),
                       "model": getattr(server_args, "model_name", "")},
         )
         self._states: dict[str, RequestState] = {}

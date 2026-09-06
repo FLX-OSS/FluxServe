@@ -11,7 +11,7 @@ exec fluxserve serve \
     --ep-size 1 \
     --gpu-memory-utilization 0.8 \
     --max-num-seqs 16 \
-    --max-model-len 8192 \
+    --max-model-len 65536 \
     --max-scheduled-tokens 2048 \
     --block-length 64 \
     --parallel-decoding threshold \
