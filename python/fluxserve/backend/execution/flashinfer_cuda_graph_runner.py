@@ -46,6 +46,30 @@ class _DecodeGraphEntry:
     append_positions: torch.Tensor
     wrapper: object
     hidden_states: torch.Tensor
+    # Fused decoder tail (LLaDA2.1 joint_threshold): extra graph inputs and
+    # outputs captured together with the model forward. None when the active
+    # decoder does not declare graph_fused_step.
+    prompt_positions: torch.Tensor | None = None
+    allow_edit: torch.Tensor | None = None
+    x_updated: torch.Tensor | None = None
+    had_mask: torch.Tensor | None = None
+    changed: torch.Tensor | None = None
+    block_finished: torch.Tensor | None = None
+
+
+@dataclass(frozen=True)
+class DecodeGraphReplay:
+    """Outputs of one decode-graph replay, sliced to the real batch rows.
+
+    ``x_updated``/``had_mask``/``changed``/``block_finished`` are None unless
+    the graph was captured with the fused decoder tail.
+    """
+
+    hidden_states: torch.Tensor
+    x_updated: torch.Tensor | None = None
+    had_mask: torch.Tensor | None = None
+    changed: torch.Tensor | None = None
+    block_finished: torch.Tensor | None = None
 
 
 @dataclass
@@ -669,7 +693,9 @@ class FlashInferCudaGraphRunner:
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
         forward_batch: ForwardBatch,
-    ) -> torch.Tensor:
+        prompt_positions: torch.Tensor | None = None,
+        allow_edit: torch.Tensor | None = None,
+    ) -> DecodeGraphReplay:
         self._require_family("llada2")
         actual_batch_size = int(input_ids.shape[0])
         batch_size = actual_batch_size
@@ -763,11 +789,28 @@ class FlashInferCudaGraphRunner:
         entry.kv_offsets.zero_()
         entry.append_batch_indices.copy_(padded_append_batch_indices)
         entry.append_positions.copy_(padded_append_positions)
+        if entry.x_updated is not None:
+            # Fused decoder tail inputs. Padding rows: full prompt protection
+            # and no edit budget, so their outputs stay inert.
+            entry.prompt_positions.fill_(True)
+            entry.allow_edit.fill_(False)
+            if prompt_positions is not None:
+                entry.prompt_positions[:actual_batch_size].copy_(prompt_positions)
+            if allow_edit is not None:
+                entry.allow_edit[:actual_batch_size].copy_(allow_edit)
         entry.graph.replay()
         self.decode_replay_count += 1
         self.decode_component_replay_count += 1
         self._decode_replay_counts_by_bs[batch_size] += 1
-        return entry.hidden_states[:actual_batch_size]
+        if entry.x_updated is None:
+            return DecodeGraphReplay(entry.hidden_states[:actual_batch_size])
+        return DecodeGraphReplay(
+            entry.hidden_states[:actual_batch_size],
+            x_updated=entry.x_updated[:actual_batch_size],
+            had_mask=entry.had_mask[:actual_batch_size],
+            changed=entry.changed[:actual_batch_size],
+            block_finished=entry.block_finished[:actual_batch_size],
+        )
 
     def run_decode_attention(self, q: torch.Tensor, paged_kv_cache) -> torch.Tensor:
         self._require_family("llada2")
@@ -910,12 +953,36 @@ class FlashInferCudaGraphRunner:
             cache.layer_paged_kv(layer_id) for layer_id in range(cache.num_layers)
         ]
 
+        fused_decoder = bool(getattr(runner.decoder, "graph_fused_step", False))
+        prompt_positions = None
+        allow_edit = None
+        if fused_decoder:
+            # Extra graph inputs for the decoder tail. Capture-time values are
+            # arbitrary (they only steer data, never shapes); replay overwrites
+            # them. Padding rows keep all-True prompt protection and
+            # allow_edit=False so their junk outputs cannot affect real rows.
+            prompt_positions = torch.ones(
+                (batch_size, block_length), dtype=torch.bool, device=self.device
+            )
+            allow_edit = torch.zeros(
+                batch_size, dtype=torch.bool, device=self.device
+            )
+
         def run_model():
             hidden_states, _ = runner.model.model(
                 input_ids, position_ids, past_key_values,
                 use_cache=False, attention_mask=None, forward_batch=forward_batch,
             )
-            return hidden_states
+            if not fused_decoder:
+                return hidden_states, None
+            # The whole per-iteration tail — lm_head, joint M2T/T2T selection,
+            # block-finished predicate — runs inside the capture so a decode
+            # iteration replays as one graph with no eager kernel launches.
+            logits = runner.model._get_logits(hidden_states)
+            step = runner.decoder.graph_step(
+                logits, input_ids, prompt_positions, allow_edit
+            )
+            return hidden_states, step
 
         self.log(
             "CUDA graph capturing: dynamic paged decode batch_size=%d max_kv_len=%d",
@@ -939,7 +1006,16 @@ class FlashInferCudaGraphRunner:
             with model_capture_mode(), torch.cuda.graph(
                 entry.graph, pool=self._graph_pool, stream=self._capture_stream
             ):
-                entry.hidden_states = run_model()
+                entry.hidden_states, step = run_model()
+            if fused_decoder:
+                entry.prompt_positions = prompt_positions
+                entry.allow_edit = allow_edit
+                (
+                    entry.x_updated,
+                    entry.had_mask,
+                    entry.changed,
+                    entry.block_finished,
+                ) = step
             torch.cuda.synchronize(self.device)
             runner.tp_group.barrier()
         finally:

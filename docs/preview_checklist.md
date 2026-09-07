@@ -4,7 +4,7 @@
 - [x] LLaDA2.0
   - [x] [LLaDA2.0-mini](https://huggingface.co/inclusionAI/LLaDA2.0-mini)
   - [x] [LLaDA2.0-flash](https://huggingface.co/inclusionAI/LLaDA2.0-flash)
-- [ ] DiffusionGemma (WIP)
+- [x] DiffusionGemma
 
 
 ### Engine Support
@@ -13,6 +13,7 @@
         - [x] Torch-SDPA
         - [x] Torch-Flex
         - [x] Flashinfer-Paged
+        - [ ] Flash-Attn-4
     - [x] MoE Fused Kernels
         - [x] sgl-kernel
     - [x] Flux-Kernels

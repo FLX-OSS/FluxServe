@@ -37,6 +37,8 @@ manager/dist/*
 **/dynamic-scheduling.md
 code_reorg.md
 
+# slurm related
+**/slurm/
 
 # kernel related
 **/profiling/
