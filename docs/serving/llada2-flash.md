@@ -1,5 +1,6 @@
-# LLaDA-2.0-Flash
+# LLaDA2.0-flash on four GPUs
 
+Complete the [Docker installation](../guides/getting_started.md) first. This recipe targets four NVIDIA H100 GPUs with sufficient memory for the checkpoint and cache.
 
 ## Launch Command
 
@@ -26,3 +27,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 fluxserve serve \
   --cuda-graph-decode-mode padded \
   --cuda-graph-capture-bs 1 2 4 8
 ```
+
+## Verify the server
+
+After model initialization, use the health check and request in the [quickstart](../guides/quickstart.md), replacing the request model with `inclusionAI/LLaDA2.0-flash`. See [benchmarking](../guides/benchmark.md) to measure the running service.
