@@ -1,0 +1,121 @@
+Bootstrap: docker
+FROM lmsysorg/sglang:v0.5.12.post1-cu130
+
+LABEL org.opencontainers.image.authors="Youpeng Zhao" \
+      org.opencontainers.image.description="FluxServe image with CUDA 13.0 userspace"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CUDA_HOME=/usr/local/cuda \
+    TORCH_CUDA_ARCH_LIST=9.0 \
+    MAX_JOBS=64 \
+    FLASHINFER_WORKSPACE_BASE=/tmp \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+
+RUN set -eux; \
+    mkdir -p /flashinfer-dllm-workspace; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        bear \
+        build-essential \
+        ccache \
+        check \
+        cloc \
+        cmake \
+        curl \
+        debhelper \
+        devscripts \
+        dkms \
+        dnsutils \
+        fakeroot \
+        gdb \
+        git \
+        git-lfs \
+        htop \
+        ibverbs-providers \
+        infiniband-diags \
+        kmod \
+        less \
+        libboost-all-dev \
+        libcurl4-openssl-dev \
+        libczmq-dev \
+        libczmq4 \
+        libfabric-dev \
+        libgoogle-glog-dev \
+        libgrpc++-dev \
+        libgrpc-dev \
+        libgtest-dev \
+        libhiredis-dev \
+        libibumad3 \
+        libibverbs-dev \
+        libibverbs1 \
+        libjsoncpp-dev \
+        libnl-3-200 \
+        libnl-3-dev \
+        libnl-route-3-200 \
+        libnl-route-3-dev \
+        libnuma-dev \
+        libnuma1 \
+        libopenmpi-dev \
+        librdmacm1 \
+        libssl-dev \
+        libsubunit-dev \
+        libsubunit0 \
+        libunwind-dev \
+        locales \
+        lsof \
+        netcat-openbsd \
+        ninja-build \
+        nvtop \
+        openssh-server \
+        patchelf \
+        perftest \
+        pkg-config \
+        protobuf-compiler \
+        protobuf-compiler-grpc \
+        pybind11-dev \
+        rdma-core \
+        rsync \
+        silversearcher-ag \
+        tmux \
+        tree \
+        unzip \
+        vim \
+        wget \
+        zsh; \
+    rm -rf /var/lib/apt/lists/*; \
+    apt-get clean
+
+
+RUN set -eux; \
+    python -m pip install transformers==5.15.1; \
+    python -m pip uninstall -y \
+        sglang-kernel \
+        sglang-router \
+        sglang || true ;\
+    rm -rf /sgl-workspace/ ;\
+    python -m pip uninstall -y pynvml || true; \
+    python -m pip uninstall -y flashinfer-python || true
+
+    python -m pip uninstall -y \
+        flashinfer-python \
+        flashinfer-cubin \
+        flashinfer-jit-cache \
+        flashinfer || true ;\
+
+    rm -rf \
+        /usr/local/lib/python3.12/dist-packages/flashinfer \
+        /usr/local/lib/python3.12/dist-packages/flashinfer_cubin \
+        /usr/local/lib/python3.12/dist-packages/flashinfer_jit_cache; \
+
+
+RUN set -eux; \
+    git clone --recursive \
+      -b dllm/block-decode \
+      https://github.com/FLX-OSS/flashinfer-dll \
+      /flashinfer-dllm-workspace/flashinfer-dllm; \
+    cd /flashinfer-dllm-workspace/flashinfer-dllm; \
+    git submodule update --init --recursive; \
+    python -m pip install -v .; \
+    rm -rf /root/.cache/pip
+
+CMD ["/bin/bash", "--login"]
