@@ -105,7 +105,7 @@ class ModelRunner:
         ):
             logger.info(
                 "Disabling CUDA graph because kv_cache_layout='paged' "
-                "materializes dynamic dense KV views."
+                "uses dynamic attention metadata for this backend."
             )
             self.runner_config.enable_cuda_graph = False
         self.enable_cuda_graph = bool(

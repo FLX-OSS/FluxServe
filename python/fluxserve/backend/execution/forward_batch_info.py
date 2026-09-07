@@ -22,7 +22,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import IntEnum, auto
-from typing import Any, Dict, Literal, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Sequence
+
+if TYPE_CHECKING:
+    from fluxserve.backend.layers.attention.selector import AttentionExecutionPlan
 
 
 class ForwardMode(IntEnum):
@@ -157,9 +160,10 @@ class RunnerConfig:
         self.enable_cuda_graph = bool(
             self.enable_prefill_cuda_graph or self.enable_decode_cuda_graph
         )
-        if self.attention_backend not in {"sdpa", "flex", "flashinfer"}:
+        if self.attention_backend not in {"sdpa", "flex", "flashinfer", "fa4"}:
             raise ValueError(
-                "attention_backend must be one of 'sdpa', 'flex', or 'flashinfer', "
+                "attention_backend must be one of 'sdpa', 'flex', 'flashinfer', "
+                "or 'fa4', "
                 f"got {self.attention_backend!r}"
             )
         if self.flashinfer_decode_batch_mode not in {"default", "max_batch"}:
@@ -201,12 +205,25 @@ class RunnerConfig:
                 "flashinfer_cache_mode='paged' requires "
                 "attention_backend='flashinfer' and kv_cache_layout='paged'."
             )
+        if self.attention_backend == "fa4" and self.kv_cache_layout != "paged":
+            raise ValueError(
+                "attention_backend='fa4' requires kv_cache_layout='paged'."
+            )
         if self.page_size is None and self.kv_cache_layout == "paged":
             self.page_size = int(self.block_length)
         elif self.page_size is not None:
             self.page_size = int(self.page_size)
         if self.page_size is not None and self.page_size <= 0:
             raise ValueError(f"page_size must be positive, got {self.page_size!r}")
+        if (
+            self.attention_backend == "fa4"
+            and self.page_size is not None
+            and self.page_size % 16 != 0
+        ):
+            raise ValueError(
+                "attention_backend='fa4' requires page_size to be a multiple "
+                f"of 16, got {self.page_size}"
+            )
         if (
             self.enable_prefill_cuda_graph
             and self.page_size is not None
@@ -390,6 +407,12 @@ class ForwardBatch:
     diffusion_gemma_phase: str | None = None
     diffusion_gemma_attention_metadata: Any = None
     diffusion_gemma_full_decode_graph: bool = False
+    # Backend-neutral paged attention data. FA4 consumes only this FluxServe
+    # type and never imports metadata from another serving framework.
+    paged_attention_metadata: Any = None
+    # Frozen once per scheduled model forward.  Attention layers consume this
+    # plan; they must not independently re-select a backend per layer.
+    attention_execution_plan: Optional["AttentionExecutionPlan"] = None
 
 
 class PPProxyTensors:

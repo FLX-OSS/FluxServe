@@ -45,6 +45,7 @@ from fluxserve.backend.execution.forward_batch_info import (
 from fluxserve.backend.execution.runners import (
     BlockDiffusionRunner,
     DiffusionGemmaRunner,
+    FA4DiffusionRunner,
     FlashInferDiffusionRunner,
 )
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
@@ -70,6 +71,12 @@ def normalize_attention_backend_args(args) -> None:
         return
     args.flashinfer_prefill_mode = "dense"
     args.flashinfer_cache_mode = "dense"
+    if args.attention_backend == "fa4":
+        if getattr(args, "kv_cache_layout", "paged") != "paged":
+            raise ValueError("attention_backend='fa4' requires --kv-cache-layout paged")
+        if getattr(args, "page_size", None) is None:
+            args.page_size = int(args.block_length)
+        return
     args.kv_cache_layout = "dense"
     args.page_size = None
 
@@ -329,6 +336,8 @@ def normalize_diffusion_gemma_args(args, model_config) -> bool:
     if not getattr(args, "attention_backend_explicit", False):
         args.attention_backend = "sdpa"
         normalize_attention_backend_args(args)
+    if args.attention_backend == "fa4":
+        raise ValueError("attention_backend='fa4' currently supports LLaDA 2.x only")
     if args.attention_backend != "flashinfer":
         args.kv_cache_layout = "dense"
         args.flashinfer_cache_mode = "dense"
@@ -567,10 +576,15 @@ def run_worker(args, *, init_method: str = "env://"):
         mini_batch_size=args.mini_batch_size,
         gen_length=args.gen_len,
         unbounded_prefill=(
-            args.attention_backend == "flashinfer"
-            and getattr(args, "flashinfer_prefill_mode", "dense") == "paged"
-            and getattr(args, "flashinfer_cache_mode", "dense") == "paged"
-            and getattr(args, "kv_cache_layout", "dense") == "paged"
+            getattr(args, "kv_cache_layout", "dense") == "paged"
+            and (
+                args.attention_backend == "fa4"
+                or (
+                    args.attention_backend == "flashinfer"
+                    and getattr(args, "flashinfer_prefill_mode", "dense") == "paged"
+                    and getattr(args, "flashinfer_cache_mode", "dense") == "paged"
+                )
+            )
         ),
     )
     batch_info = maybe_disable_sorting(batch_info, args.disable_sorting)
@@ -598,11 +612,12 @@ def run_worker(args, *, init_method: str = "env://"):
         if is_diffusion_gemma:
             runner_cls = DiffusionGemmaRunner
         else:
-            runner_cls = (
-                FlashInferDiffusionRunner
-                if args.attention_backend == "flashinfer"
-                else BlockDiffusionRunner
-            )
+            if args.attention_backend == "flashinfer":
+                runner_cls = FlashInferDiffusionRunner
+            elif args.attention_backend == "fa4":
+                runner_cls = FA4DiffusionRunner
+            else:
+                runner_cls = BlockDiffusionRunner
         runner = runner_cls(
             model_config=model_config,
             server_args=server_args,
@@ -823,7 +838,7 @@ def add_bench_offline_subparser(subparsers) -> None:
     )
     parser.add_argument("--prefilling-limit", "--prefilling_limit", dest="prefilling_limit", type=int, default=128)
     parser.set_defaults(attention_backend_explicit=False)
-    parser.add_argument("--attention-backend", "--attention_backend", dest="attention_backend", choices=("sdpa", "flex", "flashinfer"), default="flashinfer", action=StoreExplicit)
+    parser.add_argument("--attention-backend", "--attention_backend", dest="attention_backend", choices=("sdpa", "flex", "flashinfer", "fa4"), default="flashinfer", action=StoreExplicit)
     parser.add_argument("--flashinfer-decode-batch-mode", "--flashinfer_decode_batch_mode", dest="flashinfer_decode_batch_mode", choices=("default", "max_batch"), default="max_batch")
     parser.add_argument("--flashinfer-prefill-mode", "--flashinfer_prefill_mode", dest="flashinfer_prefill_mode", choices=("dense", "ragged", "paged"), default="paged")
     parser.add_argument("--flashinfer-cache-mode", "--flashinfer_cache_mode", dest="flashinfer_cache_mode", choices=("dense", "paged"), default="paged")

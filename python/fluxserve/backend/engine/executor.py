@@ -154,7 +154,7 @@ class BlockDiffusionExecutor:
                 self.tokenizer,
             )
         raise RuntimeError(
-            "paged scheduler_policy requires FlashInfer paged KV execution."
+            "paged scheduler_policy requires a runner with paged KV execution."
         )
 
     async def release_requests(self, request_ids) -> None:

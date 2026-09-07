@@ -1,0 +1,252 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="790" viewBox="0 0 1200 790">
+<rect width="1200" height="790" fill="white"/>
+<g font-family="sans-serif" fill="#222">
+<text x="600" y="28" text-anchor="middle" font-size="22">FP16 GH200 — decode</text>
+<text x="600" y="51" text-anchor="middle" font-size="13">Mean of two process medians; whiskers: min/max process median. Log axes; attention API only.</text>
+<line x1="115" y1="78" x2="147" y2="78" stroke="#1664c0" stroke-width="2"/>
+<text x="155" y="82" font-size="13">fa4_eager</text>
+<line x1="390" y1="78" x2="422" y2="78" stroke="#1664c0" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="430" y="82" font-size="13">fa4_graph</text>
+<line x1="665" y1="78" x2="697" y2="78" stroke="#c65d12" stroke-width="2"/>
+<text x="705" y="82" font-size="13">batchprefill_eager</text>
+<line x1="940" y1="78" x2="972" y2="78" stroke="#c65d12" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="980" y="82" font-size="13">batchprefill_graph</text>
+<text x="320.0" y="120" text-anchor="middle" font-size="17">Batch = 1</text>
+<line x1="85" y1="360.0" x2="555" y2="360.0" stroke="#ddd"/>
+<text x="77" y="364.0" text-anchor="end" font-size="12">3</text>
+<line x1="85" y1="285.0" x2="555" y2="285.0" stroke="#ddd"/>
+<text x="77" y="289.0" text-anchor="end" font-size="12">10</text>
+<line x1="85" y1="210.0" x2="555" y2="210.0" stroke="#ddd"/>
+<text x="77" y="214.0" text-anchor="end" font-size="12">32</text>
+<line x1="85" y1="135.0" x2="555" y2="135.0" stroke="#ddd"/>
+<text x="77" y="139.0" text-anchor="end" font-size="12">100</text>
+<text x="27" y="247.5" font-size="12" transform="rotate(-90 27 247.5)">Latency (us, log)</text>
+<text x="85.0" y="380" text-anchor="middle" font-size="12">256</text>
+<text x="202.5" y="380" text-anchor="middle" font-size="12">512</text>
+<text x="320.0" y="380" text-anchor="middle" font-size="12">1024</text>
+<text x="437.5" y="380" text-anchor="middle" font-size="12">2048</text>
+<text x="555.0" y="380" text-anchor="middle" font-size="12">4096</text>
+<text x="320.0" y="403" text-anchor="middle" font-size="13">Total KV length (log2)</text>
+<line x1="85.0" x2="85.0" y1="179.20195029768047" y2="177.40855433877093" stroke="#1664c0" stroke-width="2"/>
+<circle cx="85.0" cy="178.29908106876255" r="3" fill="#1664c0"/>
+<line x1="202.5" x2="202.5" y1="179.1085427730478" y2="177.0688866732247" stroke="#1664c0" stroke-width="2"/>
+<circle cx="202.5" cy="178.0807323761693" r="3" fill="#1664c0"/>
+<line x1="320.0" x2="320.0" y1="178.0145336692524" y2="176.63630627323943" stroke="#1664c0" stroke-width="2"/>
+<circle cx="320.0" cy="177.3217752182626" r="3" fill="#1664c0"/>
+<line x1="437.5" x2="437.5" y1="178.61907570916821" y2="174.78943305878227" stroke="#1664c0" stroke-width="2"/>
+<circle cx="437.5" cy="176.67611669545514" r="3" fill="#1664c0"/>
+<line x1="555.0" x2="555.0" y1="175.0358248980866" y2="174.28837515708196" stroke="#1664c0" stroke-width="2"/>
+<circle cx="555.0" cy="174.66102802445795" r="3" fill="#1664c0"/>
+<polyline points="85.0,178.29908106876255 202.5,178.0807323761693 320.0,177.3217752182626 437.5,176.67611669545514 555.0,174.66102802445795" fill="none" stroke="#1664c0" stroke-width="2"/>
+<line x1="85.0" x2="85.0" y1="288.4292910332319" y2="287.366823612128" stroke="#1664c0" stroke-width="2"/>
+<circle cx="85.0" cy="287.89589131060575" r="3" fill="#1664c0"/>
+<line x1="202.5" x2="202.5" y1="271.87111803355305" y2="271.58121033239655" stroke="#1664c0" stroke-width="2"/>
+<circle cx="202.5" cy="271.7260029129738" r="3" fill="#1664c0"/>
+<line x1="320.0" x2="320.0" y1="246.4306131871516" y2="245.81371054038414" stroke="#1664c0" stroke-width="2"/>
+<circle cx="320.0" cy="246.12143162297997" r="3" fill="#1664c0"/>
+<line x1="437.5" x2="437.5" y1="213.30442731583997" y2="213.09843185110986" stroke="#1664c0" stroke-width="2"/>
+<circle cx="437.5" cy="213.20134816001" r="3" fill="#1664c0"/>
+<line x1="555.0" x2="555.0" y1="175.5331697787255" y2="175.43673422284445" stroke="#1664c0" stroke-width="2"/>
+<circle cx="555.0" cy="175.48493415610437" r="3" fill="#1664c0"/>
+<polyline points="85.0,287.89589131060575 202.5,271.7260029129738 320.0,246.12143162297997 437.5,213.20134816001 555.0,175.48493415610437" fill="none" stroke="#1664c0" stroke-width="2" stroke-dasharray="6 4"/>
+<line x1="85.0" x2="85.0" y1="216.07520632255768" y2="214.28406130413828" stroke="#c65d12" stroke-width="2"/>
+<circle cx="85.0" cy="215.1734780450845" r="3" fill="#c65d12"/>
+<line x1="202.5" x2="202.5" y1="215.69387469451857" y2="212.80218281133017" stroke="#c65d12" stroke-width="2"/>
+<circle cx="202.5" cy="214.23198511610315" r="3" fill="#c65d12"/>
+<line x1="320.0" x2="320.0" y1="216.4354910961624" y2="212.8021853750284" stroke="#c65d12" stroke-width="2"/>
+<circle cx="320.0" cy="214.5935113349435" r="3" fill="#c65d12"/>
+<line x1="437.5" x2="437.5" y1="202.3205735739054" y2="202.1327676285457" stroke="#c65d12" stroke-width="2"/>
+<circle cx="437.5" cy="202.22660292237634" r="3" fill="#c65d12"/>
+<line x1="555.0" x2="555.0" y1="166.8486284064527" y2="166.79308014439465" stroke="#c65d12" stroke-width="2"/>
+<circle cx="555.0" cy="166.82084835469198" r="3" fill="#c65d12"/>
+<polyline points="85.0,215.1734780450845 202.5,214.23198511610315 320.0,214.5935113349435 437.5,202.22660292237634 555.0,166.82084835469198" fill="none" stroke="#c65d12" stroke-width="2"/>
+<line x1="85.0" x2="85.0" y1="274.7943955055093" y2="273.94444602306817" stroke="#c65d12" stroke-width="2"/>
+<circle cx="85.0" cy="274.3680345907958" r="3" fill="#c65d12"/>
+<line x1="202.5" x2="202.5" y1="256.44620919250565" y2="256.2588764442616" stroke="#c65d12" stroke-width="2"/>
+<circle cx="202.5" cy="256.3524754801528" r="3" fill="#c65d12"/>
+<line x1="320.0" x2="320.0" y1="235.16914741603188" y2="234.35931097102366" stroke="#c65d12" stroke-width="2"/>
+<circle cx="320.0" cy="234.7629707715891" r="3" fill="#c65d12"/>
+<line x1="437.5" x2="437.5" y1="203.22383254230073" y2="202.83408951252892" stroke="#c65d12" stroke-width="2"/>
+<circle cx="437.5" cy="203.02866955966456" r="3" fill="#c65d12"/>
+<line x1="555.0" x2="555.0" y1="167.0933086433722" y2="166.95152939421013" stroke="#c65d12" stroke-width="2"/>
+<circle cx="555.0" cy="167.02238044789755" r="3" fill="#c65d12"/>
+<polyline points="85.0,274.3680345907958 202.5,256.3524754801528 320.0,234.7629707715891 437.5,203.02866955966456 555.0,167.02238044789755" fill="none" stroke="#c65d12" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="915.0" y="120" text-anchor="middle" font-size="17">Batch = 4</text>
+<line x1="680" y1="360.0" x2="1150" y2="360.0" stroke="#ddd"/>
+<text x="672" y="364.0" text-anchor="end" font-size="12">3</text>
+<line x1="680" y1="285.0" x2="1150" y2="285.0" stroke="#ddd"/>
+<text x="672" y="289.0" text-anchor="end" font-size="12">10</text>
+<line x1="680" y1="210.0" x2="1150" y2="210.0" stroke="#ddd"/>
+<text x="672" y="214.0" text-anchor="end" font-size="12">32</text>
+<line x1="680" y1="135.0" x2="1150" y2="135.0" stroke="#ddd"/>
+<text x="672" y="139.0" text-anchor="end" font-size="12">100</text>
+<text x="622" y="247.5" font-size="12" transform="rotate(-90 622 247.5)">Latency (us, log)</text>
+<text x="680.0" y="380" text-anchor="middle" font-size="12">256</text>
+<text x="797.5" y="380" text-anchor="middle" font-size="12">512</text>
+<text x="915.0" y="380" text-anchor="middle" font-size="12">1024</text>
+<text x="1032.5" y="380" text-anchor="middle" font-size="12">2048</text>
+<text x="1150.0" y="380" text-anchor="middle" font-size="12">4096</text>
+<text x="915.0" y="403" text-anchor="middle" font-size="13">Total KV length (log2)</text>
+<line x1="680.0" x2="680.0" y1="176.90328286179093" y2="175.9895500163085" stroke="#1664c0" stroke-width="2"/>
+<circle cx="680.0" cy="176.44481441380395" r="3" fill="#1664c0"/>
+<line x1="797.5" x2="797.5" y1="176.792717443825" y2="176.20206837809394" stroke="#1664c0" stroke-width="2"/>
+<circle cx="797.5" cy="176.49672350126468" r="3" fill="#1664c0"/>
+<line x1="915.0" x2="915.0" y1="177.8704594465707" y2="176.2450485427684" stroke="#1664c0" stroke-width="2"/>
+<circle cx="915.0" cy="177.052684676907" r="3" fill="#1664c0"/>
+<line x1="1032.5" x2="1032.5" y1="177.2131893479901" y2="177.1936639594988" stroke="#1664c0" stroke-width="2"/>
+<circle cx="1032.5" cy="177.20342592221164" r="3" fill="#1664c0"/>
+<line x1="1150.0" x2="1150.0" y1="171.7709074212039" y2="171.58951835458612" stroke="#1664c0" stroke-width="2"/>
+<circle cx="1150.0" cy="171.68014975488228" r="3" fill="#1664c0"/>
+<polyline points="680.0,176.44481441380395 797.5,176.49672350126468 915.0,177.052684676907 1032.5,177.20342592221164 1150.0,171.68014975488228" fill="none" stroke="#1664c0" stroke-width="2"/>
+<line x1="680.0" x2="680.0" y1="286.40655625067564" y2="285.66209025638693" stroke="#1664c0" stroke-width="2"/>
+<circle cx="680.0" cy="286.0332597919404" r="3" fill="#1664c0"/>
+<line x1="797.5" x2="797.5" y1="271.3255351062422" y2="270.5845175346378" stroke="#1664c0" stroke-width="2"/>
+<circle cx="797.5" cy="270.9539726880471" r="3" fill="#1664c0"/>
+<line x1="915.0" x2="915.0" y1="244.76330499983402" y2="242.610215792602" stroke="#1664c0" stroke-width="2"/>
+<circle cx="915.0" cy="243.6778655442584" r="3" fill="#1664c0"/>
+<line x1="1032.5" x2="1032.5" y1="209.76618660115474" y2="209.36314430712196" stroke="#1664c0" stroke-width="2"/>
+<circle cx="1032.5" cy="209.5643537554361" r="3" fill="#1664c0"/>
+<line x1="1150.0" x2="1150.0" y1="172.280234642997" y2="171.73370804307945" stroke="#1664c0" stroke-width="2"/>
+<circle cx="1150.0" cy="172.00639820955985" r="3" fill="#1664c0"/>
+<polyline points="680.0,286.0332597919404 797.5,270.9539726880471 915.0,243.6778655442584 1032.5,209.5643537554361 1150.0,172.00639820955985" fill="none" stroke="#1664c0" stroke-width="2" stroke-dasharray="6 4"/>
+<line x1="680.0" x2="680.0" y1="214.38552277465038" y2="214.3760014195782" stroke="#c65d12" stroke-width="2"/>
+<circle cx="680.0" cy="214.38076192316123" r="3" fill="#c65d12"/>
+<line x1="797.5" x2="797.5" y1="214.2158076088504" y2="213.60367002002454" stroke="#c65d12" stroke-width="2"/>
+<circle cx="797.5" cy="213.909019811041" r="3" fill="#c65d12"/>
+<line x1="915.0" x2="915.0" y1="215.0079322131621" y2="212.21676518146143" stroke="#c65d12" stroke-width="2"/>
+<circle cx="915.0" cy="213.59740104871918" r="3" fill="#c65d12"/>
+<line x1="1032.5" x2="1032.5" y1="196.9921948077466" y2="196.6403265581794" stroke="#c65d12" stroke-width="2"/>
+<circle cx="1032.5" cy="196.81602311160742" r="3" fill="#c65d12"/>
+<line x1="1150.0" x2="1150.0" y1="160.732417989007" y2="159.99641296207105" stroke="#c65d12" stroke-width="2"/>
+<circle cx="1150.0" cy="160.36337604925654" r="3" fill="#c65d12"/>
+<polyline points="680.0,214.38076192316123 797.5,213.909019811041 915.0,213.59740104871918 1032.5,196.81602311160742 1150.0,160.36337604925654" fill="none" stroke="#c65d12" stroke-width="2"/>
+<line x1="680.0" x2="680.0" y1="270.72501807392655" y2="268.27432881027835" stroke="#c65d12" stroke-width="2"/>
+<circle cx="680.0" cy="269.488149917555" r="3" fill="#c65d12"/>
+<line x1="797.5" x2="797.5" y1="253.64098329024688" y2="252.52286245395243" stroke="#c65d12" stroke-width="2"/>
+<circle cx="797.5" cy="253.0795240027628" r="3" fill="#c65d12"/>
+<line x1="915.0" x2="915.0" y1="231.74736426209682" y2="229.08705371695248" stroke="#c65d12" stroke-width="2"/>
+<circle cx="915.0" cy="230.40362995354292" r="3" fill="#c65d12"/>
+<line x1="1032.5" x2="1032.5" y1="198.05907276688757" y2="197.55448333825163" stroke="#c65d12" stroke-width="2"/>
+<circle cx="1032.5" cy="197.8062895018557" r="3" fill="#c65d12"/>
+<line x1="1150.0" x2="1150.0" y1="160.89817742793997" y2="160.7649151987211" stroke="#c65d12" stroke-width="2"/>
+<circle cx="1150.0" cy="160.83151223733796" r="3" fill="#c65d12"/>
+<polyline points="680.0,269.488149917555 797.5,253.0795240027628 915.0,230.40362995354292 1032.5,197.8062895018557 1150.0,160.83151223733796" fill="none" stroke="#c65d12" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="320.0" y="445" text-anchor="middle" font-size="17">Batch = 8</text>
+<line x1="85" y1="685.0" x2="555" y2="685.0" stroke="#ddd"/>
+<text x="77" y="689.0" text-anchor="end" font-size="12">10</text>
+<line x1="85" y1="572.5" x2="555" y2="572.5" stroke="#ddd"/>
+<text x="77" y="576.5" text-anchor="end" font-size="12">32</text>
+<line x1="85" y1="460.0" x2="555" y2="460.0" stroke="#ddd"/>
+<text x="77" y="464.0" text-anchor="end" font-size="12">100</text>
+<text x="27" y="572.5" font-size="12" transform="rotate(-90 27 572.5)">Latency (us, log)</text>
+<text x="85.0" y="705" text-anchor="middle" font-size="12">256</text>
+<text x="202.5" y="705" text-anchor="middle" font-size="12">512</text>
+<text x="320.0" y="705" text-anchor="middle" font-size="12">1024</text>
+<text x="437.5" y="705" text-anchor="middle" font-size="12">2048</text>
+<text x="555.0" y="705" text-anchor="middle" font-size="12">4096</text>
+<text x="320.0" y="728" text-anchor="middle" font-size="13">Total KV length (log2)</text>
+<line x1="85.0" x2="85.0" y1="523.6923076308816" y2="523.6659112072588" stroke="#1664c0" stroke-width="2"/>
+<circle cx="85.0" cy="523.6791085277508" r="3" fill="#1664c0"/>
+<line x1="202.5" x2="202.5" y1="523.0881196577482" y2="521.717208350862" stroke="#1664c0" stroke-width="2"/>
+<circle cx="202.5" cy="522.4002598721415" r="3" fill="#1664c0"/>
+<line x1="320.0" x2="320.0" y1="522.271547822756" y2="521.7198547079644" stroke="#1664c0" stroke-width="2"/>
+<circle cx="320.0" cy="521.9953119175516" r="3" fill="#1664c0"/>
+<line x1="437.5" x2="437.5" y1="520.670228034285" y2="519.7192872358258" stroke="#1664c0" stroke-width="2"/>
+<circle cx="437.5" cy="520.1936008612897" r="3" fill="#1664c0"/>
+<line x1="555.0" x2="555.0" y1="491.8967159042236" y2="489.7046906288565" stroke="#1664c0" stroke-width="2"/>
+<circle cx="555.0" cy="490.79455680465605" r="3" fill="#1664c0"/>
+<polyline points="85.0,523.6791085277508 202.5,522.4002598721415 320.0,521.9953119175516 437.5,520.1936008612897 555.0,490.79455680465605" fill="none" stroke="#1664c0" stroke-width="2"/>
+<line x1="85.0" x2="85.0" y1="684.8890568532513" y2="683.3966106957691" stroke="#1664c0" stroke-width="2"/>
+<circle cx="85.0" cy="684.1399844867874" r="3" fill="#1664c0"/>
+<line x1="202.5" x2="202.5" y1="656.8739304056618" y2="655.7733943209313" stroke="#1664c0" stroke-width="2"/>
+<circle cx="202.5" cy="656.3221130135619" r="3" fill="#1664c0"/>
+<line x1="320.0" x2="320.0" y1="617.9310558114893" y2="617.6324318331183" stroke="#1664c0" stroke-width="2"/>
+<circle cx="320.0" cy="617.7816297468071" r="3" fill="#1664c0"/>
+<line x1="437.5" x2="437.5" y1="567.4383107682951" y2="564.1925747096997" stroke="#1664c0" stroke-width="2"/>
+<circle cx="437.5" cy="565.8019670921674" r="3" fill="#1664c0"/>
+<line x1="555.0" x2="555.0" y1="494.0672293817189" y2="493.2917450456133" stroke="#1664c0" stroke-width="2"/>
+<circle cx="555.0" cy="493.67871792717904" r="3" fill="#1664c0"/>
+<polyline points="85.0,684.1399844867874 202.5,656.3221130135619 320.0,617.7816297468071 437.5,565.8019670921674 555.0,493.67871792717904" fill="none" stroke="#1664c0" stroke-width="2" stroke-dasharray="6 4"/>
+<line x1="85.0" x2="85.0" y1="579.4773099373447" y2="578.5629683468132" stroke="#c65d12" stroke-width="2"/>
+<circle cx="85.0" cy="579.0190696968457" r="3" fill="#c65d12"/>
+<line x1="202.5" x2="202.5" y1="577.4597606480768" y2="575.1162004183893" stroke="#c65d12" stroke-width="2"/>
+<circle cx="202.5" cy="576.2809549074414" r="3" fill="#c65d12"/>
+<line x1="320.0" x2="320.0" y1="577.3329264204092" y2="570.5471256218501" stroke="#c65d12" stroke-width="2"/>
+<circle cx="320.0" cy="573.8811337706452" r="3" fill="#c65d12"/>
+<line x1="437.5" x2="437.5" y1="540.3910096661989" y2="535.1798029194633" stroke="#c65d12" stroke-width="2"/>
+<circle cx="437.5" cy="537.7506712105645" r="3" fill="#c65d12"/>
+<line x1="555.0" x2="555.0" y1="473.3447138373948" y2="471.41412951559033" stroke="#c65d12" stroke-width="2"/>
+<circle cx="555.0" cy="472.37465392434734" r="3" fill="#c65d12"/>
+<polyline points="85.0,579.0190696968457 202.5,576.2809549074414 320.0,573.8811337706452 437.5,537.7506712105645 555.0,472.37465392434734" fill="none" stroke="#c65d12" stroke-width="2"/>
+<line x1="85.0" x2="85.0" y1="657.9455122872594" y2="656.6689734441171" stroke="#c65d12" stroke-width="2"/>
+<circle cx="85.0" cy="657.3051583356201" r="3" fill="#c65d12"/>
+<line x1="202.5" x2="202.5" y1="627.09404418071" y2="625.5460809046907" stroke="#c65d12" stroke-width="2"/>
+<circle cx="202.5" cy="626.3169973347099" r="3" fill="#c65d12"/>
+<line x1="320.0" x2="320.0" y1="594.0830660604599" y2="594.0731984041208" stroke="#c65d12" stroke-width="2"/>
+<circle cx="320.0" cy="594.0781321077325" r="3" fill="#c65d12"/>
+<line x1="437.5" x2="437.5" y1="542.2106962985281" y2="537.2141020666592" stroke="#c65d12" stroke-width="2"/>
+<circle cx="437.5" cy="539.6804658650182" r="3" fill="#c65d12"/>
+<line x1="555.0" x2="555.0" y1="475.67586850275774" y2="475.05414322988304" stroke="#c65d12" stroke-width="2"/>
+<circle cx="555.0" cy="475.3645113968366" r="3" fill="#c65d12"/>
+<polyline points="85.0,657.3051583356201 202.5,626.3169973347099 320.0,594.0781321077325 437.5,539.6804658650182 555.0,475.3645113968366" fill="none" stroke="#c65d12" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="915.0" y="445" text-anchor="middle" font-size="17">Batch = 16</text>
+<line x1="680" y1="685.0" x2="1150" y2="685.0" stroke="#ddd"/>
+<text x="672" y="689.0" text-anchor="end" font-size="12">10</text>
+<line x1="680" y1="610.0" x2="1150" y2="610.0" stroke="#ddd"/>
+<text x="672" y="614.0" text-anchor="end" font-size="12">32</text>
+<line x1="680" y1="535.0" x2="1150" y2="535.0" stroke="#ddd"/>
+<text x="672" y="539.0" text-anchor="end" font-size="12">100</text>
+<line x1="680" y1="460.0" x2="1150" y2="460.0" stroke="#ddd"/>
+<text x="672" y="464.0" text-anchor="end" font-size="12">316</text>
+<text x="622" y="572.5" font-size="12" transform="rotate(-90 622 572.5)">Latency (us, log)</text>
+<text x="680.0" y="705" text-anchor="middle" font-size="12">256</text>
+<text x="797.5" y="705" text-anchor="middle" font-size="12">512</text>
+<text x="915.0" y="705" text-anchor="middle" font-size="12">1024</text>
+<text x="1032.5" y="705" text-anchor="middle" font-size="12">2048</text>
+<text x="1150.0" y="705" text-anchor="middle" font-size="12">4096</text>
+<text x="915.0" y="728" text-anchor="middle" font-size="13">Total KV length (log2)</text>
+<line x1="680.0" x2="680.0" y1="577.312495087694" y2="576.262521269962" stroke="#1664c0" stroke-width="2"/>
+<circle cx="680.0" cy="576.7853928071715" r="3" fill="#1664c0"/>
+<line x1="797.5" x2="797.5" y1="577.3809829628162" y2="576.2919856576602" stroke="#1664c0" stroke-width="2"/>
+<circle cx="797.5" cy="576.8342087779826" r="3" fill="#1664c0"/>
+<line x1="915.0" x2="915.0" y1="575.7292041404037" y2="575.227661677024" stroke="#1664c0" stroke-width="2"/>
+<circle cx="915.0" cy="575.4779502404019" r="3" fill="#1664c0"/>
+<line x1="1032.5" x2="1032.5" y1="575.4378957351591" y2="575.138619561198" stroke="#1664c0" stroke-width="2"/>
+<circle cx="1032.5" cy="575.288085786778" r="3" fill="#1664c0"/>
+<line x1="1150.0" x2="1150.0" y1="542.6302724796797" y2="542.4689978328563" stroke="#1664c0" stroke-width="2"/>
+<circle cx="1150.0" cy="542.5495852486857" r="3" fill="#1664c0"/>
+<polyline points="680.0,576.7853928071715 797.5,576.8342087779826 915.0,575.4779502404019 1032.5,575.288085786778 1150.0,542.5495852486857" fill="none" stroke="#1664c0" stroke-width="2"/>
+<line x1="680.0" x2="680.0" y1="678.1274137570857" y2="677.3377771688616" stroke="#1664c0" stroke-width="2"/>
+<circle cx="680.0" cy="677.7313990356832" r="3" fill="#1664c0"/>
+<line x1="797.5" x2="797.5" y1="661.2166808874135" y2="660.3920632197708" stroke="#1664c0" stroke-width="2"/>
+<circle cx="797.5" cy="660.8030672750255" r="3" fill="#1664c0"/>
+<line x1="915.0" x2="915.0" y1="632.1772543105685" y2="631.8450063052667" stroke="#1664c0" stroke-width="2"/>
+<circle cx="915.0" cy="632.0109184919302" r="3" fill="#1664c0"/>
+<line x1="1032.5" x2="1032.5" y1="584.2965224871717" y2="584.141648588832" stroke="#1664c0" stroke-width="2"/>
+<circle cx="1032.5" cy="584.2190395133194" r="3" fill="#1664c0"/>
+<line x1="1150.0" x2="1150.0" y1="545.1340490181522" y2="545.0134838616598" stroke="#1664c0" stroke-width="2"/>
+<circle cx="1150.0" cy="545.0737385480118" r="3" fill="#1664c0"/>
+<polyline points="680.0,677.7313990356832 797.5,660.8030672750255 915.0,632.0109184919302 1032.5,584.2190395133194 1150.0,545.0737385480118" fill="none" stroke="#1664c0" stroke-width="2" stroke-dasharray="6 4"/>
+<line x1="680.0" x2="680.0" y1="612.2573614306924" y2="612.2358643533987" stroke="#c65d12" stroke-width="2"/>
+<circle cx="680.0" cy="612.2466120053118" r="3" fill="#c65d12"/>
+<line x1="797.5" x2="797.5" y1="611.2809545248592" y2="610.1793394026015" stroke="#c65d12" stroke-width="2"/>
+<circle cx="797.5" cy="610.7278183950809" r="3" fill="#c65d12"/>
+<line x1="915.0" x2="915.0" y1="578.9108820307833" y2="578.7940026016037" stroke="#c65d12" stroke-width="2"/>
+<circle cx="915.0" cy="578.8524161035664" r="3" fill="#c65d12"/>
+<line x1="1032.5" x2="1032.5" y1="534.3482854275609" y2="534.2475457627756" stroke="#c65d12" stroke-width="2"/>
+<circle cx="1032.5" cy="534.2978961220545" r="3" fill="#c65d12"/>
+<line x1="1150.0" x2="1150.0" y1="494.4735572540405" y2="494.25648555214576" stroke="#c65d12" stroke-width="2"/>
+<circle cx="1150.0" cy="494.36493098805613" r="3" fill="#c65d12"/>
+<polyline points="680.0,612.2466120053118 797.5,610.7278183950809 915.0,578.8524161035664 1032.5,534.2978961220545 1150.0,494.36493098805613" fill="none" stroke="#c65d12" stroke-width="2"/>
+<line x1="680.0" x2="680.0" y1="634.6175565774306" y2="634.1545919034362" stroke="#c65d12" stroke-width="2"/>
+<circle cx="680.0" cy="634.3856629683448" r="3" fill="#c65d12"/>
+<line x1="797.5" x2="797.5" y1="613.1703711102238" y2="612.9658342084804" stroke="#c65d12" stroke-width="2"/>
+<circle cx="797.5" cy="613.0680223848518" r="3" fill="#c65d12"/>
+<line x1="915.0" x2="915.0" y1="580.286377830204" y2="580.1511632514238" stroke="#c65d12" stroke-width="2"/>
+<circle cx="915.0" cy="580.2187354590515" r="3" fill="#c65d12"/>
+<line x1="1032.5" x2="1032.5" y1="536.6382978794438" y2="536.4083659183157" stroke="#c65d12" stroke-width="2"/>
+<circle cx="1032.5" cy="536.5232304533524" r="3" fill="#c65d12"/>
+<line x1="1150.0" x2="1150.0" y1="496.3868073628183" y2="495.42875096314856" stroke="#c65d12" stroke-width="2"/>
+<circle cx="1150.0" cy="495.9060179467437" r="3" fill="#c65d12"/>
+<polyline points="680.0,634.3856629683448 797.5,613.0680223848518 915.0,580.2187354590515 1032.5,536.5232304533524 1150.0,495.9060179467437" fill="none" stroke="#c65d12" stroke-width="2" stroke-dasharray="6 4"/>
+</g></svg>

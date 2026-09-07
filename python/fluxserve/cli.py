@@ -51,6 +51,7 @@ from fluxserve.backend.execution.forward_batch_info import RunnerConfig
 from fluxserve.backend.execution.runners import (
     BlockDiffusionRunner,
     DiffusionGemmaRunner,
+    FA4DiffusionRunner,
     FlashInferDiffusionRunner,
 )
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
@@ -129,7 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--mini-batch-size", type=int, default=4)
     serve.add_argument(
         "--attention-backend",
-        choices=("sdpa", "flex", "flashinfer"),
+        choices=("sdpa", "flex", "flashinfer", "fa4"),
         default="flashinfer",
         action=StoreExplicit,
     )
@@ -225,6 +226,8 @@ def normalize_diffusion_gemma_serve_args(args, model_config) -> bool:
     )
     if not is_diffusion_gemma:
         return False
+    if args.attention_backend == "fa4":
+        raise ValueError("attention_backend='fa4' currently supports LLaDA 2.x only")
     if args.canvas_length is not None and int(args.canvas_length) <= 0:
         raise ValueError("--canvas-length must be positive")
     if args.use_cuda_graph or args.use_prefill_cuda_graph:
@@ -287,16 +290,18 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         )
     _reject_unsupported_quantization(model_config)
     model_config.quant_config = None
-    if args.scheduler_policy == "paged" and (
-        args.attention_backend != "flashinfer"
-        or args.kv_cache_layout != "paged"
-        or args.flashinfer_cache_mode != "paged"
-        or args.flashinfer_prefill_mode != "paged"
-    ):
+    valid_paged_backend = (
+        args.attention_backend == "fa4" and args.kv_cache_layout == "paged"
+    ) or (
+        args.attention_backend == "flashinfer"
+        and args.kv_cache_layout == "paged"
+        and args.flashinfer_cache_mode == "paged"
+        and args.flashinfer_prefill_mode == "paged"
+    )
+    if args.scheduler_policy == "paged" and not valid_paged_backend:
         raise RuntimeError(
-            "scheduler_policy='paged' requires attention_backend='flashinfer', "
-            "kv_cache_layout='paged', flashinfer_cache_mode='paged', and "
-            "flashinfer_prefill_mode='paged'."
+            "scheduler_policy='paged' requires either FA4 with paged KV, or "
+            "FlashInfer paged prefill and paged KV."
         )
     server_args = ServerArgs(
         model_name=args.model_name,
@@ -421,11 +426,12 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         if is_diffusion_gemma:
             runner_cls = DiffusionGemmaRunner
         else:
-            runner_cls = (
-                FlashInferDiffusionRunner
-                if args.attention_backend == "flashinfer"
-                else BlockDiffusionRunner
-            )
+            if args.attention_backend == "flashinfer":
+                runner_cls = FlashInferDiffusionRunner
+            elif args.attention_backend == "fa4":
+                runner_cls = FA4DiffusionRunner
+            else:
+                runner_cls = BlockDiffusionRunner
         runner = runner_cls(
             model_config=model_config,
             server_args=server_args,
