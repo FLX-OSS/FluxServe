@@ -74,37 +74,54 @@ jobs:
       WORK_DIR: ${{ github.workspace }}/run-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}-${{ matrix.runner }}
       CONFIG: ${{ matrix.config }}
       RUNNER_LABEL: ${{ matrix.runner }}
+      RUNTIME: ${{ matrix.runtime }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
         with:
           path: run-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}-${{ matrix.runner }}
 
+      - name: Install FluxServe in GH200 container
+        if: matrix.runtime == 'gh200-apptainer'
+        run: |
+          set -euo pipefail
+          bash "$WORK_DIR/test/ci_system/env/gh200.sh" bash -lc '
+            cd "$PWD"
+            export PIP_BREAK_SYSTEM_PACKAGES=1
+            python -m pip install -e flux-kernel/python/ --no-build-isolation
+            python -m pip install -e flux-scheduler
+            python -m pip install -e .
+          '
+
       - name: Install task
         run: |
           set -euo pipefail
           mkdir -p "$WORK_DIR/.ci-artifacts"
-          cd "$WORK_DIR"
-          python3 test/ci_system/pipeline.py execute \
-            --config "$CONFIG" \
-            --runner "$RUNNER_LABEL" \
-            --work-dir "$WORK_DIR" \
-            --print-plan \
-            --only-stage install \
-            --keep-runner-state \
-            --result-json .ci-artifacts/install-result.json
+          bash "$WORK_DIR/test/ci_system/env/gh200.sh" bash -lc '
+            cd "$PWD"
+            python3 test/ci_system/pipeline.py execute \
+              --config "$CONFIG" \
+              --runner "$RUNNER_LABEL" \
+              --work-dir "$PWD" \
+              --print-plan \
+              --only-stage install \
+              --keep-runner-state \
+              --result-json .ci-artifacts/install-result.json
+            '
       - name: Execute task
         run: |
           set -euo pipefail
-          cd "$WORK_DIR"
-          python3 test/ci_system/pipeline.py execute \
-            --config "$CONFIG" \
-            --runner "$RUNNER_LABEL" \
-            --work-dir "$WORK_DIR" \
-            --print-plan \
-            --skip-stage install \
-            --reuse-runner-state \
-            --result-json .ci-artifacts/result.json
+          bash "$WORK_DIR/test/ci_system/env/gh200.sh" bash -lc '
+            cd "$PWD"
+            python3 test/ci_system/pipeline.py execute \
+              --config "$CONFIG" \
+              --runner "$RUNNER_LABEL" \
+              --work-dir "$PWD" \
+              --print-plan \
+              --skip-stage install \
+              --reuse-runner-state \
+              --result-json .ci-artifacts/result.json
+            '
       - name: Upload task artifacts
         if: always()
         uses: actions/upload-artifact@v4
