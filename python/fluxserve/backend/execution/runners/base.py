@@ -88,10 +88,15 @@ class ModelRunner:
                 )
             )
         )
+        self.enable_fa4_decode_graph = bool(
+            self.runner_config.attention_backend == "fa4"
+            and self.runner_config.enable_decode_cuda_graph
+        )
         if (
             self.runner_config.attention_backend == "flashinfer"
             and self.runner_config.enable_cuda_graph
             and not self.enable_flashinfer_attention_graph
+            and not self.enable_fa4_decode_graph
         ):
             logger.info(
                 "Disabling CUDA graph because attention_backend='flashinfer' "
@@ -102,6 +107,7 @@ class ModelRunner:
             self.runner_config.kv_cache_layout == "paged"
             and self.runner_config.enable_cuda_graph
             and not self.enable_flashinfer_attention_graph
+            and not self.enable_fa4_decode_graph
         ):
             logger.info(
                 "Disabling CUDA graph because kv_cache_layout='paged' "
@@ -111,6 +117,7 @@ class ModelRunner:
         self.enable_cuda_graph = bool(
             self.runner_config.enable_cuda_graph
             and not self.enable_flashinfer_attention_graph
+            and not self.enable_fa4_decode_graph
         )
         self.enable_compile = self.runner_config.enable_compile
         self.use_cross_block = self.runner_config.use_cross_block

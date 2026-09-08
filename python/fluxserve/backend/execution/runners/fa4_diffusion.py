@@ -50,6 +50,19 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
             raise ValueError("FA4DiffusionRunner requires attention_backend='fa4'.")
         if runner_config.kv_cache_layout != "paged":
             raise ValueError("FA4DiffusionRunner requires kv_cache_layout='paged'.")
+        if runner_config.enable_prefill_cuda_graph:
+            raise ValueError("FA4 supports --use-decode-cuda-graph; prefill graph is unsupported")
+        if runner_config.enable_decode_cuda_graph:
+            server_args = kwargs.get("server_args", args[1] if len(args) > 1 else None)
+            if any(int(getattr(server_args, name, 1)) != 1 for name in ("tp_size", "ep_size", "dp_size", "pp_size")):
+                raise ValueError("FA4 decode CUDA graph currently requires TP/EP/DP/PP=1")
+            if runner_config.decode_cuda_graph_mode != "padded":
+                raise ValueError("FA4 decode CUDA graph requires --cuda-graph-decode-mode padded")
+            if int(runner_config.page_size or runner_config.block_length) != int(runner_config.block_length):
+                raise ValueError("FA4 decode graph requires page_size == block_length")
+            sizes = runner_config.cuda_graph_capture_batch_sizes or runner_config.supported_batch_sizes
+            if max(sizes) < int(server_args.max_num_seqs):
+                raise ValueError("FA4 decode graph buckets must cover max_num_seqs")
         if int(runner_config.page_size or runner_config.block_length) % 16 != 0:
             raise ValueError("FA4 page_size must be a multiple of 16.")
         architecture_names = " ".join(
@@ -62,6 +75,12 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
         validate_fa4_runtime(device)
         super().__init__(*args, **kwargs)
         self._paged_request_slots: dict[str, int] = {}
+        self.fa4_graph_runner = None
+        if runner_config.enable_decode_cuda_graph:
+            from fluxserve.backend.execution.fa4_cuda_graph_runner import FA4CudaGraphRunner
+            self.fa4_graph_runner = FA4CudaGraphRunner(
+                runner_config.cuda_graph_capture_batch_sizes or runner_config.supported_batch_sizes
+            )
 
     def _use_unbounded_paged_prefill(self) -> bool:
         return True
@@ -190,7 +209,9 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
         pos_ids,
         num_layers,
         mini_batch_size,
+        prompt_lengths=None,
     ):
+        edit_budget, row_state = self._make_decode_loop_state(decoding_start.shape[0])
         decoding_flag = (decoding_start + self.block_length) <= total_length
         while torch.any(decoding_flag):
             seq_ids = select_batch_sequences_by_mask_number(
@@ -203,6 +224,9 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
                 total_length,
                 pos_ids,
                 num_layers,
+                prompt_lengths=prompt_lengths,
+                edit_budget=edit_budget,
+                row_state=row_state,
             )
             decoding_flag = decoding_flag & (
                 (decoding_start + self.block_length) <= total_length
@@ -216,7 +240,13 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
         total_length,
         pos_ids,
         num_layers,
+        prompt_lengths=None,
+        edit_budget=None,
+        row_state=None,
     ):
+        decoder_kwargs = self._decoder_editing_kwargs(
+            seq_ids, prompt_lengths, edit_budget, row_state
+        )
         decoding_x = x.select_seqs(seq_ids)
         decoding_block = gather_blocks(
             decoding_x.data, decoding_start[seq_ids], self.block_length
@@ -227,23 +257,58 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
             .repeat(seq_ids.shape[0], 1)
         )
         decoding_pos_ids += decoding_start[seq_ids].unsqueeze(1)
-        forward_batch = self._make_decode_forward_batch(seq_ids, decoding_start)
-        output = self.model(
-            decoding_block,
-            use_cache=True,
-            position_ids=decoding_pos_ids,
-            past_key_values=[
-                self.past_key_values.layer_paged_kv(layer_id)
-                for layer_id in range(num_layers)
-            ],
-            forward_batch=forward_batch,
-        )
-        logits = output.logits[: len(seq_ids)]
-        self.decoder.batch_decode(
-            logits, decoding_start[seq_ids], decoding_x, self.block_length
-        )
+        graph_runner = getattr(self, "fa4_graph_runner", None)
+        fused_step = None
+        if graph_runner is not None:
+            prompt_positions = allow_edit = None
+            if getattr(self.decoder, "graph_fused_step", False):
+                if prompt_lengths is None or edit_budget is None:
+                    raise RuntimeError("Joint decode graph requires prompt_lengths and edit_budget")
+                prompt_positions = decoding_pos_ids < prompt_lengths[seq_ids, None]
+                allow_edit = edit_budget.allow_edit(seq_ids)
+            replay = graph_runner.replay(
+                self, decoding_block, decoding_pos_ids, seq_ids, prompt_positions, allow_edit
+            )
+            logits, fused_step = replay.logits, replay.step
+        else:
+            forward_batch = self._make_decode_forward_batch(seq_ids, decoding_start)
+            output = self.model(
+                decoding_block,
+                use_cache=True,
+                position_ids=decoding_pos_ids,
+                past_key_values=[
+                    self.past_key_values.layer_paged_kv(layer_id)
+                    for layer_id in range(num_layers)
+                ],
+                forward_batch=forward_batch,
+            )
+            logits = output.logits[: len(seq_ids)]
+        if fused_step is not None:
+            updated, had_mask, changed, block_finished = fused_step
+            decoding_x.data.scatter_(1, decoding_pos_ids, updated)
+        elif callable(getattr(self.decoder, "batch_decode", None)):
+            self.decoder.batch_decode(
+                logits, decoding_start[seq_ids], decoding_x, self.block_length,
+                **decoder_kwargs,
+            )
+        else:
+            # HierarchyDecoder exposes a single-request decode API. Keep its
+            # B=1 semantics even when the model forward batches requests.
+            for row, start in enumerate(decoding_start[seq_ids].tolist()):
+                single = decoding_x.select_seqs(slice(row, row + 1))
+                self.decoder.decode(
+                    logits[row : row + 1], start, start + self.block_length, single
+                )
+                decoding_x[row : row + 1] = single.data
 
-        block_finished = (decoding_block == self.decoder.mask_id).sum(dim=1) == 0
+        if fused_step is None:
+            after = gather_blocks(decoding_x.data, decoding_start[seq_ids], self.block_length)
+            had_mask = (decoding_block == self.decoder.mask_id).any(dim=1)
+            changed = (after != decoding_block).any(dim=1)
+            # Commit KV only after a forward on the final, unedited tokens.
+            block_finished = (~had_mask) & (~changed)
+        if edit_budget is not None:
+            edit_budget.update(seq_ids, had_mask, changed, block_finished)
         decoding_start[seq_ids] += block_finished.long() * self.block_length
         x[seq_ids] = decoding_x.data
         if self.early_stop:
@@ -260,12 +325,15 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
         max_num_seqs = int(self.server_args.max_num_seqs)
         if (
             isinstance(getattr(self, "past_key_values", None), PagedKVCache)
-            and self.past_key_values.num_pages >= int(num_device_pages)
+            and getattr(self.past_key_values, "scheduler_num_pages", 0) >= int(num_device_pages)
             and self.past_key_values.batch_size >= max_num_seqs
         ):
             return
         num_heads = int(config.num_attention_heads)
         head_dim = int(getattr(config, "head_dim", config.hidden_size // num_heads))
+        graph_runner = getattr(self, "fa4_graph_runner", None)
+        if graph_runner is not None:
+            graph_runner.invalidate()
         self.past_key_values = PagedKVCache(
             num_layers=int(config.num_hidden_layers),
             batch_size=max_num_seqs,
@@ -276,15 +344,28 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
             head_dim=head_dim,
             page_size=int(self.runner_config.page_size),
             num_pages=int(num_device_pages),
+            reserve_dummy_page=max(graph_runner.batch_sizes) if graph_runner is not None else 0,
             dtype=torch.bfloat16,
             device=self.device,
         )
         self.past_key_values.scheduler_num_pages = int(num_device_pages)
 
     def prepare_online_cuda_graphs(self) -> dict[str, int | float]:
-        # FA4's CuTeDSL JIT is warmed by real shape buckets. CUDA graph capture
-        # is deliberately deferred until those graphs have stable metadata.
-        return {}
+        if self.fa4_graph_runner is None:
+            return {}
+        self.ensure_paged_kv_cache(num_device_pages=int(self.server_args.scheduler_num_device_pages))
+        self.fa4_graph_runner.capture(self)
+        return self.cuda_graph_stats()
+
+    def cuda_graph_stats(self) -> dict[str, int | float]:
+        graph_runner = getattr(self, "fa4_graph_runner", None)
+        return graph_runner.stats() if graph_runner is not None else {}
+
+    def shutdown_cuda_graphs(self, *, log: bool = True) -> None:
+        del log
+        graph_runner = getattr(self, "fa4_graph_runner", None)
+        if graph_runner is not None:
+            graph_runner.invalidate()
 
     async def execute_paged_forward_plan(
         self,
@@ -346,6 +427,7 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
                 self._release_paged_slot(result.rid)
         return results
 
+    @torch.no_grad()
     def _execute_paged_prefill(
         self,
         op,
@@ -413,6 +495,7 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
         )
         self.num_forwards += 1
 
+    @torch.no_grad()
     def _execute_paged_decode(
         self,
         op,
@@ -485,8 +568,12 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
 
         x = _PlanTokenArray(decode_tokens, self.decoder.mask_id, self.decoder.eos_id)
         num_layers = self.model.model.config.num_hidden_layers
+        prompt_lengths = torch.zeros_like(decoding_start)
+        for row in active_rows:
+            prompt_lengths[slot_indices[row]] = len(states_by_id[request_ids[row]].input_ids)
+        edit_budget, row_state = self._make_decode_loop_state(decode_tokens.shape[0])
         pending = seq_ids
-        for _ in range(block_length + 1):
+        for _ in range(edit_budget.max_block_iters):
             before = decoding_start[pending].clone()
             self._decode_selected_batch(
                 x,
@@ -495,6 +582,9 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
                 max_total_len,
                 None,
                 num_layers,
+                prompt_lengths=prompt_lengths,
+                edit_budget=edit_budget,
+                row_state=row_state,
             )
             unfinished = decoding_start[pending] == before
             if not torch.any(unfinished):

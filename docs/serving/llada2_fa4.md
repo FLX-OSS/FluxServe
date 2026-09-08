@@ -5,11 +5,19 @@ FluxServe can run LLaDA 2.x attention through the standalone
 metadata and paged KV cache directly; it does not use a compatibility layer
 from another serving system.
 
-This is an experimental backend: attention-level BF16 parity has passed on
-GH200, but the strict full LLaDA2.1-mini model logits parity test has not passed.
-Small attention differences and subsequent model amplification require further
-investigation; the exact cause is not established by attention tests alone.
-Online CUDA Graph execution is not wired into the FA4 runner yet.
+LLaDA2.1-mini BF16 eager generation has been exercised on GH200 through both
+the offline runner and the real HTTP paged scheduler. The end-to-end tests
+cover short answers, long prompts, multi-block output, concurrent requests,
+EOS/length termination and request-slot reuse. Threshold and hierarchy
+decoders are supported by the FA4 runner.
+
+This remains experimental: the strict random-input full-model logits parity
+test does not pass, and arbitrary cross-backend token identity is not promised.
+The counting example differs from dense SDPA by a comma, although both produce
+the correct integer sequence. Full-model decode CUDA Graph is supported for
+the TP/DP/EP/PP=1 paged path described below; prefill remains eager. The
+full-pipeline validation uses BF16 (the standalone attention tests also cover
+FP16). See [end-to-end validation](../fa4_llada_e2e.md) for exact scope.
 
 The adapter skips token gathers and output scatter when all requests have the
 full input length (including block decode), writes contiguous paged caches using
@@ -63,7 +71,8 @@ the FluxServe KV pool:
 
 ```bash
 fluxserve serve \
-  --model inclusionAI/LLaDA2.0-mini \
+  --model inclusionAI/LLaDA2.1-mini \
+  --apply-template \
   --attention-backend fa4 \
   --kv-cache-layout paged \
   --scheduler-policy paged \
@@ -71,9 +80,43 @@ fluxserve serve \
   --block-length 64
 ```
 
+For the tested single-GPU smoke configuration, also set
+`--max-num-seqs 2 --max-model-len 512 --scheduler-num-device-pages 32`.
+`--apply-template` uses the checkpoint's chat template, matching the offline
+end-to-end validator. The default legacy prompt renderer produces different
+input tokens and can produce different answers.
+
 FA4 kernels are JIT-compiled for the first unseen shape, so the first request
-can take longer. CUDA graph capture is disabled for this initial backend;
-normal eager execution and shape-level CuTeDSL kernel caching remain enabled.
+can take longer. Online TP1/EP1/DP1 decode supports full-model CUDA graphs:
+
+```bash
+--use-decode-cuda-graph --cuda-graph-decode-mode padded \
+--cuda-graph-capture-bs 1 2 4 8 10 12 16
+```
+
+The largest bucket must cover `max_num_seqs`. Page size must equal block size.
+Graphs capture the model, LM head, and (for `joint_threshold`) token selection
+and block-finished predicates. KV lengths, physical page tables, positions,
+prompt protection and editing budgets are updated before each replay. Padding
+rows write distinct reserved pages outside the scheduler pool. KV-pool changes
+invalidate captures. Prefill remains eager; prefill graph and distributed FA4
+graph requests are rejected. The metrics endpoint exposes actual decode capture,
+replay and padded-row counts. A runnable 64K/16-request configuration is
+`test/benchmark/fluxserve/configs/tp1_ep1_llada21_mini_fa4.sh`.
+
+Real-weight graph correctness can be checked with:
+
+```bash
+FLUXSERVE_RUN_FA4_GRAPH_MODEL=1 python -m pytest -q -s \
+  test/runtime/integration/test_fa4_decode_graph_model.py
+```
+
+This loads the cached LLaDA2.1-mini checkpoint and requires a supported GPU.
+The test checks strict graph/eager equality for logits, decoder updates and
+the real KV pool, including padded buckets, recycled physical pages and an
+actual 65536-token KV prefix-plus-block. Changing the KV allocation must
+invalidate the old graphs. This graph/eager check is separate from comparing
+FA4 to a different attention backend.
 
 ## Attention semantics
 
