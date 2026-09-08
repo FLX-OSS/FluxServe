@@ -10,7 +10,7 @@ model may *edit* an already-resolved token in the active block when its
 confidence clears `editing_threshold`. FluxServe implements this as the
 `joint_threshold` parallel decoder.
 
-See the [model support development guide](llada2.1-model-support-development-guide.md) for the full
+See the [model support development guide](../../dev-notes/llada2.1-model-support-development-guide.md) for the full
 design, invariants, and test plan.
 
 ## Presets (from the LLaDA2.1 model card)
