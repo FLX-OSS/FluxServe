@@ -1,0 +1,95 @@
+ARG CUDA_VERSION=13.0.1
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04
+
+LABEL org.opencontainers.image.authors="Youpeng Zhao" \
+      org.opencontainers.image.description="FluxServe image with CUDA 13.0 userspace and FA4"
+
+ARG TARGETARCH
+ARG MAX_JOBS=64
+ARG CUDA_ARCH_LIST=9.0
+ARG TORCH_VERSION=2.11.0
+ARG TORCHVISION_VERSION=0.26.0
+ARG TORCHAUDIO_VERSION=2.11.0
+ARG TRANSFORMERS_VERSION=5.6.0
+ARG CUTLASS_DSL_VERSION=4.6.2
+ARG FLASHINFER_COMMIT=a7d243e0b25697b021cc9366f1326d7b5013287b
+ARG FLASH_ATTN_COMMIT=ce088ab9ce0fc0434dcd8afa0a791da9fcc3a820
+
+SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive \
+    CUDA_HOME=/usr/local/cuda \
+    TORCH_CUDA_ARCH_LIST=${CUDA_ARCH_LIST} \
+    MAX_JOBS=${MAX_JOBS} \
+    FLASHINFER_WORKSPACE_BASE=/tmp \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
+    VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:${PATH}:/usr/local/cuda/nvvm/bin"
+
+# Python, native build dependencies, and basic development tools.
+RUN test "${TARGETARCH}" = amd64
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3.12-full python3.12-dev python3.12-venv \
+        build-essential cmake ninja-build pkg-config git git-lfs ccache \
+        ca-certificates curl wget locales unzip patchelf \
+        libnuma-dev libibverbs-dev libopenmpi-dev libssl-dev \
+        rdma-core ibverbs-providers infiniband-diags \
+        vim tmux htop gdb rsync \
+    && locale-gen en_US.UTF-8 \
+    && rm -rf /var/lib/apt/lists/*
+ENV LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
+
+# Isolate pip and all Python packages from Ubuntu's apt-managed installation.
+# PATH selects this environment for python, python3, pip, and console scripts.
+RUN /usr/bin/python3.12 -m venv /opt/venv
+
+# Install PyTorch from the cu130 index, then protect it during later installs.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install --upgrade pip 'setuptools<82' wheel packaging \
+    && python3 -m pip install 'cuda-python==13.2.0' \
+    && mkdir -p /opt/flux-fa4 \
+    && python3 -m pip freeze > /opt/flux-fa4/constraints.txt \
+    && python3 -m pip install --index-url https://download.pytorch.org/whl/cu130 \
+        -c /opt/flux-fa4/constraints.txt \
+        "torch==${TORCH_VERSION}+cu130" \
+        "torchvision==${TORCHVISION_VERSION}+cu130" \
+        "torchaudio==${TORCHAUDIO_VERSION}+cu130" \
+    && python3 -m pip freeze > /opt/flux-fa4/constraints.txt
+
+# Pin the attention stack's key dependencies; let pip resolve the rest.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install -c /opt/flux-fa4/constraints.txt \
+        "transformers==${TRANSFORMERS_VERSION}" \
+        "nvidia-cutlass-dsl[cu13]==${CUTLASS_DSL_VERSION}" \
+        'apache-tvm-ffi==0.1.13.post3' \
+        'quack-kernels==0.6.4' 'torch-c-dlpack-ext==0.1.5' \
+        numpy scipy pandas matplotlib aiohttp requests tqdm \
+        fastapi uvicorn setproctitle \
+        ninja scikit-build-core nanobind pytest pytest-xdist ruff \
+    && python3 -m pip freeze > /opt/flux-fa4/constraints.txt
+
+# Custom FlashInfer fork. Its package metadata supplies additional dependencies.
+WORKDIR /flashinfer-dllm-workspace
+RUN git clone https://github.com/FLX-OSS/flashinfer-dllm.git flashinfer-dllm \
+    && cd flashinfer-dllm \
+    && git checkout --detach "${FLASHINFER_COMMIT}" \
+    && git submodule update --init --recursive
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install -c /opt/flux-fa4/constraints.txt ./flashinfer-dllm \
+    && python3 -m pip freeze > /opt/flux-fa4/constraints.txt
+
+# FA4 stays editable, as in the original environment.
+WORKDIR /fa4-workspace
+RUN git clone https://github.com/Dao-AILab/flash-attention.git flash-attn-4 \
+    && cd flash-attn-4 \
+    && git checkout --detach "${FLASH_ATTN_COMMIT}" \
+    && git submodule update --init --recursive
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install -c /opt/flux-fa4/constraints.txt \
+        -e './flash-attn-4/flash_attn/cute[dev,cu13]'
+
+LABEL ai.fluxserve.flashinfer.commit="${FLASHINFER_COMMIT}" \
+      ai.fluxserve.flash-attn.commit="${FLASH_ATTN_COMMIT}"
+WORKDIR /
+CMD ["/bin/bash", "--login"]

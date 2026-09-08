@@ -22,7 +22,7 @@
 
 Reference: ``LLaDA2MoeModelLM.generate()`` shipped inside the
 ``inclusionAI/LLaDA2.1-mini`` checkpoint. Two deliberate deviations from that
-reference (see docs/serving/llada2.1-model-support-development-guide.md):
+reference (see dev-notes/llada2.1-model-support-development-guide.md):
 
 - the ``mask_id`` logit is suppressed before the argmax so that no update path
   can ever write a mask back into the block (the paper states this invariant;

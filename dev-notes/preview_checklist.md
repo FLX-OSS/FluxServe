@@ -1,3 +1,7 @@
+# Preview checklist
+
+Historical development checklist; use the [public documentation](../docs/index.md) for current setup and serving instructions.
+
 ## Functions
 
 ### Model Support
