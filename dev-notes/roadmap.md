@@ -1,3 +1,7 @@
+# Development planning notes
+
+This historical checklist is retained for development reference and does not represent current model or feature support. See the [public documentation](../docs/index.md) for supported serving recipes.
+
 ### Model Support
 - [ ] LLaDA2.1
 - [ ] LLaDA2.2

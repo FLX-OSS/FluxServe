@@ -14,7 +14,9 @@ Its core features include:
 
 ## [Getting Started](docs/guides/getting_started.md)
 
-## [Development Roadmap](docs/roadmap.md)
+## [Documentation](docs/index.md)
+
+## [Development Planning Notes](dev-notes/roadmap.md)
 
 ## Performance Results
 <img src="./assets/figures/result.png" alt="FluxServe vs. SGLang-dLLM on LLaDA-2.0-mini/flash" width="960px" margin="10px"></img>
