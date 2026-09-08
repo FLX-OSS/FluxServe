@@ -1,0 +1,57 @@
+api_version: ci.fluxserve.io/v1
+name: eval-diffusion-gemma-gsm8k
+type: eval
+triggers:
+  - per-commit
+  - manual
+runner:
+  labels:
+    - gh200-1gpu
+env:
+  CI: "true"
+server:
+  command: >-
+    fluxserve serve
+    --model google/diffusiongemma-26B-A4B-it
+    --host 127.0.0.1
+    --port 8000
+    --tp-size 1
+    --dp-size 1
+    --ep-size 1
+    --gpu-memory-utilization 0.6
+    --max-num-seqs 4
+    --max-model-len 8192
+    --max-scheduled-tokens 2048
+    --block-length 256 
+    --canvas-length 256
+    --page-size 256
+    --attention-backend flashinfer
+    --kv-cache-layout paged
+    --scheduler-policy default
+    --use-decode-cuda-graph
+    --cuda-graph-decode-mode padded
+    --cuda-graph-capture-bs 1 2 4
+  ready:
+    url: http://127.0.0.1:8000/health
+    timeout: 1800
+    interval: 10
+eval:
+  install:
+    - python3 -m venv /tmp/evalscope-venv && /tmp/evalscope-venv/bin/python -m pip install "evalscope @ git+https://github.com/modelscope/evalscope.git@acd09b44384d53174768bb1063f675420f76fae9"
+  command: >-
+    /tmp/evalscope-venv/bin/python -m evalscope.cli.cli eval
+    --model google/diffusiongemma-26B-A4B-it
+    --model-id diffusion-gemma
+    --eval-type openai_api
+    --api-url http://127.0.0.1:8000/v1/chat/completions
+    --api-key EMPTY
+    --datasets gsm8k
+    --eval-batch-size 4
+    --judge-strategy rule
+    --generation-config '{"max_tokens": 2048, "temperature": 0.0}'
+    --work-dir .ci-artifacts/gsm8k-eval
+    --no-timestamp
+    --no-collect-perf
+report:
+  github_step_summary: true
+score_threshold: 0.9
