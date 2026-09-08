@@ -155,8 +155,10 @@ std::vector<std::string> Scheduler::CalcRollingHash(const std::vector<std::int32
 
 void Scheduler::SubmitRequests(const std::vector<RequestSpec>& request_specs) {
     for (const auto& spec : request_specs) {
-        auto req = std::make_unique<Request>(spec, config_.page_size);
-        requests_.emplace(spec.request_id, std::move(req));
+        auto req = std::make_unique<Request>(spec, config_.page_size, next_arrival_sequence_);
+        if (requests_.emplace(spec.request_id, std::move(req)).second) {
+            ++next_arrival_sequence_;
+        }
     }
 }
 

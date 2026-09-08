@@ -18,4 +18,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Shared backend utilities and configuration helpers."""
+"""
+    Shared utilities and configuration helpers.
+"""

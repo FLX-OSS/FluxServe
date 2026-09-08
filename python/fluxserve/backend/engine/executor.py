@@ -45,6 +45,7 @@ class ForwardStepResult:
     finish_reason: str | None = None
     reserve_tokens: int = 0
     decode_block_completed: bool = False
+    trajectory_metrics: dict | None = None
 
 
 class GenerationExecutor(Protocol):

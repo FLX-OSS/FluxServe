@@ -7,16 +7,58 @@ set -euo pipefail
 
 EVALSCOPE_COMMIT=acd09b44384d53174768bb1063f675420f76fae9
 EVALSCOPE_VENV="${EVALSCOPE_VENV:-/tmp/evalscope-venv}"
-python -m venv "${EVALSCOPE_VENV}"
-"${EVALSCOPE_VENV}/bin/python" -m pip install \
-    "evalscope[perf] @ git+https://github.com/modelscope/evalscope.git@${EVALSCOPE_COMMIT}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 OUTPUTS_DIR="${SCRIPT_DIR}/outputs/$(date +%Y%m%d_%H%M%S)"
 SERVER_PID=
 SERVER_LOG=
-RATES=(1 2 4 8 16)
+
+usage() {
+    echo "Usage: $0 [--rates RATE[,RATE...]]"
+    echo "       RATES='RATE RATE ...' $0"
+}
+
+rates_arg="${RATES:-0.8}"
+while (( $# > 0 )); do
+    case "$1" in
+        --rates)
+            if (( $# < 2 )); then
+                echo "--rates requires a comma- or space-separated value" >&2
+                usage >&2
+                exit 2
+            fi
+            rates_arg=$2
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+# Accept both "4 8 16" and "4,8,16" forms.
+read -r -a RATES <<< "${rates_arg//,/ }"
+if (( ${#RATES[@]} == 0 )); then
+    echo "At least one rate is required" >&2
+    exit 2
+fi
+for rate in "${RATES[@]}"; do
+    if [[ ! "$rate" =~ ^[0-9]+([.][0-9]+)?$ ]] || [[ "$rate" =~ ^0+([.]0+)?$ ]]; then
+        echo "Invalid rate: $rate (expected a positive number)" >&2
+        exit 2
+    fi
+done
+
+python -m venv "${EVALSCOPE_VENV}"
+"${EVALSCOPE_VENV}/bin/python" -m pip install \
+    "evalscope[perf] @ git+https://github.com/modelscope/evalscope.git@${EVALSCOPE_COMMIT}"
 
 stop_server() {
     if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -112,13 +154,11 @@ run_perf() {
 trap stop_server EXIT
 
 run_perf gsm8k tp1_ep1_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
-run_perf gsm8k tp4_ep4_flash inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
-run_perf bigcodebench tp1_ep1_mini inclusionAI/LLaDA2.0-mini openai/bigcodebench.jsonl 
-run_perf bigcodebench tp4_ep4_flash inclusionAI/LLaDA2.0-mini openai/bigcodebench.jsonl 
-run_perf gsm8k tp1_ep1_gemma google/diffusiongemma-26B-A4B-it gsm8k.jsonl 
-run_perf gsm8k tp4_ep4_gemma google/diffusiongemma-26B-A4B-it gsm8k.jsonl 
-run_perf bigcodebench tp1_ep1_gemma google/diffusiongemma-26B-A4B-it openai/bigcodebench.jsonl 
-run_perf bigcodebench tp4_ep4_gemma google/diffusiongemma-26B-A4B-it openai/bigcodebench.jsonl 
+run_perf gsm8k tp4_ep4_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
+run_perf gsm8k tp4_ep4_flash inclusionAI/LLaDA2.0-flash gsm8k.jsonl
 
+run_perf bigcodebench tp1_ep1_mini inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
+run_perf bigcodebench tp4_ep4_mini inclusionAI/LLaDA2.0-mini bigcodebench.jsonl 
+run_perf bigcodebench tp4_ep4_flash inclusionAI/LLaDA2.0-flash openai/bigcodebench.jsonl 
 
 exit 0

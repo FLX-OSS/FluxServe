@@ -12,5 +12,4 @@ exec vllm serve \
     --max-num-seqs 4 \
     --gpu-memory-utilization 0.80 \
     --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
-    --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
     --chat-template "${SCRIPT_DIR}/tool_chat_template_gemma4.jinja"

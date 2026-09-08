@@ -1,5 +1,3 @@
-# Copyright (c) 2026 FLUX-OSS
-
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
 # in the Software without restriction, including without limitation the rights
@@ -18,6 +16,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Latency and throughput metrics.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

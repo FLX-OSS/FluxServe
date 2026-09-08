@@ -26,8 +26,9 @@ import torch
 
 
 class PagedKVCache:
-    """Flashinfer-style Paged KV cache."""
-
+    """
+        Flashinfer-style Paged KV cache.
+    """
     def __init__(
         self,
         *,

@@ -1,0 +1,12 @@
+{%- for message in messages -%}
+{%- if message['role'] == 'system' -%}
+{{ '<role>SYSTEM</role>' + message['content'] + '<|role_end|>' }}
+{%- elif message['role'] == 'assistant' -%}
+{{ '<role>ASSISTANT</role>' + message['content'] + '<|role_end|>' }}
+{%- else -%}
+{{ '<role>HUMAN</role>' + message['content'] + '<|role_end|>' }}
+{%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+{{ '<role>ASSISTANT</role>' }}
+{%- endif -%}

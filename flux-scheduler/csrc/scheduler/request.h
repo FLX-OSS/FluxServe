@@ -50,9 +50,10 @@ struct Prefetching;
 
 class Request {
 public:
-    Request(const RequestSpec& spec, std::int32_t page_size);
+    Request(const RequestSpec& spec, std::int32_t page_size, std::uint64_t arrival_sequence);
 
     std::string Id() const { return id_; }
+    std::uint64_t ArrivalSequence() const { return arrival_sequence_; }
 
     // Keep Apply the only non-const function in Request
     // The wrapper lambda converts any concrete state type returned by event's operator()
@@ -262,6 +263,7 @@ public:
 
 private:
     std::string id_;
+    std::uint64_t arrival_sequence_;
     TokenContainer token_container_;
     std::int32_t page_size_;
     fsm::State state_;

@@ -314,6 +314,7 @@ def build_runner_config(args, batch_info, model_config=None):
         page_size=getattr(args, "page_size", None),
         canvas_length=getattr(args, "canvas_length", None),
         max_denoising_steps=getattr(args, "max_denoising_steps", None),
+        profile_block_metrics=getattr(args, "profile_block_metrics", False),
     )
 
 
@@ -546,6 +547,15 @@ def run_worker(args, *, init_method: str = "env://"):
         trust_remote_code=args.trust_remote_code,
     )
     is_diffusion_gemma = normalize_diffusion_gemma_args(args, model_config)
+    if args.profile_block_metrics and (
+        is_diffusion_gemma
+        or args.parallel_decoding != "threshold"
+        or args.use_credit
+    ):
+        raise ValueError(
+            "--profile-block-metrics currently requires LLaDA threshold "
+            "decoding without --use-credit"
+        )
     if is_diffusion_gemma:
         logger.info(
             "[Info] Diffusion-Gemma attention backend: "
@@ -667,6 +677,13 @@ def run_worker(args, *, init_method: str = "env://"):
                 )
             else:
                 out = runner.generate(batch_input_ids)
+            if args.profile_block_metrics:
+                profiles = getattr(runner, "last_block_profile", None)
+                if profiles is None or len(profiles) != len(input_ids):
+                    raise RuntimeError(
+                        "runner returned incomplete block profiling metadata"
+                    )
+                batch_info.block_profiles.extend(profiles)
             denoising_steps = (
                 getattr(runner, "last_denoising_steps", None)
                 if is_diffusion_gemma
@@ -802,10 +819,31 @@ def _write_results(
                 f,
             )
             f.write("\n")
+    if args.profile_block_metrics:
+        profiles = batch_info.original_order(batch_info.block_profiles)
+        profile_filename = os.path.join(
+            args.output_dir,
+            f"{args.exp_name}_{dataset_name}_{args.parallel_decoding}_"
+            f"{args.threshold}_block_profile.jsonl",
+        )
+        with open(profile_filename, "w") as f:
+            for i, blocks in enumerate(profiles):
+                json.dump(
+                    {
+                        "id": ids[i],
+                        "prompt_length": int(all_input_ids[i].shape[1]),
+                        "generated_length": int(token_numbers[i]),
+                        "block_length": int(args.block_length),
+                        "blocks": blocks,
+                    },
+                    f,
+                )
+                f.write("\n")
+        logger.info(f"[Info] Wrote block profile to {profile_filename}")
 
 
 def add_bench_offline_subparser(subparsers) -> None:
-    parser = subparsers.add_parser("bench_offline", help="Offline batched benchmark.")
+    parser = subparsers.add_parser("bench_offline", help="Offline batched benchmark (experimental).")
     parser.add_argument("--model", "--model-name", "--model_name", dest="model_name", required=True)
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--device", default="cuda")
@@ -884,6 +922,16 @@ def add_bench_offline_subparser(subparsers) -> None:
         help="Hard per-block iteration cap (levenshtein_joint).",
     )
     parser.add_argument("--use-credit", "--use_credit", dest="use_credit", action="store_true")
+    parser.add_argument(
+        "--profile-block-metrics",
+        "--profile_block_metrics",
+        dest="profile_block_metrics",
+        action="store_true",
+        help=(
+            "Write per-request LLaDA threshold decode block metrics to a "
+            "separate JSONL file. Instrumented timings include profiling overhead."
+        ),
+    )
     parser.add_argument("--dataset-format", "--dataset_format", dest="dataset_format", choices=("auto", "legacy", "openai"), default="openai")
     parser.add_argument(
         "--disable-sorting",

@@ -19,7 +19,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Rotary Positional Embeddings."""
+"""
+    Rotary Positional Embeddings.
+"""
 import itertools
 import math
 from typing import Any, Dict, List, Optional, Tuple, Union

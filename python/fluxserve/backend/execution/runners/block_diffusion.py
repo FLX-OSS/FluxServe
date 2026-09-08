@@ -24,6 +24,7 @@ import torch
 import torch.distributed as dist
 
 from fluxserve.backend.configs.model_config import ModelConfig
+from fluxserve.backend.execution.block_profile import BlockProfileCollector
 from fluxserve.backend.execution.forward_batch_info import (
     ForwardBatch,
     ForwardMode,
@@ -224,9 +225,15 @@ class BlockDiffusionRunner(ModelRunner):
     @torch.no_grad()
     def generate(self, prompts):
         batch_size = prompts.shape[0]
+        self.last_block_profile = []
         mini_batch_size = self.runner_config.mini_batch_size
         total_length, new_gen_length, attn_mask_num_blocks = self.preprocess_inputs(
             prompts
+        )
+        self._block_profile_collector = (
+            BlockProfileCollector(batch_size, self.block_length, total_length)
+            if getattr(self.runner_config, "profile_block_metrics", False)
+            else None
         )
         if self.runner_config.cache not in {"", "prefix"}:
             raise ValueError(f"Unsupported cache mode: {self.runner_config.cache}")
@@ -278,6 +285,9 @@ class BlockDiffusionRunner(ModelRunner):
             mini_batch_size,
             prompt_lengths=non_mask_number,
         )
+
+        if self._block_profile_collector is not None:
+            self.last_block_profile = self._block_profile_collector.finalize()
 
         logger.info("The number of diffusion iterations: %s", self.num_forwards)
         return x.get_generated_tokens()
@@ -461,7 +471,7 @@ class BlockDiffusionRunner(ModelRunner):
                 decoder_kwargs = self._decoder_editing_kwargs(
                     seq_ids, prompt_lengths, edit_budget, row_state
                 )
-                self.decoder.batch_decode(
+                step_stats = self.decoder.batch_decode(
                     logits,
                     decoding_start[seq_ids],
                     decoding_x,
@@ -481,6 +491,12 @@ class BlockDiffusionRunner(ModelRunner):
                 had_mask = (decoding_block == self.decoder.mask_id).any(dim=1)
                 changed = (after != decoding_block).any(dim=1)
                 block_finished = (~had_mask) & (~changed)
+                self._record_block_profile(
+                    seq_ids,
+                    decoding_start[seq_ids],
+                    step_stats,
+                    block_finished,
+                )
                 edit_budget.update(seq_ids, had_mask, changed, block_finished)
                 self._update_finished_kv_cache(
                     output,
@@ -514,6 +530,18 @@ class BlockDiffusionRunner(ModelRunner):
                 current_cache_flag = decoding_flag & (
                     (decoding_start + self.block_length) <= current_cache_length
                 )
+
+    def _record_block_profile(
+        self, seq_ids, block_starts, step_stats, block_finished
+    ):
+        collector = getattr(self, "_block_profile_collector", None)
+        if collector is None:
+            return
+        if step_stats is None:
+            raise RuntimeError(
+                "block metrics profiling requires threshold decoder step statistics"
+            )
+        collector.record(seq_ids, block_starts, step_stats, block_finished)
 
     def _update_finished_kv_cache(
         self,

@@ -157,6 +157,7 @@ class RunnerConfig:
     entropy_bound: float | None = None
     confidence_threshold: float | None = None
     stability_threshold: int | None = None
+    profile_block_metrics: bool = False
 
     def __post_init__(self):
         if self.enable_cuda_graph:
@@ -314,6 +315,7 @@ class GenerationBatchInfo:
     tpss: list[float] = field(default_factory=list)
     fpss: list[float] = field(default_factory=list)
     denoising_steps: list[int] = field(default_factory=list)
+    block_profiles: list[list[dict]] = field(default_factory=list)
     total_forward: int = 0
     total_token: int = 0
     total_time: float = 0.0

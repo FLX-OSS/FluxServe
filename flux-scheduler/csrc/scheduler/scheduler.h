@@ -133,6 +133,7 @@ private:
 
 private:
     std::unordered_map<std::string, std::unique_ptr<Request>> requests_;
+    std::uint64_t next_arrival_sequence_{0};
     std::unordered_map<cache_op_id, CacheOpSpec> cache_op_tracker_;
     std::vector<KvCacheEvent> kv_events_;
     // Stats

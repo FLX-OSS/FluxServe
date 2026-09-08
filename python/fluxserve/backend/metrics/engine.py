@@ -36,6 +36,12 @@ class EngineMetrics:
     queue_latencies: list[float] = field(default_factory=list)
     execution_latencies: list[float] = field(default_factory=list)
     e2e_latencies: list[float] = field(default_factory=list)
+    cuda_graph_metrics: dict[str, int | float] = field(default_factory=dict)
+
+    def record_cuda_graph_stats(self, stats: dict[str, int | float] | None) -> None:
+        """Store the latest CUDA-graph counters and gauges for snapshots."""
+        if stats:
+            self.cuda_graph_metrics.update(stats)
 
     def record_submitted(self, prompt_tokens: int) -> None:
         self.total_requests += 1
@@ -81,7 +87,7 @@ class EngineMetrics:
         self.failed_requests += 1
 
     def snapshot(self) -> dict[str, int | float]:
-        return {
+        snapshot = {
             "total_requests": self.total_requests,
             "successful_requests": self.successful_requests,
             "failed_requests": self.failed_requests,
@@ -94,6 +100,8 @@ class EngineMetrics:
             "execution_latency_avg_s": _avg(self.execution_latencies),
             "e2e_latency_avg_s": _avg(self.e2e_latencies),
         }
+        snapshot.update({f"cuda_graph_{k}": v for k, v in self.cuda_graph_metrics.items()})
+        return snapshot
 
 
 def _avg(values: list[float]) -> float:

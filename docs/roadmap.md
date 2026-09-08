@@ -1,13 +1,16 @@
 ### Model Support
-- [ ] LLaDA2.1
 - [ ] LLaDA2.2
+- [ ] Nemotron-Labs-Diffusion
 
+### Tokenizer Support
+- [ ] FastTokens
+- [ ] Gigatokens
 
 ### Kernel Support
 - [ ] Flash-Attn-4
 
 ### Quantization Support
-- [ ] FP8
+- [ ] FP8 (WIP)
 - [ ] NVFP4
 
 ### Hardware Support
