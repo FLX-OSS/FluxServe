@@ -159,3 +159,5 @@ test/e2e/*.log
 bin/
 .sgl-kernel-audit/
 .sgl-kernel-benchmarks/
+.bench_deps/
+.venvs/
