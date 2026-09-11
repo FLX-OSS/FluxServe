@@ -1,0 +1,74 @@
+api_version: ci.fluxserve.io/v1
+name: eval-llada2.2-flash-gsm8k
+type: eval
+triggers:
+  - per-commit
+  - manual
+# 103B on four GPUs is the heaviest task in the matrix and there is no
+# LLaDA2.2-mini to fall back to, so it goes to the front of the dispatch queue
+# rather than waiting behind 1gpu unit tests for the same box.
+priority: high
+runner:
+  labels:
+    - b200-4gpu
+env:
+  CI: "true"
+server:
+  command: >-
+    fluxserve serve
+    --model inclusionAI/LLaDA2.2-flash
+    --host 127.0.0.1
+    --port 8000
+    --tp-size 4
+    --dp-size 1
+    --ep-size 4
+    --gpu-memory-utilization 0.85
+    --max-num-seqs 16
+    --max-model-len 8192
+    --max-scheduled-tokens 2048
+    --block-length 32
+    --parallel-decoding levenshtein_joint
+    --threshold 0.5
+    --editing-threshold 0.0
+    --steps 32
+    --max-post-steps 16
+    --max-steps-per-block 1000
+    --attention-backend flashinfer
+    --kv-cache-layout paged
+    --scheduler-policy paged
+    --use-decode-cuda-graph
+    --cuda-graph-decode-mode padded
+    --cuda-graph-capture-bs 1 2 4 8 16
+  ready:
+    url: http://127.0.0.1:8000/health
+    # 103B / ~206GB of weights: first load dominates. The model must already
+    # be in the runner's HF cache; a cold download will not finish in time.
+    timeout: 3600
+    interval: 10
+eval:
+  install:
+    - python3 -m venv /tmp/evalscope-venv && /tmp/evalscope-venv/bin/python -m pip install "evalscope @ git+https://github.com/modelscope/evalscope.git@acd09b44384d53174768bb1063f675420f76fae9"
+  command: >-
+    /tmp/evalscope-venv/bin/python -m evalscope.cli.cli eval
+    --model inclusionAI/LLaDA2.2-flash
+    --model-id llada2.2-flash
+    --eval-type openai_api
+    --api-url http://127.0.0.1:8000/v1/chat/completions
+    --api-key EMPTY
+    --datasets gsm8k
+    --eval-batch-size 4
+    --judge-strategy rule
+    --generation-config '{"max_tokens": 2048, "temperature": 0.0}'
+    --work-dir .ci-artifacts/gsm8k-eval
+    --no-timestamp
+    --no-collect-perf
+report:
+  github_step_summary: true
+# PROVISIONAL. LLaDA2.2-flash has no measured GSM8K score yet: the only
+# measured 2.2 numbers are HumanEval-164 (0.829 with this decoder, offline
+# dense path, job 3481121). The nearest reference is 2.1-flash at GSM8K
+# 0.9453, and 2.2 should be at least that. 0.85 leaves headroom for the
+# online/paged path -- which this task exercises for the first time -- while
+# still catching real breakage, since a broken gate or decoder scores near
+# zero rather than in the eighties. Recalibrate after the first green run.
+score_threshold: 0.85
