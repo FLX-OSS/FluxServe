@@ -142,6 +142,9 @@ class RunnerConfig:
     split_token_id: int = 156931
     mask_id: int = 156895
     eos_id: int = 156892
+    # Extra stop tokens from the checkpoint's generation_config.json
+    # (LLaDA2.2 declares [156892, 156900]); empty means eos_id only.
+    eos_ids: Sequence[int] = ()
     attention_backend: str = "sdpa"
     flashinfer_decode_batch_mode: str = "max_batch"
     decode_cuda_graph_mode: str = "decomposed"

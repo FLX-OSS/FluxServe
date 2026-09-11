@@ -31,6 +31,7 @@ import torch
 import tqdm
 from transformers import AutoConfig, AutoTokenizer
 
+from fluxserve.backend.execution.decoders.utils import resolve_checkpoint_eos_ids
 from fluxserve.backend.distributed.launch import (
     destroy_distributed,
     initialize_distributed,
@@ -303,6 +304,7 @@ def build_runner_config(args, batch_info, model_config=None):
         max_steps_per_block=getattr(args, "max_steps_per_block", 1000),
         delete_token_id=int(getattr(model_config, "delete_token_id", 156930)),
         split_token_id=int(getattr(model_config, "split_token_id", 156931)),
+        eos_ids=resolve_checkpoint_eos_ids(args.model_name),
         use_credit=args.use_credit,
         attention_backend=args.attention_backend,
         flashinfer_decode_batch_mode=getattr(
@@ -522,7 +524,11 @@ def warmup_runner(runner, args, device, logger):
 
 @torch.no_grad()
 def run_worker(args, *, init_method: str = "env://"):
-    from fluxserve.cli import _reject_unsupported_quantization, set_process_title
+    from fluxserve.cli import (
+        _reject_unsupported_quantization,
+        configure_logging,
+        set_process_title,
+    )
 
     server_args = None
     context = None
@@ -532,6 +538,7 @@ def run_worker(args, *, init_method: str = "env://"):
     world_size = int(args.parallel_world_size)
     if args.process_name:
         set_process_title(f"{args.process_name}:rank{rank}")
+    configure_logging(rank)
     logger = BenchmarkLogger(args.log_file, rank)
     logger.info(f"started world_size={world_size} rank={rank} gpu_id={gpu_id} args={args}")
     torch.cuda.set_device(gpu_id)

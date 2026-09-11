@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 
 import torch
 from transformers import AutoConfig, AutoTokenizer
@@ -47,6 +48,7 @@ from fluxserve.backend.engine.distributed_executor import DistributedGenerationE
 from fluxserve.backend.engine.executor import BlockDiffusionExecutor
 from fluxserve.backend.engine.scheduler_adapter import PagedSchedulerAdapter
 from fluxserve.backend.entrypoints.http_server import run
+from fluxserve.backend.execution.decoders.utils import resolve_checkpoint_eos_ids
 from fluxserve.backend.execution.forward_batch_info import RunnerConfig
 from fluxserve.backend.execution.runners import (
     BlockDiffusionRunner,
@@ -60,6 +62,30 @@ from fluxserve.backend.utils.runtime_utils import profile_paged_kv_pages
 from fluxserve.backend.utils.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
+
+
+def configure_logging(rank: int = 0) -> None:
+    """Give the ``fluxserve`` logger namespace a handler.
+
+    Model- and runner-side code logs through the stdlib logger, which has no
+    handler configured by default, so every one of those messages was being
+    dropped: the LLaDA2.2 "MoE block routing active" banner, the grouped-topk
+    fallback warning that would catch a silent routing regression, and the
+    serve-path notices. Scoped to ``fluxserve`` rather than the root logger so
+    third-party INFO chatter (transformers, torch) stays out of the logs.
+    Emits from every rank -- for a TP correctness signal, seeing all ranks
+    agree is the point.
+    """
+    namespace = logging.getLogger("fluxserve")
+    if any(getattr(h, "_fluxserve_handler", False) for h in namespace.handlers):
+        return
+    handler = logging.StreamHandler()
+    handler._fluxserve_handler = True
+    handler.setFormatter(
+        logging.Formatter(f"[fluxserve][rank{rank}] %(levelname)s %(name)s: %(message)s")
+    )
+    namespace.addHandler(handler)
+    namespace.setLevel(logging.INFO)
 
 
 def default_cuda_graph_capture_batch_sizes(max_num_seqs: int) -> tuple[int, ...]:
@@ -304,6 +330,7 @@ def serve(args) -> None:
 
 
 def _serve_worker(args, *, init_method: str = "env://") -> None:
+    configure_logging(int(os.environ.get("RANK", "0")))
     if args.process_name:
         set_process_title(args.process_name)
 
@@ -356,7 +383,9 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
                 or args.block_length
             )
             if is_diffusion_gemma
-            else 1
+            # LLaDA runners emit whole blocks; admitting a request whose
+            # remaining context cannot fit one block would stall it.
+            else int(args.block_length)
         ),
         scheduler_policy=args.scheduler_policy,
         scheduler_page_size=args.page_size or args.block_length,
@@ -464,6 +493,9 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             max_steps_per_block=args.max_steps_per_block,
             delete_token_id=int(getattr(model_config, "delete_token_id", 156930)),
             split_token_id=int(getattr(model_config, "split_token_id", 156931)),
+            eos_ids=resolve_checkpoint_eos_ids(
+                args.model_name, trust_remote_code=args.trust_remote_code
+            ),
         )
         if is_diffusion_gemma:
             runner_cls = DiffusionGemmaRunner
@@ -520,6 +552,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
 
 
 def main() -> None:
+    configure_logging()
     args = build_parser().parse_args()
     if args.command == "serve":
         serve(args)

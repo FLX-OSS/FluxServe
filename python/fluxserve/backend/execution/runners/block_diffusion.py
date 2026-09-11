@@ -33,6 +33,8 @@ from fluxserve.backend.execution.runners.utils import (
     DecodeEditBudget,
     align_exp2,
     gather_blocks,
+    generated_eos_hit,
+    select_batch_sequences_by_order,
     select_batch_sequences_by_mask_number,
 )
 from fluxserve.backend.layers.dp_attention import (
@@ -402,6 +404,16 @@ class BlockDiffusionRunner(ModelRunner):
             )
         return {}
 
+    def _select_decode_sequences(self, x, valid_flag, mask_id, batch_size):
+        # Finish active editing rows even when DELETE/SPLIT changes mask count.
+        # Preserve the established 2.0/2.1 selection order.
+        selector = (
+            select_batch_sequences_by_order
+            if getattr(self.decoder, "needs_row_state", False)
+            else select_batch_sequences_by_mask_number
+        )
+        return selector(x, valid_flag, mask_id, batch_size)
+
     def _decode_batches(
         self,
         x,
@@ -426,7 +438,7 @@ class BlockDiffusionRunner(ModelRunner):
                 (decoding_start + self.block_length) <= current_cache_length
             )
             while torch.any(current_cache_flag):
-                seq_ids = select_batch_sequences_by_mask_number(
+                seq_ids = self._select_decode_sequences(
                     x, current_cache_flag, self.decoder.mask_id, mini_batch_size
                 )
                 decoding_x = x.select_seqs(seq_ids)
@@ -497,8 +509,10 @@ class BlockDiffusionRunner(ModelRunner):
                 if self.early_stop:
                     # Branchless on purpose: an `if eos_mask.any()` here forces
                     # a GPU->CPU sync every decode iteration.
-                    eos_mask = torch.any(
-                        x[seq_ids] == self.decoder.eos_id, dim=1
+                    eos_mask = generated_eos_hit(
+                        x[seq_ids], self.decoder.eos_ids,
+                        prompt_lengths[seq_ids] if prompt_lengths is not None else None,
+                        decoding_start[seq_ids],
                     ) & block_finished
                     decoding_start[seq_ids] = torch.where(
                         eos_mask,
