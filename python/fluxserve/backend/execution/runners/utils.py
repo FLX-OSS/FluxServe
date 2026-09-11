@@ -107,3 +107,15 @@ def select_batch_sequences_by_order(x, valid_flag, mask_id, batch_size):
 
 select_prefilling_batch_sequences = select_batch_sequences_by_mask_number
 select_decoding_batch_sequences = select_batch_sequences_by_mask_number
+
+
+def generated_eos_hit(tokens, eos_ids, prompt_lengths, block_ends):
+    """Scan only generated, committed positions; prompt EOS is ordinary context."""
+    positions = torch.arange(tokens.shape[1], device=tokens.device).unsqueeze(0)
+    valid = positions < block_ends.unsqueeze(1)
+    if prompt_lengths is not None:
+        valid &= positions >= prompt_lengths.unsqueeze(1)
+    hit = torch.zeros_like(tokens, dtype=torch.bool)
+    for eos_id in eos_ids:
+        hit |= tokens == eos_id
+    return (hit & valid).any(dim=1)

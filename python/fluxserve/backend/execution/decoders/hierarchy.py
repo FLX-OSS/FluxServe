@@ -24,7 +24,11 @@ import torch
 import torch.nn.functional as F
 
 from fluxserve.backend.execution.decoders.base import ParallelDecoder
-from fluxserve.backend.execution.decoders.utils import add_gumbel_noise, broadcast_if_needed
+from fluxserve.backend.execution.decoders.utils import (
+    add_gumbel_noise,
+    broadcast_if_needed,
+    normalize_eos_ids,
+)
 
 
 class HierarchyDecoder(ParallelDecoder):
@@ -39,13 +43,15 @@ class HierarchyDecoder(ParallelDecoder):
         remasking="low_confidence",
         mask_id=126336,
         eos_id=126081,
+        eos_ids=None,
         threshold=None,
         low_threshold=0.4,
     ):
         super().__init__(temperature, remasking, mask_id)
         self.iter = 0
         self.mask_id = mask_id
-        self.eos_id = eos_id
+        self.eos_ids = normalize_eos_ids(eos_ids if eos_ids is not None else eos_id)
+        self.eos_id = self.eos_ids[0]
         self.threshold = threshold
         self.low_threshold = low_threshold
 

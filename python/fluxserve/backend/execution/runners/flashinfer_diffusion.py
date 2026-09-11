@@ -11,6 +11,7 @@ from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRu
 from fluxserve.backend.execution.runners.utils import (
     align_exp2,
     gather_blocks,
+    generated_eos_hit,
     select_batch_sequences_by_mask_number,
 )
 from fluxserve.backend.layers.dp_attention import get_attention_tp_size
@@ -583,7 +584,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             )
 
         results = []
-        eos_id = int(self.decoder.eos_id)
+        eos_ids = frozenset(int(t) for t in self.decoder.eos_ids)
         mask_id = int(self.decoder.mask_id)
         for local_idx, row in enumerate(active_rows):
             rid = request_ids[row]
@@ -598,13 +599,19 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             ]
             generated = raw.detach().cpu().tolist()[:remaining]
             finish_reason = None
-            if not state.ignore_eos and eos_id in generated:
-                generated = generated[: generated.index(eos_id)]
-                finish_reason = "stop"
+            if not state.ignore_eos:
+                stop_idx = next(
+                    (i for i, tok in enumerate(generated) if tok in eos_ids), None
+                )
+                if stop_idx is not None:
+                    generated = generated[:stop_idx]
+                    finish_reason = "stop"
             if state.ignore_eos:
                 generated = [tok for tok in generated if tok != mask_id]
             else:
-                generated = [tok for tok in generated if tok != mask_id and tok != eos_id]
+                generated = [
+                    tok for tok in generated if tok != mask_id and tok not in eos_ids
+                ]
             projected = len(state.output_ids) + len(generated)
             finished = finish_reason == "stop" or projected >= state.max_new_tokens
             if finished and finish_reason is None:
@@ -1139,7 +1146,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 (decoding_start + self.block_length) <= current_cache_length
             )
             while torch.any(current_cache_flag):
-                seq_ids = select_batch_sequences_by_mask_number(
+                seq_ids = self._select_decode_sequences(
                     x, current_cache_flag, self.decoder.mask_id, mini_batch_size
                 )
                 self._decode_selected_batch(
@@ -1175,7 +1182,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
     ):
         decoding_flag = (decoding_start + self.block_length) <= total_length
         while torch.any(decoding_flag):
-            seq_ids = select_batch_sequences_by_mask_number(
+            seq_ids = self._select_decode_sequences(
                 x, decoding_flag, self.decoder.mask_id, mini_batch_size
             )
             current_cache_length = int(
@@ -1281,15 +1288,19 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             )
         )
         fused_decoder = bool(getattr(self.decoder, "graph_fused_step", False))
+        fused_state = fused_decoder and bool(
+            getattr(self.decoder, "graph_extra_state", False)
+        )
         fused_replay = None
         if use_decode_graph:
             graph_prompt_positions = None
             graph_allow_edit = None
+            graph_extra = None
             if fused_decoder:
                 if prompt_lengths is None or edit_budget is None:
                     raise RuntimeError(
-                        "joint_threshold decoding requires prompt_lengths and "
-                        "an edit budget; the decode loop was not given them."
+                        "fused-tail decoding requires prompt_lengths and an "
+                        "edit budget; the decode loop was not given them."
                     )
                 block_offsets = torch.arange(
                     self.block_length, device=self.device
@@ -1298,6 +1309,21 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                     seq_ids
                 ].unsqueeze(1)
                 graph_allow_edit = edit_budget.allow_edit(seq_ids)
+            if fused_state:
+                if row_state is None:
+                    raise RuntimeError(
+                        "levenshtein_joint decoding requires a row state; the "
+                        "decode loop was not given one."
+                    )
+                # Also performs the new-block reset, which depends on
+                # block_start and so cannot live inside the capture.
+                graph_extra = self.decoder.graph_inputs(
+                    row_state,
+                    seq_ids,
+                    decoding_start[seq_ids],
+                    decoding_block,
+                    self.block_length,
+                )
             replayed = self.flashinfer_graph_runner.replay_decode(
                 runner=self,
                 input_ids=decoding_block,
@@ -1305,6 +1331,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 forward_batch=forward_batch,
                 prompt_positions=graph_prompt_positions,
                 allow_edit=graph_allow_edit,
+                extra_inputs=graph_extra,
             )
             output = None
             if fused_decoder and replayed.x_updated is not None:
@@ -1333,6 +1360,15 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
             ).unsqueeze(1) * T
             decoding_x.data.view(-1)[flat_idx] = fused_replay.x_updated
             broadcast_if_needed(decoding_x.data)
+            if fused_replay.extra is not None:
+                # Same rank-consistency rule as the eager path: broadcast the
+                # step's outputs, then commit, so the row state every rank
+                # keeps is the source rank's.
+                for value in fused_replay.extra.values():
+                    broadcast_if_needed(value)
+                self.decoder.commit_row_state(
+                    row_state, seq_ids, fused_replay.extra
+                )
             had_mask = fused_replay.had_mask
             changed = fused_replay.changed
             block_finished = fused_replay.block_finished
@@ -1379,7 +1415,11 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         if self.early_stop:
             # Branchless on purpose: an `if eos_mask.any()` here forces a
             # GPU->CPU sync every decode iteration and stalls the pipeline.
-            eos_mask = torch.any(x[seq_ids] == self.decoder.eos_id, dim=1) & block_finished
+            eos_mask = generated_eos_hit(
+                x[seq_ids], self.decoder.eos_ids,
+                prompt_lengths[seq_ids] if prompt_lengths is not None else None,
+                decoding_start[seq_ids],
+            ) & block_finished
             decoding_start[seq_ids] = torch.where(
                 eos_mask,
                 torch.full_like(decoding_start[seq_ids], total_length),
