@@ -41,9 +41,7 @@ from fluxserve.backend.execution.decoders.levenshtein import (
     LevenshteinJointDecoder,
     apply_edit_operations,
     apply_edit_operations_batched,
-    block_state_hash,
-    hash_seen,
-    hash_weights,
+    block_seen,
 )
 
 VOCAB = 20
@@ -54,7 +52,7 @@ SPL_ID = 15
 
 STATE_FIELDS = ("is_original_mask", "initial_mask_count", "step_id",
                 "post_steps", "finalized", "block_start", "seen_count",
-                "seen_hashes")
+                "seen_blocks")
 
 
 def make_decoder(**overrides):
@@ -195,33 +193,23 @@ class TestApplyEditOperationsBatched:
         assert tokens[0, 2:].tolist() == [5, MASK_ID]
 
 
-# ------------------------------------------------------------ state hashing
+# ------------------------------------------------------------ exact history
 
 
-class TestBlockStateHash:
-    def test_distinguishes_states_and_positions(self):
-        weights = hash_weights(4, "cpu")
-        blocks = torch.tensor([[1, 2, 3, 4], [1, 2, 3, 5], [4, 3, 2, 1]])
-        digests = block_state_hash(blocks, weights)
-        assert len({tuple(row) for row in digests.tolist()}) == 3
+class TestBlockHistory:
+    def test_exact_lookup_rejects_colliding_weighted_sums(self):
+        original = torch.full((1, 32), 100, dtype=torch.long)
+        different = original.clone()
+        different[0, :4] = torch.tensor([101, 99, 99, 101])
+        history = original.unsqueeze(1).clone()
+        assert not block_seen(different, history, torch.tensor([1])).item()
+        assert block_seen(original, history, torch.tensor([1])).item()
+        assert not block_seen(original, history, torch.tensor([0])).item()
 
-    def test_seen_lookup_respects_count(self):
-        weights = hash_weights(3, "cpu")
-        blk = torch.tensor([[1, 2, 3]])
-        digest = block_state_hash(blk, weights)
-        history = torch.zeros(1, 4, 2, dtype=torch.long)
-        history[0, 0] = digest[0]
-        assert not bool(hash_seen(digest, history, torch.tensor([0]))[0])
-        assert bool(hash_seen(digest, history, torch.tensor([1]))[0])
-
-    def test_no_overflow_for_realistic_vocabulary(self):
-        weights = hash_weights(64, "cpu")
-        blk = torch.full((1, 64), 156_930, dtype=torch.long)
-        digest = block_state_hash(blk, weights)
-        assert bool((digest > 0).all())
-
-
-# ---------------------------------------------------- fused tail == eager
+    def test_history_is_row_local(self):
+        blocks = torch.tensor([[1, 2], [3, 4]])
+        history = torch.tensor([[[1, 2], [3, 4]], [[1, 2], [3, 4]]])
+        assert block_seen(blocks, history, torch.tensor([1, 1])).tolist() == [True, False]
 
 
 @pytest.mark.parametrize("seed", range(8))
@@ -306,7 +294,7 @@ def test_graph_extra_buffers_are_inert_for_padding_rows():
     assert set(buffers) == set(GRAPH_STATE_FIELDS)
     assert bool(buffers["finalized"].all())
     assert buffers["is_original_mask"].shape == (4, 6)
-    assert buffers["seen_hashes"].shape == (4, decoder.max_block_iters, 2)
+    assert buffers["seen_blocks"].shape == (4, decoder.max_block_iters, 6)
 
     padding = decoder.graph_extra_padding()
     assert set(padding) == set(GRAPH_STATE_FIELDS)
@@ -397,7 +385,7 @@ def test_padding_rows_neither_write_nor_disturb_real_rows():
         assert bool(pad_state["finalized"].all())
         assert bool((pad_state["step_id"] == 0).all())
         assert bool((pad_state["post_steps"] == 0).all())
-        assert not bool(pad_state["hash_append"].any())
+        assert not bool(pad_state["history_append"].any())
         for field in STATE_FIELDS:
             assert torch.equal(
                 getattr(solo_state, field), getattr(padded_state, field)
@@ -416,3 +404,57 @@ def test_decoder_declares_the_fused_graph_contract():
     assert decoder.max_block_iters == decoder.max_steps_per_block + 1
     state = decoder.make_row_state(2, 4, "cpu")
     assert state.history == decoder.max_block_iters
+
+
+@pytest.mark.parametrize("final_round", [False, True])
+def test_greedy_and_final_round_ties_match_argmax(final_round):
+    decoder = make_decoder(steps=1, max_post_steps=0 if final_round else 16)
+    block = torch.full((1, 4), MASK_ID)
+    state = decoder.make_row_state(1, 4, "cpu")
+    logits = torch.full((1, 4, VOCAB), -10.)
+    logits[..., 0] = logits[..., 1] = 10.
+    if final_round:
+        logits[..., DEL_ID] = 12.
+        logits[..., SPL_ID] = 11.
+    after, _ = fused_step(
+        decoder, state, block, torch.tensor([0]), torch.zeros_like(block, dtype=torch.bool),
+        logits, torch.tensor([0]), 4,
+    )
+    assert after.tolist() == [[0, 0, 0, 0]]
+
+
+def test_escape_alternative_ties_match_argmax():
+    decoder = make_decoder()
+    state = decoder.make_row_state(1, 4, "cpu")
+    ids, starts = torch.tensor([0]), torch.tensor([0])
+    decoder.graph_inputs(state, ids, starts, torch.full((1, 4), MASK_ID), 4)
+    state.seen_blocks[0, 0] = 0
+    state.seen_count[0] = 1
+    logits = torch.full((1, 4, VOCAB), -10.)
+    logits[..., 0] = 12.
+    logits[..., 2] = logits[..., 3] = 10.
+    after, _ = fused_step(
+        decoder, state, torch.ones((1, 4), dtype=torch.long), starts,
+        torch.zeros((1, 4), dtype=torch.bool), logits, ids, 4,
+    )
+    assert after.tolist() == [[2, 0, 0, 0]]
+
+
+def test_colliding_history_does_not_trigger_escape():
+    decoder = make_decoder(mask_id=12, delete_token_id=14, split_token_id=15)
+    state = decoder.make_row_state(1, 32, "cpu")
+    ids, starts = torch.tensor([0]), torch.tensor([0])
+    masks = torch.full((1, 32), MASK_ID)
+    decoder.graph_inputs(state, ids, starts, masks, 32)
+    state.seen_blocks[0, 0] = 100
+    state.seen_count[0] = 1
+    candidates = torch.full((1, 32), 100)
+    candidates[0, :4] = torch.tensor([101, 99, 99, 101])
+    logits = torch.full((1, 32, 128), -10.)
+    logits.scatter_(-1, candidates.unsqueeze(-1), 10.)
+    after, _ = fused_step(
+        decoder, state, masks, starts, torch.zeros_like(masks, dtype=torch.bool),
+        logits, ids, 32,
+    )
+    assert torch.equal(after, candidates)
+    assert torch.equal(state.seen_blocks[0, 1], candidates[0])

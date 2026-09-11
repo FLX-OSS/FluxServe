@@ -673,7 +673,13 @@ def run_worker(args, *, init_method: str = "env://"):
                     runner.decoder.mask_id,
                 )
             else:
-                out = runner.generate(batch_input_ids)
+                # LLaDA generation starts at each unpadded prompt boundary.
+                # Bucket rounding is storage capacity, not an output budget.
+                out = runner.generate(
+                    batch_input_ids,
+                    prompt_lengths=[sample.shape[1] for sample in input_ids],
+                    generation_lengths=[args.gen_len] * len(input_ids),
+                )
             denoising_steps = (
                 getattr(runner, "last_denoising_steps", None)
                 if is_diffusion_gemma

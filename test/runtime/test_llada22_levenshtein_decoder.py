@@ -629,7 +629,7 @@ def test_decisions_and_row_state_follow_source_rank(monkeypatch):
         assert torch.equal(tokens[0].data, tokens[1].data)
         for field in ('is_original_mask', 'initial_mask_count', 'step_id', 'post_steps', 'finalized', 'block_start', 'seen_count'):
             assert torch.equal(getattr(states[0], field), getattr(states[1], field)), field
-        assert torch.equal(states[0].seen_hashes, states[1].seen_hashes)
+        assert torch.equal(states[0].seen_blocks, states[1].seen_blocks)
 
 
 def test_debug_checks_accept_preserved_prompt_control_tokens(monkeypatch):

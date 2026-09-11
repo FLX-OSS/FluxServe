@@ -28,6 +28,7 @@ Tensor, data, and expert parallelism support larger serving configurations. Use 
 - [LLaDA2.0-mini on one GPU](serving/llada2-mini.md)
 - [LLaDA2.0-flash on four GPUs](serving/llada2-flash.md)
 - [LLaDA2.1 decoding presets](serving/llada2.1.md)
+- [LLaDA2.2-flash on four GPUs](serving/llada2.2.md)
 
 ## Project
 
