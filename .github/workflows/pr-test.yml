@@ -71,6 +71,10 @@ jobs:
     timeout-minutes: 240
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      # Wrapper that enters the runner's apptainer image. Selected from the
+      # task runtime so non-GH200 labels (b200-*/gb200-*, used by the 4gpu
+      # LLaDA2.2-flash eval) enter their own image instead of GH200's.
+      ENV_WRAPPER: ${{ matrix.runtime == 'gh200-apptainer' && 'test/ci_system/env/gh200.sh' || 'test/ci_system/env/b200.sh' }}
       WORK_DIR: ${{ github.workspace }}/run-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}-${{ matrix.runner }}
       CONFIG: ${{ matrix.config }}
       RUNNER_LABEL: ${{ matrix.runner }}
@@ -81,11 +85,10 @@ jobs:
         with:
           path: run-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}-${{ matrix.runner }}
 
-      - name: Install FluxServe in GH200 container
-        if: matrix.runtime == 'gh200-apptainer'
+      - name: Install FluxServe in runner container
         run: |
           set -euo pipefail
-          bash "$WORK_DIR/test/ci_system/env/gh200.sh" bash -lc '
+          bash "$WORK_DIR/$ENV_WRAPPER" bash -lc '
             cd "$PWD"
             export PIP_BREAK_SYSTEM_PACKAGES=1
             python -m pip install -e flux-kernel/python/ --no-build-isolation
@@ -97,7 +100,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$WORK_DIR/.ci-artifacts"
-          bash "$WORK_DIR/test/ci_system/env/gh200.sh" bash -lc '
+          bash "$WORK_DIR/$ENV_WRAPPER" bash -lc '
             cd "$PWD"
             python3 test/ci_system/pipeline.py execute \
               --config "$CONFIG" \
@@ -111,7 +114,7 @@ jobs:
       - name: Execute task
         run: |
           set -euo pipefail
-          bash "$WORK_DIR/test/ci_system/env/gh200.sh" bash -lc '
+          bash "$WORK_DIR/$ENV_WRAPPER" bash -lc '
             cd "$PWD"
             python3 test/ci_system/pipeline.py execute \
               --config "$CONFIG" \

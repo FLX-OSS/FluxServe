@@ -863,7 +863,7 @@ LLaDA2.2 support is complete when:
 
 ```text
 (core 2.2 support)
-docs/serving/llada2.2-model-support-development-guide.md
+dev-notes/llada2.2-model-support-development-guide.md
 python/fluxserve/backend/execution/decoders/__init__.py
 python/fluxserve/backend/execution/decoders/factory.py
 python/fluxserve/backend/execution/decoders/levenshtein.py
@@ -905,7 +905,7 @@ extension already exists), `engine/request.py` and the C++ scheduler
   (includes `LLaDA2_2_tech_report.pdf`)
 - Local reference cache: `$DEV_TOOLS/llada22_ref/`
   (config, tokenizer config, generation config, modeling file)
-- `docs/serving/llada2.1-model-support-development-guide.md` -- the base this
+- `dev-notes/llada2.1-model-support-development-guide.md` -- the base this
   guide builds on
 - `docs/serving/llada2-flash.md` -- TP4/EP4 flash serving setup
 
