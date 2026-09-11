@@ -31,11 +31,6 @@ Temperature 0 only. Documented deviations from the reference:
   of a random one, so it is deterministic and rank-consistent (the reference
   uses ``torch.randint``; at temperature 0 the replacement token itself is
   the same greedy argmax in both);
-- the block-state history that drives the anti-loop escape is a pair of
-  64-bit position-weighted hashes rather than the reference's set of exact
-  token tuples, so that it lives on the device in a fixed-shape buffer
-  (double hashing puts a false "seen" at roughly 2^-62 per comparison, and a
-  false positive costs one resampled token, never correctness);
 - a row that hits ``max_steps_per_block`` is force-resolved like a final
   round instead of terminating with residual masks (the reference warns and
   returns masks, which a serving engine cannot stream);
@@ -79,7 +74,7 @@ GRAPH_STATE_FIELDS = (
     "step_id",
     "post_steps",
     "finalized",
-    "seen_hashes",
+    "seen_blocks",
     "seen_count",
 )
 
@@ -212,34 +207,11 @@ def m2t_schedule_need(initial_mask_count: int, steps: int, step_id: int) -> int:
     return base + (1 if step_id < remainder else 0)
 
 
-def hash_weights(block_length, device):
-    """Two independent odd position weights for the block-state hash.
-
-    Deterministic in the position index so every rank and every replay of a
-    captured graph derives the same weights. Kept below 2^31 so that
-    ``(token + 1) * weight`` summed over a block cannot overflow int64 for
-    any realistic vocabulary.
-    """
-    idx = torch.arange(block_length, dtype=torch.long, device=device)
-    w1 = (idx * 2654435761 + 40503) % 2147483647 + 1
-    w2 = (idx * 1103515245 + 12345) % 2147483629 + 1
-    return w1.unsqueeze(0), w2.unsqueeze(0)
-
-
-def block_state_hash(blk, weights):
-    """``[B, 2]`` position-weighted hash pair of each row's block state."""
-    w1, w2 = weights
-    shifted = blk + 1
-    return torch.stack(
-        ((shifted * w1).sum(dim=1), (shifted * w2).sum(dim=1)), dim=1
-    )
-
-
-def hash_seen(digest, seen_hashes, seen_count):
-    """``[B]`` bool: is this block state already in the row's history?"""
-    slots = torch.arange(seen_hashes.shape[1], device=seen_hashes.device)
+def block_seen(blk, seen_blocks, seen_count):
+    """Exact, fixed-shape history lookup over pre-edit block token sequences."""
+    slots = torch.arange(seen_blocks.shape[1], device=seen_blocks.device)
     live = slots.unsqueeze(0) < seen_count.unsqueeze(1)
-    same = (seen_hashes == digest.unsqueeze(1)).all(dim=2)
+    same = (seen_blocks == blk.unsqueeze(1)).all(dim=2)
     return (same & live).any(dim=1)
 
 
@@ -252,9 +224,8 @@ def levenshtein_graph_step(
     step_id,
     post_steps,
     finalized,
-    seen_hashes,
+    seen_blocks,
     seen_count,
-    hash_weights_pair,
     mask_id,
     delete_token_id,
     split_token_id,
@@ -280,12 +251,10 @@ def levenshtein_graph_step(
     safe.
 
     Returns ``(new_block, state, predicates)`` where ``state`` is the updated
-    row state as a dict over :data:`GRAPH_STATE_FIELDS` plus ``block_hash``
-    and ``hash_append``, and ``predicates`` is
+    row state as a dict over :data:`GRAPH_STATE_FIELDS` plus ``block_result``
+    and ``history_append``, and ``predicates`` is
     ``(had_mask, changed, block_finished)``.
     """
-    device = x_block.device
-
     # ---- top-of-iteration accounting, all from the pre-update block.
     mask_index = (x_block == mask_id) & (~prompt_positions)
     original_cnt = (mask_index & is_original_mask).sum(dim=1)
@@ -297,16 +266,11 @@ def levenshtein_graph_step(
     )
     post_steps = torch.where(active, stepped_post, post_steps)
 
-    # ---- candidates (temperature 0). Structural no-remask: suppress the mask
-    # logit before every argmax (deviation from the reference). Three
-    # candidates per position are enough for every selection below: the
-    # greedy token, the anti-loop replacement (the greedy token with the
-    # current one suppressed, so top-2 covers it), and the final round's
-    # greedy token with the two edit ids suppressed (top-3 covers it).
+    # Greedy argmax consistently selects the lowest token ID on ties, matching
+    # the reference. topk(..., 3) does not provide that tie ordering.
     logits[..., mask_id] = -float("inf")
-    num_candidates = min(3, logits.shape[-1])
-    top_idx = torch.topk(logits, num_candidates, dim=-1).indices
-    x0 = top_idx[..., 0]
+    x0 = torch.argmax(logits, dim=-1)
+    top1 = x0
     x0_p = torch.squeeze(
         torch.gather(
             F.softmax(logits.to(torch.float32), dim=-1),
@@ -329,8 +293,8 @@ def levenshtein_graph_step(
     ).long()
     num_need = schedule + new_cnt
     take = torch.minimum(num_need, mask_index.sum(dim=1)).clamp(min=0)
-    # Stable sort => ties resolve to the lower position, the same order the
-    # scalar path's topk produces on equal confidences.
+    # Stable sorting makes schedule ties deterministic by position. The
+    # reference topk fallback does not specify an order for tied positions.
     order = torch.argsort(mask_conf, dim=1, descending=True, stable=True)
     rank = torch.argsort(order, dim=1)  # inverse permutation: position -> rank
     by_rank = rank < take.unsqueeze(1)
@@ -359,15 +323,20 @@ def levenshtein_graph_step(
     final_round = (final_round | (step_id >= max_steps_per_block - 1)) & active
     m2t = torch.where(final_round.unsqueeze(1), mask_index, m2t)
 
-    # Written positions whose candidate is an edit token fall back to the
-    # highest-ranked candidate that is neither DELETE nor SPLIT.
-    banned = (top_idx == delete_token_id) | (top_idx == split_token_id)
-    priority = (~banned).long() * torch.arange(
-        num_candidates, 0, -1, device=device
-    )
-    alt_x0 = torch.gather(
-        top_idx, -1, priority.argmax(dim=-1, keepdim=True)
-    ).squeeze(-1)
+    # Compute the escape alternative with the greedy token suppressed, then
+    # restore it before selecting the final-round candidate without edit IDs.
+    # These reductions preserve argmax tie handling without sorting the vocab.
+    top1_values = logits.gather(-1, top1.unsqueeze(-1))
+    logits.scatter_(-1, top1.unsqueeze(-1), -float("inf"))
+    top2 = torch.argmax(logits, dim=-1)
+    logits.scatter_(-1, top1.unsqueeze(-1), top1_values)
+    delete_values = logits[..., delete_token_id].clone()
+    split_values = logits[..., split_token_id].clone()
+    logits[..., delete_token_id] = -float("inf")
+    logits[..., split_token_id] = -float("inf")
+    alt_x0 = torch.argmax(logits, dim=-1)
+    logits[..., delete_token_id] = delete_values
+    logits[..., split_token_id] = split_values
     is_edit_token = (x0 == delete_token_id) | (x0 == split_token_id)
     x0 = torch.where(
         final_round.unsqueeze(1) & (m2t | t2t) & is_edit_token, alt_x0, x0
@@ -384,10 +353,7 @@ def levenshtein_graph_step(
     # reference's bounded retry loop is unrolled, each round gated on the
     # rows that are still repeating.
     escapable = active & (~final_round)
-    top1 = top_idx[..., 0]
-    top2 = top_idx[..., min(1, num_candidates - 1)]
-    digest = block_state_hash(blk, hash_weights_pair)
-    repeating = hash_seen(digest, seen_hashes, seen_count)
+    repeating = block_seen(blk, seen_blocks, seen_count)
     for _ in range(escape_iters):
         changed_pos = blk != x_block
         pos = torch.where(
@@ -399,8 +365,7 @@ def levenshtein_graph_step(
             current == top1.gather(1, pos), top2.gather(1, pos), top1.gather(1, pos)
         )
         blk = blk.scatter(1, pos, torch.where(resample, replacement, current))
-        digest = block_state_hash(blk, hash_weights_pair)
-        repeating = hash_seen(digest, seen_hashes, seen_count)
+        repeating = block_seen(blk, seen_blocks, seen_count)
 
     # ---- edit-op consumption. The history records the pre-edit state, as in
     # the reference.
@@ -424,10 +389,10 @@ def levenshtein_graph_step(
         "step_id": step_id + active.long(),
         "post_steps": post_steps,
         "finalized": finalized | final_round,
-        "seen_hashes": seen_hashes,
+        "seen_blocks": seen_blocks,
         "seen_count": seen_count,
-        "block_hash": digest,
-        "hash_append": active,
+        "block_result": blk,
+        "history_append": active,
     }
     had_mask = (x_block == mask_id).any(dim=1)
     changed = (new_block != x_block).any(dim=1)
@@ -442,9 +407,9 @@ class LevenshteinRowState:
     self-initializes a row whenever its ``block_start`` changes, so the
     runner only has to construct this once per decode loop.
 
-    ``seen_hashes``/``seen_count`` are the device-resident replacement for
-    the reference's per-block set of seen block states: ``history`` slots
-    hold the hash pairs recorded so far this block, which is enough because
+    ``seen_blocks``/``seen_count`` are the device-resident equivalent of
+    the reference's per-block set of exact token tuples: ``history`` slots
+    hold the block tokens recorded so far this block, which is enough because
     a block can never run more iterations than that.
     """
 
@@ -463,15 +428,15 @@ class LevenshteinRowState:
             (num_rows,), -1, dtype=torch.long, device=device
         )
         self.history = int(history)
-        self.seen_hashes = torch.zeros(
-            num_rows, self.history, 2, dtype=torch.long, device=device
+        self.seen_blocks = torch.zeros(
+            num_rows, self.history, block_length, dtype=torch.long, device=device
         )
         self.seen_count = torch.zeros(num_rows, dtype=torch.long, device=device)
 
     def seen_states(self, row):
-        """Hash pairs recorded for ``row`` this block (diagnostics/tests)."""
+        """Exact block token tuples recorded for ``row`` this block (diagnostics/tests)."""
         count = int(self.seen_count[row])
-        return {tuple(pair) for pair in self.seen_hashes[row, :count].tolist()}
+        return {tuple(tokens) for tokens in self.seen_blocks[row, :count].tolist()}
 
 
 class LevenshteinJointDecoder(ParallelDecoder):
@@ -533,7 +498,6 @@ class LevenshteinJointDecoder(ParallelDecoder):
         self.max_post_steps = max_post_steps
         self.max_steps_per_block = max_steps_per_block
         self.debug_checks = os.environ.get("FLUXSERVE_DEBUG_LLADA22", "0") == "1"
-        self._hash_weights = {}
 
     def make_row_state(self, num_rows, block_length, device):
         return LevenshteinRowState(
@@ -545,14 +509,6 @@ class LevenshteinJointDecoder(ParallelDecoder):
         # A row is force-finalized at step max_steps_per_block - 1 and needs
         # one further no-op pass for the runner's stability predicate.
         return self.max_steps_per_block + 1
-
-    def hash_weights_for(self, block_length, device):
-        key = (int(block_length), str(device))
-        weights = self._hash_weights.get(key)
-        if weights is None:
-            weights = hash_weights(block_length, device)
-            self._hash_weights[key] = weights
-        return weights
 
     def _begin_block_rows(self, state, seq_ids, block_start, x_block):
         """Reset per-row state for rows entering a new block.
@@ -591,12 +547,11 @@ class LevenshteinJointDecoder(ParallelDecoder):
             new_block, zero, state.seen_count[seq_ids]
         )
 
-    def _step_kwargs(self, state, seq_ids, block_length, device):
+    def _step_kwargs(self, state, seq_ids):
         """Row-state slice consumed by :func:`levenshtein_graph_step`."""
         gathered = {
             field: getattr(state, field)[seq_ids] for field in GRAPH_STATE_FIELDS
         }
-        gathered["hash_weights_pair"] = self.hash_weights_for(block_length, device)
         return gathered
 
     def _run_step(self, logits, x_block, prompt_positions, step_kwargs):
@@ -618,18 +573,18 @@ class LevenshteinJointDecoder(ParallelDecoder):
     def commit_row_state(self, state, seq_ids, step_state):
         """Scatter one step's row state back into the runner's row state.
 
-        ``block_hash`` is appended to the row's history for the rows that
+        ``block_result`` is appended to the row's history for the rows that
         actually ran a refinement pass, which is the device-side form of the
         reference's ``seen_block_results.add(...)``.
         """
         for field in ("is_original_mask", "step_id", "post_steps", "finalized"):
             getattr(state, field)[seq_ids] = step_state[field]
         slot = step_state["seen_count"].clamp(max=state.history - 1)
-        append = step_state["hash_append"]
-        state.seen_hashes[seq_ids, slot] = torch.where(
+        append = step_state["history_append"]
+        state.seen_blocks[seq_ids, slot] = torch.where(
             append.unsqueeze(1),
-            step_state["block_hash"],
-            state.seen_hashes[seq_ids, slot],
+            step_state["block_result"],
+            state.seen_blocks[seq_ids, slot],
         )
         state.seen_count[seq_ids] = (
             step_state["seen_count"] + append.long()
@@ -671,14 +626,11 @@ class LevenshteinJointDecoder(ParallelDecoder):
         row state rather than with the 2.1 per-row edit budget.
         """
         step_kwargs = dict(row_state)
-        step_kwargs["hash_weights_pair"] = self.hash_weights_for(
-            x_block.shape[1], x_block.device
-        )
         new_block, state, predicates = self._run_step(
             logits, x_block, prompt_positions, step_kwargs
         )
         had_mask, changed, block_finished = predicates
-        # seen_hashes/seen_count pass through unchanged; the append happens
+        # seen_blocks/seen_count pass through unchanged; the append happens
         # eagerly in commit_row_state, so they are not graph outputs.
         outputs = {
             field: state[field]
@@ -687,8 +639,8 @@ class LevenshteinJointDecoder(ParallelDecoder):
                 "step_id",
                 "post_steps",
                 "finalized",
-                "block_hash",
-                "hash_append",
+                "block_result",
+                "history_append",
             )
         }
         outputs["seen_count"] = state["seen_count"]
@@ -737,7 +689,7 @@ class LevenshteinJointDecoder(ParallelDecoder):
             logits,
             x_block,
             prompt_positions,
-            self._step_kwargs(row_state, seq_ids, block_length, device),
+            self._step_kwargs(row_state, seq_ids),
         )
 
         # Broadcasting the step's outputs (rather than its intermediate
@@ -747,8 +699,8 @@ class LevenshteinJointDecoder(ParallelDecoder):
         broadcast_if_needed(new_block)
         for field in ("is_original_mask", "step_id", "post_steps", "finalized"):
             broadcast_if_needed(state[field])
-        broadcast_if_needed(state["block_hash"])
-        broadcast_if_needed(state["hash_append"])
+        broadcast_if_needed(state["block_result"])
+        broadcast_if_needed(state["history_append"])
         self.commit_row_state(row_state, seq_ids, state)
 
         x_flat = x.data.view(-1)

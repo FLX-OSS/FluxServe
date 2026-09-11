@@ -1132,7 +1132,8 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         edit_budget=None,
         row_state=None,
     ):
-        decoding_flag = (decoding_start + self.block_length) <= total_length
+        decode_lengths = getattr(x, "decode_lengths", total_length)
+        decoding_flag = (decoding_start + self.block_length) <= decode_lengths
         while torch.any(decoding_flag):
             current_cache_length = max(
                 self.runner_config.max_cache_length_align,
@@ -1162,7 +1163,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                     row_state=row_state,
                 )
                 decoding_flag = decoding_flag & (
-                    (decoding_start + self.block_length) <= total_length
+                    (decoding_start + self.block_length) <= decode_lengths
                 )
                 current_cache_flag = decoding_flag & (
                     (decoding_start + self.block_length) <= current_cache_length
@@ -1180,7 +1181,8 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         edit_budget=None,
         row_state=None,
     ):
-        decoding_flag = (decoding_start + self.block_length) <= total_length
+        decode_lengths = getattr(x, "decode_lengths", total_length)
+        decoding_flag = (decoding_start + self.block_length) <= decode_lengths
         while torch.any(decoding_flag):
             seq_ids = self._select_decode_sequences(
                 x, decoding_flag, self.decoder.mask_id, mini_batch_size
@@ -1201,7 +1203,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
                 row_state=row_state,
             )
             decoding_flag = decoding_flag & (
-                (decoding_start + self.block_length) <= total_length
+                (decoding_start + self.block_length) <= decode_lengths
             )
 
     def _decode_selected_batch(

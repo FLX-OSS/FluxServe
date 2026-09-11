@@ -65,12 +65,10 @@ class TokenArray:
         pass
 
     def get_generated_tokens(self):
-        if self.batch_size == 1:
-            self.data[self.data == self.mask_id] = self.eos_id
-            return self.data[self.data != self.eos_id].unsqueeze(0)
-        else:
-            self.data[self.data == self.mask_id] = self.eos_id
-            return self.data
+        # Preserve prompt positions and stop IDs for every batch size. The
+        # consumer slices the original prompt and applies its EOS policy.
+        # Unused canvas positions remain masks, not fabricated EOS tokens.
+        return self.data.clone()
 
     def select_seqs(self, idx):
         arr = copy.copy(self)

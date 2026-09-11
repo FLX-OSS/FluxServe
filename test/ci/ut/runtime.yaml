@@ -1,0 +1,29 @@
+api_version: ci.fluxserve.io/v1
+name: ut-runtime
+type: ut
+triggers:
+  - per-commit
+  - manual
+runner:
+  labels:
+    - gh200-1gpu
+# Use the existing runtime container for FlashInfer/Triton imports, but run
+# tensor/runner regressions on CPU. Device acceptance has separate eval tasks.
+env:
+  CI: "true"
+  CUDA_VISIBLE_DEVICES: ""
+  OMP_NUM_THREADS: "2"
+  FLUXSERVE_LLADA22_REF_DIR: .ci-artifacts/llada22-reference
+install:
+  - python3 -m pip install pytest pyyaml
+  - >-
+    python3 -c "from huggingface_hub import snapshot_download;
+    snapshot_download('inclusionAI/LLaDA2.2-flash',
+    revision='2e48107b9ee9c015d18b6269088388d64d6c1289',
+    allow_patterns=['configuration_llada2_moe.py', 'modeling_llada2_moe.py'],
+    local_dir='.ci-artifacts/llada22-reference')"
+ut:
+  commands:
+    - python3 -m pytest test/runtime test/ci_system/test_pipeline.py -q --junitxml=.ci-artifacts/runtime.xml
+report:
+  github_step_summary: true

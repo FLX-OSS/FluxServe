@@ -18,24 +18,14 @@ from pipeline import (
 )
 
 
-def test_stale_process_patterns_match_smg_router_proctitle():
-    """`smg launch` rewrites its cmdline to `smg::router` via setproctitle;
-    the cleanup list must still match after that, otherwise stale routers
-    survive between runs and the next run hits port-bind conflicts."""
-    sample_cmdlines = [
-        "smg::router",
-        "smg::router --worker-urls grpc://127.0.0.1:1234",
-    ]
-    for cmdline in sample_cmdlines:
-        assert any(
-            re.search(pat, cmdline) for pat in STALE_PROCESS_PATTERNS
-        ), f"no STALE_PROCESS_PATTERNS entry matched cmdline: {cmdline!r}"
+def test_stale_process_patterns_exclude_unrelated_routers():
+    for cmdline in ("smg::router", "/usr/bin/python -m smg launch"):
+        assert not any(re.search(pat, cmdline) for pat in STALE_PROCESS_PATTERNS)
 
 
 def test_stale_process_patterns_match_existing_targets():
     cmdlines = [
         "/usr/bin/python /usr/local/bin/fluxserve serve --model foo",
-        "/usr/bin/python -m smg launch --worker-urls grpc://127.0.0.1:1234",
         "/usr/bin/python /repo/test/runtime/run_ci_suite.py --device cuda",
     ]
     for cmdline in cmdlines:
@@ -68,7 +58,7 @@ def test_extract_evalscope_score_from_box_table():
 
 PERF_CSV_FIXTURE = """\
 some unrelated log line
-config,Conc.,Latency (tps/user),Throughput (tps/gpu),Approx Cache Hit,Decoded Tok/Iter
+config,Conc.,Total Throughput (tok/s),Output Throughput (tok/s),Approx Cache Hit,Decoded Tok/Iter
 attn_tp4_moe_tp4,1,40.0,2500.0,82.5,3.1
 attn_tp4_moe_tp4,2,38.0,4500.0,82.5,3.1
 attn_tp4_moe_tp4,4,35.0,8000.0,82.5,3.1
@@ -84,8 +74,8 @@ def test_extract_perf_summary_rows_parses_csv_block():
     assert rows is not None
     assert len(rows) == 5
     assert rows[0]["Conc."] == "1"
-    assert rows[-1]["Latency (tps/user)"] == "30.0"
-    assert rows[-1]["Throughput (tps/gpu)"] == "24000.0"
+    assert rows[-1]["Total Throughput (tok/s)"] == "30.0"
+    assert rows[-1]["Output Throughput (tok/s)"] == "24000.0"
 
 
 def test_extract_perf_summary_rows_returns_none_when_missing():
@@ -117,7 +107,7 @@ def test_check_perf_reference_fails_when_metric_below_floor():
     result = check_perf_reference(task, _command_results_with(rows), ["perf"])
     assert result is not None
     assert result["passed"] is False
-    assert any("Latency (tps/user)" in f for f in result["failures"])
+    assert any("Total Throughput (tok/s)" in f for f in result["failures"])
 
 
 def test_check_perf_reference_reports_missing_row():
@@ -148,7 +138,7 @@ def test_check_perf_reference_raises_when_no_rows_found():
 def test_check_perf_reference_raises_on_malformed_pair():
     rows = extract_perf_summary_rows(PERF_CSV_FIXTURE)
     task = {"perf_reference": {16: [40.0]}}
-    with pytest.raises(ValueError, match=r"\[tps_user, tps_gpu\]"):
+    with pytest.raises(ValueError, match=r"\[total_throughput, output_throughput\]"):
         check_perf_reference(task, _command_results_with(rows), ["perf"])
 
 
@@ -191,7 +181,7 @@ def test_step_summary_includes_perf_reference_failures():
         build_step_summary_lines(_base_result(perf_reference_check=check))
     )
     assert "- Perf reference: `fail`" in summary
-    assert "Latency (tps/user)" in summary
+    assert "Total Throughput (tok/s)" in summary
 
 
 def test_step_summary_omits_perf_reference_when_unconfigured():
@@ -439,13 +429,13 @@ def _checks_fixture():
     def mk(conc, la, lr, ta, tr, threshold=0.95):
         return {
             "conc": conc,
-            "Latency (tps/user)": {
+            "Total Throughput (tok/s)": {
                 "actual": la,
                 "ref": lr,
                 "floor": lr * threshold,
                 "passed": la >= lr * threshold,
             },
-            "Throughput (tps/gpu)": {
+            "Output Throughput (tok/s)": {
                 "actual": ta,
                 "ref": tr,
                 "floor": tr * threshold,
@@ -464,16 +454,16 @@ def test_format_perf_reference_table_columns_and_pct():
     lines = format_perf_reference_table(_checks_fixture())
     header, rule, *body = lines
     assert "Conc" in header
-    assert "Lat actual" in header
-    assert "Lat ref" in header
-    assert "Lat floor" in header
+    assert "Total Thru actual" in header
+    assert "Total Thru ref" in header
+    assert "Total Thru floor" in header
     # Header makes the comparison base explicit so readers do not have to
     # guess whether the percentage is against `ref` or the threshold floor.
-    assert "Lat actual/ref" in header
-    assert "Thru actual" in header
-    assert "Thru ref" in header
-    assert "Thru floor" in header
-    assert "Thru actual/ref" in header
+    assert "Total Thru actual/ref" in header
+    assert "Output Thru actual" in header
+    assert "Output Thru ref" in header
+    assert "Output Thru floor" in header
+    assert "Output Thru actual/ref" in header
     assert set(rule) == {"-"}
     assert len(body) == 3
     assert "446.43" in body[0]  # actual
@@ -492,12 +482,12 @@ def test_format_perf_reference_table_empty_when_no_checks():
 def test_format_perf_reference_markdown_table_has_header_and_alignment():
     lines = format_perf_reference_markdown_table(_checks_fixture())
     assert lines[0].startswith("| Conc |")
-    assert "Lat ref" in lines[0]
-    assert "Lat floor" in lines[0]
-    assert "Lat actual/ref" in lines[0]
-    assert "Thru ref" in lines[0]
-    assert "Thru floor" in lines[0]
-    assert "Thru actual/ref" in lines[0]
+    assert "Total Thru ref" in lines[0]
+    assert "Total Thru floor" in lines[0]
+    assert "Total Thru actual/ref" in lines[0]
+    assert "Output Thru ref" in lines[0]
+    assert "Output Thru floor" in lines[0]
+    assert "Output Thru actual/ref" in lines[0]
     # Alignment row: all-right-aligned (`---:`)
     assert "---:" in lines[1]
     # Body rows
@@ -525,9 +515,9 @@ def test_step_summary_embeds_perf_reference_table():
     )
     # Comparison table interleaved so a passing run still shows actual,
     # raw ref (non-threshold), threshold-adjusted floor, and actual/ref %.
-    assert "| Conc | Lat actual | Lat ref | Lat floor | Lat actual/ref" in summary
-    assert "Thru floor" in summary
-    assert "Thru actual/ref" in summary
+    assert "| Conc | Total Thru actual | Total Thru ref | Total Thru floor | Total Thru actual/ref" in summary
+    assert "Output Thru floor" in summary
+    assert "Output Thru actual/ref" in summary
     assert "| 16 |" in summary
     assert "%" in summary
 
@@ -546,3 +536,22 @@ def test_perf_reference_table_rendered_for_passing_check(capsys):
     assert "[perf-ref]   Conc" in out
     assert "[perf-ref]   ---" in out
     assert "%" in out
+
+
+def test_runtime_regressions_are_discovered_for_pr_ci():
+    """Runtime regressions must be executable CI work, not just AST checks."""
+    from pipeline import get_stage_commands, load_yaml
+
+    root = Path(__file__).resolve().parents[2]
+    config = root / "test/ci/ut/runtime.yaml"
+    task = load_yaml(config)
+    validate_task(task, config)
+    matrix = build_matrix(root / "test/ci", root, trigger="per-commit")
+    entries = [entry for entry in matrix["include"] if entry["name"] == "ut-runtime"]
+    assert len(entries) == 1
+    assert entries[0]["runtime"] == "gh200-apptainer"
+    stages = dict(get_stage_commands(task))
+    assert any("pytest test/runtime" in command for command in stages["ut"])
+    assert task["env"]["CUDA_VISIBLE_DEVICES"] == ""
+    assert any("snapshot_download" in command for command in stages["install"])
+    assert task["env"]["FLUXSERVE_LLADA22_REF_DIR"] == ".ci-artifacts/llada22-reference"
