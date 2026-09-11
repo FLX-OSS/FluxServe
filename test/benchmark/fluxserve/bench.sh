@@ -5,18 +5,61 @@ set -euo pipefail
 # Keep lazy native builds deterministic for the RTX PRO 6000 benchmark.
 # export FLUX_KERNEL_CUDA_ARCH="${FLUX_KERNEL_CUDA_ARCH:-120}"
 
-EVALSCOPE_COMMIT=acd09b44384d53174768bb1063f675420f76fae9
-EVALSCOPE_VENV="${EVALSCOPE_VENV:-/tmp/evalscope-venv}"
-python -m venv "${EVALSCOPE_VENV}"
-"${EVALSCOPE_VENV}/bin/python" -m pip install \
-    "evalscope[perf] @ git+https://github.com/modelscope/evalscope.git@${EVALSCOPE_COMMIT}"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 OUTPUTS_DIR="${SCRIPT_DIR}/outputs/$(date +%Y%m%d_%H%M%S)"
 SERVER_PID=
 SERVER_LOG=
 RATES=(1 2 4 8 16)
+SELECTED_CONFIG=
+SELECTED_MODEL=
+SELECTED_DATASET=gsm8k.jsonl
+SELECTED_BENCHMARK=gsm8k
+NUM=1000
+PARALLEL=16
+while (( $# )); do
+    case "$1" in
+        --help|-h)
+            echo "Usage: bash $0 [--config NAME --model MODEL] [--output-dir DIR]"
+            echo 'Options: --dataset PATH_RELATIVE_TO_DATA --benchmark NAME --rates 1,2,4,8,16 --num 1000 --parallel 16'
+            echo 'Default: original experiment matrix. --config selects a single experiment (GSM8K by default).'
+            exit 0 ;;
+        --config|--model|--output-dir|--dataset|--benchmark|--rates|--num|--parallel)
+            (( $# >= 2 )) && [[ -n "$2" && "$2" != --* ]] || { echo "Missing value for $1" >&2; exit 2; }
+            case "$1" in
+                --config) SELECTED_CONFIG=$2 ;;
+                --model) SELECTED_MODEL=$2 ;;
+                --output-dir) OUTPUTS_DIR=$2 ;;
+                --dataset) SELECTED_DATASET=$2 ;;
+                --benchmark) SELECTED_BENCHMARK=$2 ;;
+                --rates)
+                    [[ "$2" =~ ^[0-9]+([.][0-9]+)?(,[0-9]+([.][0-9]+)?)*$ ]] || { echo 'Use comma-separated positive rates' >&2; exit 2; }
+                    IFS=, read -r -a RATES <<< "$2" ;;
+                --num) NUM=$2 ;;
+                --parallel) PARALLEL=$2 ;;
+            esac
+            shift 2 ;;
+        *) echo "Unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+[[ "$NUM" =~ ^[1-9][0-9]*$ && "$PARALLEL" =~ ^[1-9][0-9]*$ ]] || { echo '--num and --parallel must be positive integers' >&2; exit 2; }
+for rate in "${RATES[@]}"; do
+    [[ "$rate" =~ [1-9] ]] || { echo '--rates must be positive' >&2; exit 2; }
+done
+if [[ -n "$SELECTED_CONFIG" || -n "$SELECTED_MODEL" ]]; then
+    [[ "$SELECTED_CONFIG" =~ ^[a-zA-Z0-9_-]+$ && -n "$SELECTED_MODEL" ]] || { echo '--config and --model must be supplied together' >&2; exit 2; }
+    [[ "$SELECTED_BENCHMARK" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'Invalid benchmark name' >&2; exit 2; }
+    [[ -f "$SCRIPT_DIR/configs/$SELECTED_CONFIG.sh" ]] || { echo 'Config not found' >&2; exit 2; }
+    [[ -f "$REPO_ROOT/data/$SELECTED_DATASET" ]] || { echo 'Dataset not found' >&2; exit 2; }
+elif [[ "$SELECTED_DATASET" != gsm8k.jsonl || "$SELECTED_BENCHMARK" != gsm8k ]]; then
+    echo '--dataset and --benchmark require --config and --model' >&2; exit 2
+fi
+
+EVALSCOPE_COMMIT=acd09b44384d53174768bb1063f675420f76fae9
+EVALSCOPE_VENV="${EVALSCOPE_VENV:-/tmp/evalscope-venv}"
+python -m venv "${EVALSCOPE_VENV}"
+"${EVALSCOPE_VENV}/bin/python" -m pip install \
+    "evalscope[perf] @ git+https://github.com/modelscope/evalscope.git@${EVALSCOPE_COMMIT}"
 
 stop_server() {
     if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -91,8 +134,8 @@ run_perf() {
             --dataset-path "$dataset_path"
             --max-tokens 2048
             --no-stream
-            --num 1000
-            --parallel 16
+            --num "$NUM"
+            --parallel "$PARALLEL"
             --rate "$rate"
             --name "${benchmark}_${config}_rate_${rate}"
             --outputs-dir "$rate_output_dir"
@@ -103,13 +146,18 @@ run_perf() {
         fi
 
         echo "=== Running ${benchmark}/${config} at rate ${rate} ==="
-        "${EVALSCOPE_VENV}/bin/python" "${perf_args[@]}"
+        "${EVALSCOPE_VENV}/bin/python" "${perf_args[@]}" 2>&1 | tee "${rate_output_dir}/perf.log"
     done
     stop_server
     wait_for_port_free
 }
 
 trap stop_server EXIT
+
+if [[ -n "$SELECTED_CONFIG" ]]; then
+    run_perf "$SELECTED_BENCHMARK" "$SELECTED_CONFIG" "$SELECTED_MODEL" "$SELECTED_DATASET"
+    exit 0
+fi
 
 run_perf gsm8k tp1_ep1_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
 run_perf gsm8k tp4_ep4_flash inclusionAI/LLaDA2.0-mini gsm8k.jsonl 

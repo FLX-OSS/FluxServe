@@ -19,6 +19,10 @@ diffusion_gemma_*.md
 diffusion_gemma*.md
 flashinfer_gemma.md
 
+# ci
+**/.ci-artifacts
+install.sh
+pr_pipeline.sh
 
 
 # Dependency directories (remove the comment below to include it)
@@ -159,3 +163,5 @@ test/e2e/*.log
 bin/
 .sgl-kernel-audit/
 .sgl-kernel-benchmarks/
+.bench_deps/
+.venvs/

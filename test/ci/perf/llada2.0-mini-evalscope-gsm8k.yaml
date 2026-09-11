@@ -52,7 +52,7 @@ perf:
     --parallel 16
     --rate 16
     --name gsm8k_tp1_ep1_mini_rate_16
-    --outputs-dir .ci-artifacts/gsm8k-perf/rate_16
+    --outputs-dir .ci-artifacts/perf-llada2.0-mini-fa4-graph
     --no-timestamp &&
     python3 -c 'import glob,json; p=glob.glob(".ci-artifacts/gsm8k-perf/rate_16/**/benchmark_summary.json", recursive=True)[0]; s=json.load(open(p)); print("config,Conc.,Total Throughput (tok/s),Output Throughput (tok/s),Approx Cache Hit,Decoded Tok/Iter"); print("llada2.0-mini,16,{:.4f},{:.4f},0,0".format(s["Total Throughput (tok/s)"], s["Output Throughput (tok/s)"]))'
 report:

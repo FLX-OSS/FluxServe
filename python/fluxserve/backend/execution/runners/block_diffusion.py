@@ -251,7 +251,11 @@ class BlockDiffusionRunner(ModelRunner):
         non_mask_number = (prompts != self.decoder.mask_id).sum(dim=-1)
         decoding_start = (non_mask_number // self.block_length) * self.block_length
         use_unbounded_prefill = bool(
-            getattr(self, "_use_flashinfer_paged_prefill", lambda: False)()
+            getattr(
+                self,
+                "_use_unbounded_paged_prefill",
+                getattr(self, "_use_flashinfer_paged_prefill", lambda: False),
+            )()
         )
         if self.runner_config.attention_backend != "flex" and not use_unbounded_prefill:
             decoding_start = decoding_start.clip(0, self.prefilling_limit)

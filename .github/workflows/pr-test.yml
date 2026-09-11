@@ -127,7 +127,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pr-test-${{ matrix.name }}-${{ matrix.runner }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.WORK_DIR }}/.ci-artifacts/
+          path: |
+            ${{ env.WORK_DIR }}/.ci-artifacts/
+            !${{ env.WORK_DIR }}/.ci-artifacts/fa4-runtime/**
+            !${{ env.WORK_DIR }}/.ci-artifacts/fa4-evalscope/**
           if-no-files-found: warn
       - name: Cleanup work directory
         if: always()

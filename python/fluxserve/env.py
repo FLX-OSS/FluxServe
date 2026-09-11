@@ -50,6 +50,7 @@ PACKAGE_LIST = [
     "dill",
     "einops",
     "fastapi",
+    "flash-attn-4",
     "flashinfer-cubin",
     "flashinfer-python",
     "huggingface_hub",
