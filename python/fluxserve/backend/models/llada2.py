@@ -91,7 +91,7 @@ from fluxserve.backend.layers.linear import (
 from fluxserve.backend.layers.moe import get_deepep_mode, get_moe_a2a_backend
 from fluxserve.backend.layers.moe.fused_moe_triton.layer import FusedMoE
 from fluxserve.backend.layers.moe.token_dispatcher import DeepEPDispatcher
-from fluxserve.backend.layers.moe.topk import TopK
+from fluxserve.backend.layers.moe.topk import TopK, TopKOutputFormat
 from fluxserve.backend.layers.norm import RMSNorm
 from fluxserve.backend.layers.quantization.base_config import QuantizationConfig
 from fluxserve.backend.layers.rotary_embedding import get_rope
@@ -225,6 +225,62 @@ class LLaDA2MLP(nn.Module):
         return hidden_states
 
 
+def llada2_block_routing_topk(
+    gating_output: torch.Tensor,
+    correction_bias: torch.Tensor,
+    top_k: int,
+    block_size: int,
+    expert_capacity: int,
+    renormalize: bool,
+):
+    """LLaDA2.2 block-level routing (reference: ``LLaDA2MoeGate.block_routing``).
+
+    Phase 1 selects the top ``expert_capacity`` experts per ``block_size``-token
+    block (block score = max over the block's token scores, bias included);
+    phase 2 is per-token top-k restricted to that allowed set. Weights are the
+    bias-free sigmoid scores of the selected experts, renormalized;
+    ``routed_scaling_factor`` is applied downstream by ``FusedMoE``, matching
+    the other routing paths.
+
+    Tokens must be packed row-major so that every ``block_size`` consecutive
+    tokens belong to one diffusion block of one request; serving must enforce
+    ``block_length % config.block_size == 0``.
+    """
+    num_tokens, num_experts = gating_output.shape
+    if num_tokens % block_size != 0:
+        raise ValueError(
+            f"block routing requires the flattened token count ({num_tokens}) "
+            f"to be a multiple of block_size ({block_size}); serve LLaDA2.2 "
+            "with block_length a multiple of config.block_size."
+        )
+    scores = torch.sigmoid(gating_output.to(torch.float32))
+    scores_for_routing = scores + correction_bias.to(scores.dtype)
+
+    num_blocks = num_tokens // block_size
+    block_scores = scores_for_routing.view(num_blocks, block_size, num_experts).max(
+        dim=1
+    ).values
+    _, block_experts = torch.topk(block_scores, k=expert_capacity, dim=-1)
+    allowed = torch.zeros(
+        num_blocks, num_experts, dtype=torch.bool, device=gating_output.device
+    )
+    allowed.scatter_(1, block_experts, True)
+    allowed = (
+        allowed.unsqueeze(1)
+        .expand(-1, block_size, -1)
+        .reshape(num_tokens, num_experts)
+    )
+
+    masked_scores = scores_for_routing.masked_fill(~allowed, float("-inf"))
+    _, topk_ids = torch.topk(masked_scores, k=top_k, dim=-1)
+    topk_weights = scores.gather(1, topk_ids)
+    if renormalize:
+        topk_weights = topk_weights / (
+            topk_weights.sum(dim=-1, keepdim=True) + 1e-20
+        )
+    return topk_weights.to(torch.float32), topk_ids.to(torch.int32)
+
+
 class LLaDA2Gate(nn.Module):
     def __init__(
         self,
@@ -291,10 +347,32 @@ class LLaDA2SparseMoeBlock(nn.Module):
         # self.topk_filename = 'mini_topk_gsm8k.npy'
         # with open(self.topk_filename, 'wb') as f:
         #     pass
+        # LLaDA2.2 block routing supersedes grouped topk. The 2.2 config still
+        # carries n_group/topk_group, but its reference model never uses them;
+        # dispatch on the block-routing fields, not on their absence.
+        self.block_size = int(getattr(config, "block_size", 0) or 0)
+        self.expert_capacity = int(getattr(config, "expert_capacity", 0) or 0)
+        self.use_block_routing = self.expert_capacity > 0
+        if self.use_block_routing and self.block_size <= 0:
+            raise ValueError(
+                "expert_capacity is set but block_size is not; both are "
+                "required for LLaDA2.2 block routing."
+            )
+        if self.use_block_routing and layer_id == int(
+            getattr(config, "first_k_dense_replace", 0)
+        ):
+            logger.info(
+                "MoE block routing active: block_size=%d expert_capacity=%d "
+                "(n_group/topk_group ignored)",
+                self.block_size,
+                self.expert_capacity,
+            )
         # check group topk
         self.num_expert_group = getattr(config, "n_group", 0)
         self.topk_group = getattr(config, "topk_group", 0)
-        if self.num_expert_group > 0 or self.topk_group > 0:
+        if not self.use_block_routing and (
+            self.num_expert_group > 0 or self.topk_group > 0
+        ):
             assert (
                 self.num_expert_group > 0
                 and 0 < self.topk_group <= self.num_expert_group
@@ -333,6 +411,14 @@ class LLaDA2SparseMoeBlock(nn.Module):
             topk_group=self.topk_group,
             correction_bias=self.correction_bias,
             routed_scaling_factor=self.routed_scaling_factor,
+            custom_routing_function=(
+                self._block_routing_function if self.use_block_routing else None
+            ),
+            # The triton-kernel output format routes on raw logits and would
+            # silently bypass the custom routing function.
+            output_format=(
+                TopKOutputFormat.STANDARD if self.use_block_routing else None
+            ),
         )
 
         self.experts = FusedMoE(
@@ -401,6 +487,28 @@ class LLaDA2SparseMoeBlock(nn.Module):
             for name, x in self.experts.named_parameters()
             if name not in ["correction_bias"]
         ]
+
+    def _block_routing_function(
+        self,
+        hidden_states: torch.Tensor,
+        gating_output: torch.Tensor,
+        topk: int,
+        renormalize: bool,
+    ):
+        del hidden_states
+        if self.correction_bias is None:
+            raise ValueError(
+                "LLaDA2.2 block routing requires the gate expert_bias "
+                "(sigmoid + bias scoring)."
+            )
+        return llada2_block_routing_topk(
+            gating_output,
+            self.correction_bias,
+            top_k=topk,
+            block_size=self.block_size,
+            expert_capacity=self.expert_capacity,
+            renormalize=renormalize,
+        )
 
     def _forward_shared_experts(self, hidden_states: torch.Tensor):
         shared_output = None

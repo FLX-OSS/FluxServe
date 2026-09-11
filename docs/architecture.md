@@ -24,7 +24,7 @@ For the documented paged configuration, use `--scheduler-policy paged`, `--kv-ca
 
 Diffusion generation resolves multiple token positions in an active block. Block-causal attention allows the active block to use the prompt and previously committed blocks.
 
-The threshold decoder is used in the LLaDA2.0 guides. LLaDA2.1 also supports the opt-in `joint_threshold` decoder, which can edit already resolved tokens inside the active block. See the [LLaDA2.1 guide](serving/llada2.1.md) for its constraints.
+The threshold decoder is used in the LLaDA2.0 guides. LLaDA2.1 also supports the opt-in `joint_threshold` decoder, which can edit already resolved tokens inside the active block. See the [LLaDA2.1 guide](serving/llada2.1.md) for its constraints. LLaDA2.2 adds the opt-in `levenshtein_joint` decoder, which additionally consumes `DELETE`/`SPLIT` edit tokens inside the fixed-length block; see the [LLaDA2.2 guide](serving/llada2.2.md).
 
 ## Distributed execution
 

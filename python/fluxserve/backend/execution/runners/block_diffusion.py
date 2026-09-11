@@ -33,6 +33,8 @@ from fluxserve.backend.execution.runners.utils import (
     DecodeEditBudget,
     align_exp2,
     gather_blocks,
+    generated_eos_hit,
+    select_batch_sequences_by_order,
     select_batch_sequences_by_mask_number,
 )
 from fluxserve.backend.layers.dp_attention import (
@@ -78,10 +80,11 @@ class BlockDiffusionRunner(ModelRunner):
     def _use_paged_kv_cache(self) -> bool:
         return self.runner_config.kv_cache_layout == "paged"
 
-    def preprocess_inputs(self, prompts):
+    def preprocess_inputs(self, prompts, gen_length=None):
         prompt_length = prompts.shape[1]
         block_length = self.runner_config.block_length
-        gen_length = self.runner_config.gen_length
+        if gen_length is None:
+            gen_length = self.runner_config.gen_length
         total_length = (
             (prompt_length + gen_length + block_length - 1) // block_length
         ) * block_length
@@ -222,12 +225,42 @@ class BlockDiffusionRunner(ModelRunner):
         self.past_key_values[:, :, global_idx, :, sample_len:] = 0
 
     @torch.no_grad()
-    def generate(self, prompts):
+    def generate(self, prompts, prompt_lengths=None, generation_lengths=None):
+        """Generate on per-row budgets while retaining a rectangular canvas.
+
+        Complete blocks are resolved for KV consistency; positions beyond each
+        exact output limit remain masked in the returned prompt-plus-output
+        tensor. EOS truncation belongs to the caller after slicing the prompt.
+        """
         batch_size = prompts.shape[0]
         mini_batch_size = self.runner_config.mini_batch_size
-        total_length, new_gen_length, attn_mask_num_blocks = self.preprocess_inputs(
-            prompts
+        if prompt_lengths is None:
+            prompt_lengths = (prompts != self.decoder.mask_id).sum(dim=-1)
+        prompt_lengths = torch.as_tensor(
+            prompt_lengths, device=self.device, dtype=torch.long
         )
+        if generation_lengths is None:
+            generation_lengths = torch.full_like(
+                prompt_lengths, self.runner_config.gen_length
+            )
+        generation_lengths = torch.as_tensor(
+            generation_lengths, device=self.device, dtype=torch.long
+        )
+        if (
+            prompt_lengths.shape != (batch_size,)
+            or generation_lengths.shape != (batch_size,)
+        ):
+            raise ValueError(
+                "prompt_lengths and generation_lengths must have one entry per row"
+            )
+        if bool(((prompt_lengths < 0) | (prompt_lengths > prompts.shape[1])).any()):
+            raise ValueError("prompt_lengths must lie within the prompt tensor")
+        if bool((generation_lengths < 0).any()):
+            raise ValueError("generation_lengths must be non-negative")
+        total_length, new_gen_length, attn_mask_num_blocks = self.preprocess_inputs(
+            prompts, gen_length=int(generation_lengths.max().item())
+        )
+        output_ends = prompt_lengths + generation_lengths
         if self.runner_config.cache not in {"", "prefix"}:
             raise ValueError(f"Unsupported cache mode: {self.runner_config.cache}")
 
@@ -248,13 +281,21 @@ class BlockDiffusionRunner(ModelRunner):
             self.device,
         )
 
-        non_mask_number = (prompts != self.decoder.mask_id).sum(dim=-1)
+        non_mask_number = prompt_lengths
         decoding_start = (non_mask_number // self.block_length) * self.block_length
         use_unbounded_prefill = bool(
             getattr(self, "_use_flashinfer_paged_prefill", lambda: False)()
         )
         if self.runner_config.attention_backend != "flex" and not use_unbounded_prefill:
             decoding_start = decoding_start.clip(0, self.prefilling_limit)
+        # Resolve complete diffusion blocks, but stop each row at its own
+        # aligned end. The final partial block is trimmed only for output.
+        x.decode_lengths = torch.where(
+            generation_lengths > 0,
+            ((output_ends + self.block_length - 1) // self.block_length)
+            * self.block_length,
+            decoding_start,
+        )
         prefilling_lengths = decoding_start.clone()
 
         self.past_key_values = self.allocate_kv_cache(batch_size)
@@ -280,7 +321,11 @@ class BlockDiffusionRunner(ModelRunner):
         )
 
         logger.info("The number of diffusion iterations: %s", self.num_forwards)
-        return x.get_generated_tokens()
+        output = x.get_generated_tokens()
+        positions = torch.arange(output.shape[1], device=self.device).unsqueeze(0)
+        return output.masked_fill(
+            positions >= output_ends.unsqueeze(1), self.decoder.mask_id
+        )
 
     def _prefill_batches(
         self,
@@ -402,6 +447,16 @@ class BlockDiffusionRunner(ModelRunner):
             )
         return {}
 
+    def _select_decode_sequences(self, x, valid_flag, mask_id, batch_size):
+        # Finish active editing rows even when DELETE/SPLIT changes mask count.
+        # Preserve the established 2.0/2.1 selection order.
+        selector = (
+            select_batch_sequences_by_order
+            if getattr(self.decoder, "needs_row_state", False)
+            else select_batch_sequences_by_mask_number
+        )
+        return selector(x, valid_flag, mask_id, batch_size)
+
     def _decode_batches(
         self,
         x,
@@ -415,7 +470,8 @@ class BlockDiffusionRunner(ModelRunner):
         edit_budget, row_state = self._make_decode_loop_state(
             decoding_start.shape[0]
         )
-        decoding_flag = (decoding_start + self.block_length) <= total_length
+        decode_lengths = getattr(x, "decode_lengths", total_length)
+        decoding_flag = (decoding_start + self.block_length) <= decode_lengths
         while torch.any(decoding_flag):
             current_cache_length = max(
                 self.runner_config.max_cache_length_align,
@@ -426,7 +482,7 @@ class BlockDiffusionRunner(ModelRunner):
                 (decoding_start + self.block_length) <= current_cache_length
             )
             while torch.any(current_cache_flag):
-                seq_ids = select_batch_sequences_by_mask_number(
+                seq_ids = self._select_decode_sequences(
                     x, current_cache_flag, self.decoder.mask_id, mini_batch_size
                 )
                 decoding_x = x.select_seqs(seq_ids)
@@ -497,8 +553,10 @@ class BlockDiffusionRunner(ModelRunner):
                 if self.early_stop:
                     # Branchless on purpose: an `if eos_mask.any()` here forces
                     # a GPU->CPU sync every decode iteration.
-                    eos_mask = torch.any(
-                        x[seq_ids] == self.decoder.eos_id, dim=1
+                    eos_mask = generated_eos_hit(
+                        x[seq_ids], self.decoder.eos_ids,
+                        prompt_lengths[seq_ids] if prompt_lengths is not None else None,
+                        decoding_start[seq_ids],
                     ) & block_finished
                     decoding_start[seq_ids] = torch.where(
                         eos_mask,
@@ -509,7 +567,7 @@ class BlockDiffusionRunner(ModelRunner):
 
                 self.num_forwards += 1
                 decoding_flag = decoding_flag & (
-                    (decoding_start + self.block_length) <= total_length
+                    (decoding_start + self.block_length) <= decode_lengths
                 )
                 current_cache_flag = decoding_flag & (
                     (decoding_start + self.block_length) <= current_cache_length

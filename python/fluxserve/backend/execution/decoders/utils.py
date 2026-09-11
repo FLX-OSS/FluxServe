@@ -64,6 +64,35 @@ def broadcast_if_needed(x, src=0, group=None):
         dist.broadcast(x, src=src)
 
 
+def normalize_eos_ids(value):
+    """Deduplicated tuple of EOS token ids from an int or an iterable of ints."""
+    values = (value,) if isinstance(value, int) else tuple(value)
+    eos_ids = tuple(dict.fromkeys(int(item) for item in values))
+    if not eos_ids:
+        raise ValueError("at least one EOS token id is required")
+    return eos_ids
+
+
+def resolve_checkpoint_eos_ids(model_name, trust_remote_code=True):
+    """EOS ids declared by the checkpoint's generation_config.json, as a
+    deduplicated tuple; empty tuple when the checkpoint declares none (the
+    decoder's built-in default then applies). LLaDA2.2 declares two stop
+    tokens ([156892, 156900]); 2.0/2.1 ship no generation_config.json.
+    """
+    from transformers import GenerationConfig
+
+    try:
+        gen_config = GenerationConfig.from_pretrained(
+            model_name, trust_remote_code=trust_remote_code
+        )
+    except OSError:
+        return ()
+    value = getattr(gen_config, "eos_token_id", None)
+    if value is None:
+        return ()
+    return normalize_eos_ids(value)
+
+
 @torch.no_grad()
 @torch.compile(dynamic=True)
 def get_transfer_index_hierarchy_fast_v2(

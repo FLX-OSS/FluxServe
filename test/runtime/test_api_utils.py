@@ -28,7 +28,7 @@ def test_startup_banner_uses_color_for_tty(monkeypatch, capsys):
     assert "\033[38;2;250;197;191m" in output
     assert "\033[95m" not in output
     assert "████████  ██                           ████████" in output
-    assert "██      █████    ██      ██  ████████" in output
+    assert "██        ██      █████     ██    ██   ████████" in output
     assert "\U0001F9A9" in output
     assert "\n\nVersion  \U0001F9A9 0.1" in output
     assert "Model    org/model" in output
