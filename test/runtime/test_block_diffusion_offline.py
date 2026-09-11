@@ -58,6 +58,7 @@ def test_flashinfer_unaligned_prompt_prefills_aligned_prefix_and_replays_partial
         pos_ids,
         num_layers,
         mini_batch_size,
+        prompt_lengths=None,
     ):
         observed["decode_start"] = decoding_start.clone()
 
