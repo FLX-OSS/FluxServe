@@ -38,7 +38,8 @@ class FA4CudaGraphRunner:
 
     Outputs alias graph-owned buffers and must be consumed before another replay.
     Each padding row owns a distinct reserved page, outside the scheduler pool.
-    Only TP1/EP1 is currently supported by the enclosing runner.
+    Attention TP and standard MoE EP share the same ranks. Their collectives
+    are captured with the model, including the sum of local routed experts.
     """
 
     def __init__(self, batch_sizes):
@@ -117,6 +118,9 @@ class FA4CudaGraphRunner:
                 forward()
         torch.cuda.current_stream(device).wait_stream(stream)
         torch.cuda.synchronize(device)
+        # All ranks must finish eager collective warmup before any rank starts
+        # recording NCCL operations into its graph.
+        runner.tp_group.barrier()
         graph = torch.cuda.CUDAGraph()
         with model_capture_mode(), torch.cuda.graph(graph, pool=self.pool, stream=stream):
             logits, step = forward()

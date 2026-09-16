@@ -15,7 +15,7 @@ server:
     . .ci-artifacts/fa4-runtime/bin/activate &&
     fluxserve serve
     --model inclusionAI/LLaDA2.1-mini --host 127.0.0.1 --port 8000
-    --tp-size 1 --dp-size 1 --ep-size 1 --gpu-memory-utilization 0.8
+    --tp-size 4 --dp-size 1 --ep-size 4 --gpu-memory-utilization 0.8
     --max-num-seqs 16 --max-model-len 65536 --max-scheduled-tokens 2048
     --block-length 64 --parallel-decoding joint_threshold --threshold 0.7
     --editing-threshold 0.5 --max-post-steps 16

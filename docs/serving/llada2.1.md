@@ -65,6 +65,40 @@ CUDA_VISIBLE_DEVICES=0 python -m fluxserve.cli serve \
 
 For the Speed preset pass `--threshold 0.5 --editing-threshold 0.0`.
 
+## FA4 with tensor parallelism
+
+The FA4 runner accepts TP4/EP4 with `DP=PP=1`, including padded decode CUDA
+graphs. Launch the four-GPU preset from an environment with standalone
+`flash-attn-4` installed:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 bash test/benchmark/fluxserve/configs/tp4_ep4_llada21_mini_fa4.sh
+```
+
+The launcher requires `TP=EP` (including TP1/EP1 and TP4/EP4). Standard
+MoE dispatch (`moe_a2a_backend=none`) is supported; DeepEP graph capture is
+unsupported. Q/K/V heads and the paged KV cache are local to each TP rank.
+Routed experts are sharded across EP ranks and their outputs are summed;
+replicated shared-expert outputs are added once after the sum. Model collectives
+run inside the decode graph; fused decoder tokens and completion predicates
+are synchronized after replay before advancing blocks or editing budgets.
+Graph capture requires `page_size == block_length`, a page size divisible by
+16, and batch buckets covering `max_num_seqs`. Prefill graphs remain unsupported.
+The same TP path applies to LLaDA2.0 with its `threshold` or `hierarchy` decoder.
+
+LLaDA2.1-mini completed GSM8K evaluation and a 1000-request performance run on
+four H200 GPUs with TP4/EP4 and decode graphs. See the
+[results and configuration](../../FA4_EVAL_PERF_RESULTS_20260915.md).
+The LLaDA2.0-flash performance run was interrupted when its allocation expired.
+On a four-GPU node, run the standard MoE EP eager/graph parity test with:
+
+```bash
+python -m pytest -q test/runtime/test_moe_tp_ep_cuda_graph.py
+```
+
+This test covers routed and shared experts, including their separate CUDA
+streams; use the FA4 serving benchmark for full-model validation.
+
 ## Offline benchmark with joint_threshold
 
 ```bash

@@ -21,6 +21,9 @@
 from __future__ import annotations
 
 import torch
+import torch.distributed as dist
+
+from fluxserve.backend.distributed import get_tp_group
 
 from fluxserve.backend.engine.request import RequestState
 from fluxserve.backend.execution.forward_batch_info import ForwardBatch, ForwardMode
@@ -34,6 +37,7 @@ from fluxserve.backend.layers.attention.metadata import (
     build_block_diffusion_paged_metadata,
 )
 from fluxserve.backend.layers.dp_attention import get_attention_tp_size
+from fluxserve.backend.layers.moe import get_moe_a2a_backend
 from fluxserve.backend.managers.kvcache import PagedKVCache
 
 
@@ -54,8 +58,14 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
             raise ValueError("FA4 supports --use-decode-cuda-graph; prefill graph is unsupported")
         if runner_config.enable_decode_cuda_graph:
             server_args = kwargs.get("server_args", args[1] if len(args) > 1 else None)
-            if any(int(getattr(server_args, name, 1)) != 1 for name in ("tp_size", "ep_size", "dp_size", "pp_size")):
-                raise ValueError("FA4 decode CUDA graph currently requires TP/EP/DP/PP=1")
+            if any(int(getattr(server_args, name, 1)) != 1 for name in ("dp_size", "pp_size")):
+                raise ValueError("FA4 decode CUDA graph currently requires DP/PP=1")
+            tp_size = int(getattr(server_args, "tp_size", 1))
+            ep_size = int(getattr(server_args, "ep_size", 1))
+            if tp_size < 1 or tp_size != ep_size:
+                raise ValueError("FA4 decode CUDA graph requires TP=EP >= 1")
+            if not get_moe_a2a_backend().is_none():
+                raise ValueError("FA4 decode CUDA graph requires moe_a2a_backend='none'")
             if runner_config.decode_cuda_graph_mode != "padded":
                 raise ValueError("FA4 decode CUDA graph requires --cuda-graph-decode-mode padded")
             if int(runner_config.page_size or runner_config.block_length) != int(runner_config.block_length):
@@ -285,6 +295,16 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
             logits = output.logits[: len(seq_ids)]
         if fused_step is not None:
             updated, had_mask, changed, block_finished = fused_step
+            # Every rank must take the same decode-loop branches after replay.
+            # Synchronize both tokens and predicates before updating edit budgets
+            # or choosing the next batch (which determines collective shapes).
+            tp_group = get_tp_group()
+            if tp_group.world_size > 1:
+                src = dist.get_global_rank(tp_group.device_group, 0)
+                dist.broadcast(updated, src=src, group=tp_group.device_group)
+                predicates = torch.stack((had_mask, changed, block_finished))
+                dist.broadcast(predicates, src=src, group=tp_group.device_group)
+                had_mask, changed, block_finished = predicates.unbind(0)
             decoding_x.data.scatter_(1, decoding_pos_ids, updated)
         elif callable(getattr(self.decoder, "batch_decode", None)):
             self.decoder.batch_decode(
