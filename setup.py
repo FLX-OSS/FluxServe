@@ -70,6 +70,9 @@ setup(
             "fluxserve=fluxserve.cli:main",
         ],
     },
+    extras_require={
+        "fa4": ["flash-attn-4==4.0.0b29"],
+    },
     zip_safe=True,
     include_package_data=True,
     ext_modules=extensions,

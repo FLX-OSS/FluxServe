@@ -35,6 +35,7 @@ from fluxserve.backend.layers.attention.flashinfer import (
     FlashInferRaggedAttention,
     FlashInferRaggedPrefillAttention,
 )
+from fluxserve.backend.layers.attention.fa4 import FA4PagedAttention
 
 
 class AttentionForward:
@@ -43,6 +44,7 @@ class AttentionForward:
     def __init__(self, config: AttentionForwardConfig):
         self.config = config
         self.dense = DenseAttention(config)
+        self.fa4_paged = FA4PagedAttention(config)
         self.flashinfer_ragged_prefill = FlashInferRaggedPrefillAttention(config)
         self.flashinfer_paged_prefill = FlashInferPagedPrefillAttention(config)
         self.flashinfer_paged = FlashInferPagedAttention(config)
@@ -59,6 +61,31 @@ class AttentionForward:
         attention_mask: Optional[torch.Tensor] = None,
         forward_batch: Optional[ForwardBatch] = None,
     ) -> tuple[torch.Tensor, Optional[tuple[torch.Tensor, torch.Tensor]]]:
+        if self.fa4_paged.can_run(
+            q,
+            k,
+            v,
+            past_key_values,
+            attention_mask,
+            forward_batch,
+        ):
+            present_key_values = (k, v) if use_cache else None
+            return (
+                self.fa4_paged.forward(
+                    q,
+                    k,
+                    v,
+                    past_key_values,
+                    forward_batch.paged_attention_metadata,
+                ),
+                present_key_values,
+            )
+        if (
+            forward_batch is not None
+            and getattr(forward_batch, "paged_attention_metadata", None) is not None
+        ):
+            raise RuntimeError("FA4 paged attention was requested but cannot run.")
+
         if self.flashinfer_paged_prefill.can_run(
             q,
             k,

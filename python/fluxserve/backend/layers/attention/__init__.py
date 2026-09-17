@@ -32,13 +32,53 @@ from fluxserve.backend.layers.attention.flashinfer import (
 from fluxserve.backend.layers.attention.forward import (
     AttentionForward,
 )
+from fluxserve.backend.layers.attention.fa4 import (
+    FA4PagedAttention,
+    fa4_package_version,
+    load_fa4_varlen_func,
+    validate_fa4_runtime,
+)
+from fluxserve.backend.layers.attention.metadata import (
+    PagedAttentionMetadata,
+    build_block_diffusion_paged_metadata,
+)
+from fluxserve.backend.layers.attention.selector import (
+    AttentionBackend,
+    AttentionBackendCapability,
+    AttentionBackendSelector,
+    AttentionBatchCharacteristics,
+    AttentionExecutionPlan,
+    AttentionMaskKind,
+    AttentionPhase,
+    AttentionScheduleCandidate,
+    AttentionSchedulePlan,
+    AttentionWorkItem,
+    CallableCostModel,
+)
 
 __all__ = [
+    "AttentionBackend",
+    "AttentionBackendCapability",
+    "AttentionBackendSelector",
+    "AttentionBatchCharacteristics",
+    "AttentionExecutionPlan",
     "AttentionForward",
     "AttentionForwardConfig",
+    "AttentionMaskKind",
+    "AttentionPhase",
+    "AttentionScheduleCandidate",
+    "AttentionSchedulePlan",
+    "AttentionWorkItem",
+    "CallableCostModel",
     "DenseAttention",
+    "FA4PagedAttention",
     "FlashInferRaggedAttention",
     "FlashInferRaggedPrefillAttention",
+    "PagedAttentionMetadata",
     "apply_qk_norm",
+    "build_block_diffusion_paged_metadata",
+    "fa4_package_version",
+    "load_fa4_varlen_func",
     "repeat_kv",
+    "validate_fa4_runtime",
 ]

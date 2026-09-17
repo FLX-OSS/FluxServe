@@ -138,7 +138,8 @@ RUN set -eux; \
         ninja==1.13.0 \
         nvidia-ml-py==13.580.82 \
         apache-tvm-ffi==0.1.12 \
-        nvidia-cutlass-dsl==4.6.0 \
+        nvidia-cutlass-dsl==4.6.2 \
+        flash-attn-4==4.0.0b29 \
         sgl-kernel==0.3.15; \
     python -m pip uninstall -y pynvml || true; \
     python -m pip uninstall -y flashinfer-python || true
