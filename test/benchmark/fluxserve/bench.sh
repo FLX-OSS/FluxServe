@@ -10,7 +10,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 OUTPUTS_DIR="${SCRIPT_DIR}/outputs/$(date +%Y%m%d_%H%M%S)"
 SERVER_PID=
 SERVER_LOG=
-RATES=(1 2 4 8 16)
+RATES=(16)
 SELECTED_CONFIG=
 SELECTED_MODEL=
 SELECTED_DATASET=gsm8k.jsonl
@@ -159,14 +159,26 @@ if [[ -n "$SELECTED_CONFIG" ]]; then
     exit 0
 fi
 
-run_perf gsm8k tp1_ep1_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
-run_perf gsm8k tp4_ep4_flash inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
-run_perf bigcodebench tp1_ep1_mini inclusionAI/LLaDA2.0-mini openai/bigcodebench.jsonl 
-run_perf bigcodebench tp4_ep4_flash inclusionAI/LLaDA2.0-mini openai/bigcodebench.jsonl 
+# run_perf gsm8k tp1_ep1_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
+# run_perf gsm8k tp1_ep1_mini_fa4 inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
+
+# run_perf gsm8k tp1_ep1_llada21_mini inclusionAI/LLaDA2.1-mini gsm8k.jsonl 
+# run_perf gsm8k tp1_ep1_llada21_mini_fa4 inclusionAI/LLaDA2.1-mini gsm8k.jsonl 
+
+run_perf gsm8k tp4_ep4_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
+run_perf gsm8k tp4_ep4_mini_fa4 inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
+
+run_perf gsm8k tp4_ep4_flash inclusionAI/LLaDA2.0-flash gsm8k.jsonl 
+run_perf gsm8k tp4_ep4_flash_fa4 inclusionAI/LLaDA2.0-flash gsm8k.jsonl 
+
+# run_perf bigcodebench tp1_ep1_mini inclusionAI/LLaDA2.0-mini openai/bigcodebench.jsonl 
+# run_perf bigcodebench tp4_ep4_flash inclusionAI/LLaDA2.0-mini openai/bigcodebench.jsonl 
+
 run_perf gsm8k tp1_ep1_gemma google/diffusiongemma-26B-A4B-it gsm8k.jsonl 
 run_perf gsm8k tp4_ep4_gemma google/diffusiongemma-26B-A4B-it gsm8k.jsonl 
-run_perf bigcodebench tp1_ep1_gemma google/diffusiongemma-26B-A4B-it openai/bigcodebench.jsonl 
-run_perf bigcodebench tp4_ep4_gemma google/diffusiongemma-26B-A4B-it openai/bigcodebench.jsonl 
+
+# run_perf bigcodebench tp1_ep1_gemma google/diffusiongemma-26B-A4B-it openai/bigcodebench.jsonl 
+# run_perf bigcodebench tp4_ep4_gemma google/diffusiongemma-26B-A4B-it openai/bigcodebench.jsonl 
 
 
 exit 0

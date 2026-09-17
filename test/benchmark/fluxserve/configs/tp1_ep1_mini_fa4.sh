@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
+
 set -euo pipefail
+
 exec fluxserve serve \
-    --model inclusionAI/LLaDA2.1-mini \
+    --model inclusionAI/LLaDA2.0-mini \
     --host 127.0.0.1 \
     --port 8000 \
     --tp-size 1 \
@@ -12,13 +14,11 @@ exec fluxserve serve \
     --max-model-len 65536 \
     --max-scheduled-tokens 2048 \
     --block-length 64 \
-    --parallel-decoding joint_threshold \
-    --threshold 0.7 \
-    --editing-threshold 0.5 \
-    --max-post-steps 16 \
+    --parallel-decoding threshold \
+    --threshold 0.95 \
     --attention-backend fa4 \
     --kv-cache-layout paged \
     --scheduler-policy paged \
     --use-decode-cuda-graph \
     --cuda-graph-decode-mode padded \
-    --cuda-graph-capture-bs 1 2 4 8 10 12 16
+    --cuda-graph-capture-bs 1 2 4 8 10 12 16 \
