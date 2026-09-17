@@ -30,7 +30,6 @@ server:
     --scheduler-policy default
     --use-decode-cuda-graph
     --cuda-graph-decode-mode padded
-    --cuda-graph-capture-bs 1 2 4
   ready:
     url: http://127.0.0.1:8000/health
     timeout: 1800

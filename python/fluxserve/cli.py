@@ -96,9 +96,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     serve.add_argument("--device", default="cuda", help='GPU device type')
-    serve.add_argument("--max-num-seqs", type=int, default=8)
-    serve.add_argument("--max-scheduled-tokens", type=int, default=512)
-    serve.add_argument("--max-model-len", type=int, default=2048)
+    serve.add_argument("--max-num-seqs", type=int, default=16)
+    serve.add_argument("--max-scheduled-tokens", type=int, default=2048)
+    serve.add_argument("--max-model-len", type=int, default=65536)
     serve.add_argument("--max-new-tokens", type=int, default=128)
     serve.add_argument(
         "--scheduler-policy",
@@ -131,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--attention-backend",
         choices=("sdpa", "flex", "flashinfer", "fa4"),
-        default="flashinfer",
+        default="fa4",
         action=StoreExplicit,
     )
     serve.set_defaults(attention_backend_explicit=False)
@@ -157,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve.add_argument("--page-size", type=int, default=None)
     serve.add_argument("--parallel-decoding", default="threshold")
-    serve.add_argument("--threshold", type=float, default=0.9)
+    serve.add_argument("--threshold", type=float, default=0.95)
     serve.add_argument("--low-threshold", type=float, default=0.3)
     serve.add_argument(
         "--editing-threshold",

@@ -1,5 +1,5 @@
 api_version: ci.fluxserve.io/v1
-name: perf-llada2.0-flash-fa4-gsm8k
+name: perf-llada2.0-flash-gsm8k
 type: perf
 triggers:
   - per-commit
@@ -30,7 +30,6 @@ server:
     --scheduler-policy paged 
     --use-decode-cuda-graph 
     --cuda-graph-decode-mode padded 
-    --cuda-graph-capture-bs 1 2 4 8 10 12 16
   ready:
     url: http://127.0.0.1:8000/health
     timeout: 1800
@@ -51,10 +50,15 @@ perf:
     --num 1000 
     --parallel 16 
     --rate 16 
-    --name llada2.0-fa4-graph
-    --outputs-dir .ci-artifacts/perf-llada2.0-flash-fa4 
+    --name gsm8k_tp4_ep4_flash_rate_16
+    --outputs-dir .ci-artifacts/perf-llada2.0-flash 
     --no-timestamp &&
-    python test/ci_system/fa4/check_perf.py .ci-artifacts/perf-llada2.0-flash-fa4
+    python3 -c 'import glob,json; p=glob.glob(".ci-artifacts/gsm8k-perf/rate_16/**/benchmark_summary.json", recursive=True)[0]; s=json.load(open(p)); print("config,Conc.,Total Throughput (tok/s),Output Throughput (tok/s),Approx Cache Hit,Decoded Tok/Iter"); print("llada2.0-mini,16,{:.4f},{:.4f},0,0".format(s["Total Throughput (tok/s)"], s["Output Throughput (tok/s)"]))'
 report:
   github_step_summary: true
-# Measurement only until a same-environment FA4 performance baseline is established.
+perf_threshold: 0.9
+# FluxServe maps the existing reference columns to total token throughput and
+# output token throughput, respectively. Baseline from the checked-in FluxServe
+# GSM8K run at 16-way concurrency; recalibrate after a GH200 baseline run.
+perf_reference:
+  16: [843.83, 552.45]

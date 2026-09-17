@@ -1,3 +1,4 @@
+# Adapted from https://github.com/inclusionAI/dInfer/blob/master/benchmarks/benchmark_dataset_sglang.py
 # Copyright (c) 2026 FLUX-OSS
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -18,6 +19,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Offline benchamrk scripts.
+"""
 
 import argparse
 import json

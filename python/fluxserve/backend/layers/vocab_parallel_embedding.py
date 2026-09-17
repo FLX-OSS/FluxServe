@@ -19,6 +19,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Vocab parallel embedding.
+"""
+
+
 import logging
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple

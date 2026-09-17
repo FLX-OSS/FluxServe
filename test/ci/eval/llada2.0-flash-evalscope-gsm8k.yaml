@@ -1,5 +1,5 @@
 api_version: ci.fluxserve.io/v1
-name: eval-llada2.0-mini-gsm8k
+name: eval-llada2.0-flash-gsm8k
 type: eval
 triggers:
   - per-commit
@@ -12,12 +12,12 @@ env:
 server:
   command: >-
     fluxserve serve
-    --model inclusionAI/LLaDA2.0-mini
+    --model inclusionAI/LLaDA2.0-flash
     --host 127.0.0.1
     --port 8000
-    --tp-size 1
+    --tp-size 4
     --dp-size 1
-    --ep-size 1
+    --ep-size 4
     --gpu-memory-utilization 0.8
     --max-num-seqs 16
     --max-model-len 65536
@@ -25,12 +25,11 @@ server:
     --block-length 64
     --parallel-decoding threshold
     --threshold 0.95
-    --attention-backend flashinfer
+    --attention-backend fa4
     --kv-cache-layout paged
     --scheduler-policy paged
     --use-decode-cuda-graph
     --cuda-graph-decode-mode padded
-    --cuda-graph-capture-bs 1 2 4 8 10 12 16
   ready:
     url: http://127.0.0.1:8000/health
     timeout: 1800
@@ -40,8 +39,8 @@ eval:
     - python3 -m venv /tmp/evalscope-venv && /tmp/evalscope-venv/bin/python -m pip install "evalscope @ git+https://github.com/modelscope/evalscope.git@acd09b44384d53174768bb1063f675420f76fae9"
   command: >-
     /tmp/evalscope-venv/bin/python -m evalscope.cli.cli eval
-    --model inclusionAI/LLaDA2.0-mini
-    --model-id llada2.0-mini
+    --model inclusionAI/LLaDA2.0-flash
+    --model-id llada2.0-flash
     --eval-type openai_api
     --api-url http://127.0.0.1:8000/v1/chat/completions
     --api-key EMPTY
