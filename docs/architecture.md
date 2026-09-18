@@ -12,7 +12,7 @@ FluxServe separates request handling, scheduling, and GPU execution. Its primary
 
 ## Serving runtime
 
-The [HTTP entrypoint](../python/fluxserve/backend/entrypoints/http_server.py) provides health checks and completion endpoints, including `/v1/completions` and `/v1/chat/completions`. The [CLI](../python/fluxserve/cli.py) configures model loading, scheduler policy, cache layout, decoding, and distributed execution.
+The [HTTP entrypoint](../python/fluxserve/backend/entrypoints/http_server.py) provides health checks and completion endpoints, including `/v1/completions` and `/v1/chat/completions`. The [CLI](../python/fluxserve/cli/__init__.py) parses `launch`, `bench`, `bench_offline`, and `env`, then loads the selected command. The [launch entrypoint](../python/fluxserve/cli/launch.py) configures model loading, scheduler policy, cache layout, decoding, and distributed execution.
 
 ## Block-level scheduling
 

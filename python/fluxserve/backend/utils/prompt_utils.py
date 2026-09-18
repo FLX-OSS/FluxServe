@@ -18,15 +18,23 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-
-"""Config compatibility for FluxServe backend."""
-
-from fluxserve.backend.configs.diffusion_gemma import register_diffusion_gemma_config
+"""Prompt rendering shared by offline benchmarking and online serving."""
 
 
-def register_configs() -> None:
-    """Register FluxServe-native Transformers configs."""
-    register_diffusion_gemma_config()
+def render_openai_messages(messages) -> str:
+    """Render OpenAI-style messages using the format expected by LLaDA 2."""
+    rendered = []
+    for message in messages:
+        role = message.get("role", "").upper()
+        content = message.get("content", "")
+        if role == "SYSTEM":
+            rendered.append(f"<role>SYSTEM</role>{content}<|role_end|>")
+        elif role == "ASSISTANT":
+            rendered.append(f"<role>ASSISTANT</role>{content}<|role_end|>")
+        else:
+            rendered.append(f"<role>HUMAN</role>{content}<|role_end|>")
+    rendered.append("<role>ASSISTANT</role>")
+    return "".join(rendered)
 
 
-__all__ = ["register_configs"]
+__all__ = ["render_openai_messages"]

@@ -6,7 +6,6 @@ from pathlib import Path
 import signal
 import socket
 import subprocess
-import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -84,10 +83,8 @@ def test_official_diffusion_gemma_single_gpu_server(tmp_path):
     base_url = f"http://127.0.0.1:{port}"
     log_path = Path(tmp_path) / "server.log"
     command = [
-        sys.executable,
-        "-m",
-        "fluxserve.cli",
-        "serve",
+        "fluxserve",
+        "launch",
         "--model",
         model_name,
         "--host",

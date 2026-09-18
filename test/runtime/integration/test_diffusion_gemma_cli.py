@@ -2,7 +2,6 @@ import json
 import math
 import os
 import subprocess
-import sys
 
 import pytest
 
@@ -37,9 +36,7 @@ def test_official_diffusion_gemma_offline_cli(tmp_path):
     ]
     dataset.write_text("".join(json.dumps(row) + "\n" for row in dataset_rows))
     command = [
-        sys.executable,
-        "-m",
-        "fluxserve.cli",
+        "fluxserve",
         "bench_offline",
         "--model",
         model_name,

@@ -6,12 +6,12 @@ triggers:
   - manual
 runner:
   labels:
-    - gh200-1gpu
+    - gh200-4gpu
 env:
   CI: "true"
 server:
   command: >-
-    fluxserve serve
+    fluxserve launch
     --model inclusionAI/LLaDA2.0-flash
     --host 127.0.0.1
     --port 8000

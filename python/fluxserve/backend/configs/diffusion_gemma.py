@@ -76,8 +76,6 @@ def register_diffusion_gemma_config() -> None:
             raise
 
 
-register_diffusion_gemma_config()
-
 __all__ = [
     "DiffusionGemmaConfig",
     "DiffusionGemmaTextConfig",

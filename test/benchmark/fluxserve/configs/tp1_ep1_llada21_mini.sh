@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # LLaDA2.1-mini, joint M2T/T2T decoding, Quality preset (0.7/0.5).
-exec fluxserve serve \
+exec fluxserve launch \
     --model inclusionAI/LLaDA2.1-mini \
     --host 127.0.0.1 \
     --port 8000 \

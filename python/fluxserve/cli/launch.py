@@ -19,22 +19,20 @@
 # SOFTWARE.
 
 
+"""
+    HTTP server startup and local worker execution.
+"""
+
 from __future__ import annotations
 
-import argparse
 import asyncio
 import logging
+import os
 
 import torch
 from transformers import AutoConfig, AutoTokenizer
 
-from fluxserve.bench import add_bench_subparser
-from fluxserve.bench_offline import (
-    StoreExplicit,
-    add_bench_offline_subparser,
-    bench_offline,
-    normalize_attention_backend_args,
-)
+from fluxserve.backend.configs import register_configs
 from fluxserve.backend.distributed.launch import (
     destroy_distributed,
     initialize_distributed,
@@ -60,257 +58,37 @@ from fluxserve.backend.utils.runtime_utils import require_nvidia_cuda
 from fluxserve.backend.utils.runtime_utils import profile_paged_kv_pages
 from fluxserve.backend.utils.server_args import ServerArgs
 
+from fluxserve.cli.utils import (
+    _check_block_routing_alignment,
+    _reject_unsupported_quantization,
+    default_cuda_graph_capture_batch_sizes,
+    normalize_attention_backend_args,
+    normalize_diffusion_gemma_serve_args,
+    set_process_title,
+)
+
 logger = logging.getLogger(__name__)
 
 
-def default_cuda_graph_capture_batch_sizes(max_num_seqs: int) -> tuple[int, ...]:
-    """Return batch size 1 and every positive even size up to the limit."""
-    max_num_seqs = int(max_num_seqs)
-    if max_num_seqs <= 0:
-        raise ValueError("max_num_seqs must be positive")
-    return (1, *range(2, max_num_seqs + 1, 2))
-
-
-def set_process_title(title: str) -> None:
-    try:
-        import setproctitle
-    except ImportError:
-        return
-    setproctitle.setproctitle(title)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="fluxserve")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    serve = sub.add_parser("serve", help='Launch the FluxServe server')
-    serve.add_argument("--model", "--model-name", dest="model_name", required=True)
-    serve.add_argument("--host", default="0.0.0.0")
-    serve.add_argument("--port", type=int, default=8000)
-    serve.add_argument(
-        "--apply-template",
-        action="store_true",
-        help=(
-            "Render chat requests with tokenizer.apply_chat_template(). "
-            "By default FluxServe uses its LLaDA-compatible prompt renderer."
-        ),
-    )
-    serve.add_argument("--device", default="cuda", help='GPU device type')
-    serve.add_argument("--max-num-seqs", type=int, default=16)
-    serve.add_argument("--max-scheduled-tokens", type=int, default=2048)
-    serve.add_argument("--max-model-len", type=int, default=65536)
-    serve.add_argument("--max-new-tokens", type=int, default=128)
-    serve.add_argument(
-        "--scheduler-policy",
-        choices=("default", "paged"),
-        default="default",
-    )
-    serve.add_argument("--scheduler-num-device-pages", type=int, default=0)
-    serve.add_argument("--gpu-memory-utilization", type=float, default=0.90)
-    serve.add_argument("--gpu-memory-safety-reserve", type=float, default=0.05)
-    serve.add_argument("--block-length", type=int, default=64)
-    serve.add_argument(
-        "--canvas-length",
-        "--canvas_length",
-        dest="canvas_length",
-        type=int,
-        default=None,
-        help=(
-            "Override the Diffusion-Gemma denoising canvas length. "
-            "Defaults to the checkpoint configuration."
-        ),
-    )
-    serve.add_argument(
-        "--max-denoising-steps",
-        type=int,
-        default=None,
-        help="Override checkpoint denoising steps (primarily for smoke tests).",
-    )
-    serve.add_argument("--prefilling-limit", type=int, default=128)
-    serve.add_argument("--mini-batch-size", type=int, default=4)
-    serve.add_argument(
-        "--attention-backend",
-        choices=("sdpa", "flex", "flashinfer", "fa4"),
-        default="fa4",
-        action=StoreExplicit,
-    )
-    serve.set_defaults(attention_backend_explicit=False)
-    serve.add_argument(
-        "--flashinfer-decode-batch-mode",
-        choices=("default", "max_batch"),
-        default="max_batch",
-    )
-    serve.add_argument(
-        "--flashinfer-prefill-mode",
-        choices=("dense", "ragged", "paged"),
-        default="paged",
-    )
-    serve.add_argument(
-        "--flashinfer-cache-mode",
-        choices=("dense", "paged"),
-        default="paged",
-    )
-    serve.add_argument(
-        "--kv-cache-layout",
-        choices=("dense", "paged"),
-        default="paged",
-    )
-    serve.add_argument("--page-size", type=int, default=None)
-    serve.add_argument("--parallel-decoding", default="threshold")
-    serve.add_argument("--threshold", type=float, default=0.95)
-    serve.add_argument("--low-threshold", type=float, default=0.3)
-    serve.add_argument(
-        "--editing-threshold",
-        type=float,
-        default=0.5,
-        help="LLaDA2.1 T2T editing threshold (joint_threshold decoding). "
-        "Official presets: 0.5 (Quality), 0.0 (Speed).",
-    )
-    serve.add_argument(
-        "--max-post-steps",
-        type=int,
-        default=16,
-        help="Max post-mask editing iterations per block (joint_threshold).",
-    )
-    serve.add_argument(
-        "--steps",
-        type=int,
-        default=0,
-        help="LLaDA2.2 M2T transfer-schedule steps (levenshtein_joint); "
-        "0 means block_length.",
-    )
-    serve.add_argument(
-        "--max-steps-per-block",
-        type=int,
-        default=1000,
-        help="Hard per-block iteration cap (levenshtein_joint).",
-    )
-    serve.add_argument("--tp-size", type=int, default=1)
-    serve.add_argument("--dp-size", type=int, default=1)
-    serve.add_argument("--ep-size", type=int, default=1)
-    serve.add_argument("--pp-size", type=int, default=1)
-    serve.add_argument("--enable-dp-attention", action="store_true", default=False)
-    serve.add_argument("--distributed-backend", default="nccl")
-    serve.add_argument("--use-cuda-graph", action="store_true")
-    serve.add_argument("--use-prefill-cuda-graph", action="store_true")
-    serve.add_argument("--use-decode-cuda-graph", action="store_true")
-    serve.add_argument("--cuda-graph-decode-mode", choices=("decomposed", "padded"), default="decomposed")
-    serve.add_argument(
-        "--cuda-graph-capture-bs",
-        "--cuda_graph_capture_bs",
-        type=int,
-        nargs="+",
-        default=None,
-        metavar="N",
-        help=(
-            "Decode CUDA graph batch sizes. Defaults to batch size 1 and "
-            "every even size up to --max-num-seqs."
-        ),
-    )
-    serve.add_argument(
-        "--cuda-graph-capture-sizes",
-        type=int,
-        nargs="+",
-        default=[64, 128, 256, 512, 1024],
-        metavar="N",
-        help="Prefill sequence-length buckets captured by CUDA graphs.",
-    )
-    serve.add_argument("--trust-remote-code", action="store_true", default=True)
-    serve.add_argument(
-        "--process-name",
-        default="fluxserve",
-        help="Process title shown by ps/top for online serving.",
-    )
-    sub.add_parser("env", help="Print environment and dependency information.")
-    add_bench_subparser(sub)
-    add_bench_offline_subparser(sub)
-    return parser
-
-
-def _reject_unsupported_quantization(model_config) -> None:
-    quant_config = getattr(model_config, "quantization_config", None)
-    if not isinstance(quant_config, dict):
-        return
-
-    nested = quant_config.get("quantization")
-    configs = (quant_config, nested) if isinstance(nested, dict) else (quant_config,)
-    for config in configs:
-        quant_method = str(config.get("quant_method", "")).lower()
-        quant_algo = str(config.get("quant_algo", "")).upper()
-        if "fp8" in quant_method or "FP8" in quant_algo or "FP4" in quant_algo:
-            raise ValueError(
-                "FluxServe does not currently support FP8 or FP4 quantized checkpoints. "
-                "Use an unquantized BF16/FP16 checkpoint."
-            )
-
-
-def _check_block_routing_alignment(model_config, block_length: int) -> None:
-    """LLaDA2.2 MoE block routing selects experts per config.block_size-token
-    window; serving blocks must tile those windows exactly."""
-    if not getattr(model_config, "expert_capacity", 0):
-        return
-    model_block_size = int(getattr(model_config, "block_size", 0) or 0)
-    if model_block_size and int(block_length) % model_block_size != 0:
-        raise ValueError(
-            f"this checkpoint uses MoE block routing with block_size="
-            f"{model_block_size}; --block-length ({block_length}) must be a "
-            "multiple of it."
-        )
-
-
-def normalize_diffusion_gemma_serve_args(args, model_config) -> bool:
-    architectures = set(getattr(model_config, "architectures", ()) or ())
-    is_diffusion_gemma = (
-        "DiffusionGemmaForBlockDiffusion" in architectures
-        or getattr(model_config, "model_type", None) == "diffusion_gemma"
-    )
-    if not is_diffusion_gemma:
-        return False
-    if args.attention_backend == "fa4":
-        raise ValueError("attention_backend='fa4' currently supports LLaDA 2.x only")
-    if args.canvas_length is not None and int(args.canvas_length) <= 0:
-        raise ValueError("--canvas-length must be positive")
-    if args.use_cuda_graph or args.use_prefill_cuda_graph:
-        raise ValueError(
-            "Diffusion-Gemma supports decode CUDA graphs only; use "
-            "--use-decode-cuda-graph."
-        )
-    if args.use_decode_cuda_graph:
-        if not getattr(args, "attention_backend_explicit", False):
-            args.attention_backend = "flashinfer"
-        if not (
-            args.attention_backend == "flashinfer"
-            and args.flashinfer_prefill_mode == "paged"
-            and args.flashinfer_cache_mode == "paged"
-            and args.kv_cache_layout == "paged"
-        ):
-            raise ValueError(
-                "Diffusion-Gemma decode CUDA graphs require FlashInfer paged "
-                "prefill, paged cache mode, and paged KV layout."
-            )
-    elif not getattr(args, "attention_backend_explicit", False):
-        args.attention_backend = "sdpa"
-        normalize_attention_backend_args(args)
-    return True
-
-
-def serve(args) -> None:
+def launch(args) -> None:
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     reject_external_distributed_launch()
     normalize_attention_backend_args(args)
     if should_launch_local_workers(args.tp_size):
         if args.process_name:
             set_process_title(f"{args.process_name}:supervisor")
         require_nvidia_cuda(args.device)
-        launch_local_workers(_serve_worker, args)
+        launch_local_workers(_launch_worker, args)
         return
-    _serve_worker(args)
+    _launch_worker(args)
 
 
-def _serve_worker(args, *, init_method: str = "env://") -> None:
+def _launch_worker(args, *, init_method: str = "env://") -> None:
     if args.process_name:
         set_process_title(args.process_name)
 
     require_nvidia_cuda(args.device)
+    register_configs()
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_name,
@@ -523,21 +301,3 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             asyncio.run(executor.run_worker_loop())
     finally:
         destroy_distributed()
-
-
-def main() -> None:
-    args = build_parser().parse_args()
-    if args.command == "serve":
-        serve(args)
-    elif args.command == "env":
-        from fluxserve.env import main as env_main
-
-        env_main()
-    elif args.command == "bench":
-        args.dispatch_function(args)
-    elif args.command == "bench_offline":
-        bench_offline(args)
-
-
-if __name__ == "__main__":
-    main()

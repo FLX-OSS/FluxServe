@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-exec fluxserve serve \
+exec fluxserve launch \
     --model google/diffusiongemma-26B-A4B-it \
     --host 127.0.0.1 \
     --port 8000 \

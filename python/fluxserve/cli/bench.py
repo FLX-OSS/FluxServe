@@ -18,8 +18,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-
-from __future__ import annotations
+"""
+    Online benchmark scripts.
+"""
 
 import argparse
 import asyncio
@@ -39,11 +40,9 @@ import aiohttp
 import numpy as np
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
-from fluxserve.prompt_utils import render_openai_messages
+from fluxserve.backend.utils.prompt_utils import render_openai_messages
 
 
-DEFAULT_TIMEOUT_SEC = 60 * 60
-SUPPORTED_METRICS = ("E2E", "QUEUE", "EXECUTION", "HTTP_OVERHEAD")
 METRIC_RESULT_NAMES = {
     "E2E": "e2e",
     "QUEUE": "queue",
@@ -114,21 +113,6 @@ def _percentile(values: list[float], percentile: float) -> float:
     if not values:
         return 0.0
     return float(np.percentile(values, percentile))
-
-
-def _parse_metrics(value: str) -> tuple[str, ...]:
-    requested = {item.strip().upper() for item in value.split(",") if item.strip()}
-    if not requested:
-        raise argparse.ArgumentTypeError("--metrics must contain at least E2E.")
-    unknown = requested.difference(SUPPORTED_METRICS)
-    if unknown:
-        supported = ", ".join(SUPPORTED_METRICS)
-        raise argparse.ArgumentTypeError(
-            f"Unknown metric(s): {', '.join(sorted(unknown))}. Supported metrics: {supported}."
-        )
-    if "E2E" not in requested:
-        raise argparse.ArgumentTypeError("--metrics must include E2E.")
-    return tuple(metric for metric in SUPPORTED_METRICS if metric in requested)
 
 
 def _create_benchmark_connector(max_concurrency: int | None = None) -> aiohttp.TCPConnector:
@@ -514,6 +498,7 @@ def summarize(
 
 
 async def run_serving_benchmark(args: argparse.Namespace) -> dict[str, Any]:
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     _set_ulimit()
     np.random.seed(args.seed)
 
@@ -651,40 +636,3 @@ async def run_serving_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             print(f"Error {i}: {error}")
 
     return result
-
-
-def add_bench_subparser(subparsers: argparse._SubParsersAction) -> None:
-    bench = subparsers.add_parser("bench", help="Online serving benchmark.")
-    bench_sub = bench.add_subparsers(dest="bench_type", required=True)
-    serve = bench_sub.add_parser("serve")
-    serve.add_argument("--model", required=True)
-    serve.add_argument("--dataset", required=True)
-    serve.add_argument("--tokenizer", default=None)
-    serve.add_argument("--base-url", default=None)
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8000)
-    serve.add_argument("--endpoint", default="/v1/chat/completions")
-    serve.add_argument("--num-prompts", type=int, default=None)
-    serve.add_argument("--dataset-output-len", type=int, default=None)
-    serve.add_argument("--request-rate", type=float, default=float("inf"))
-    serve.add_argument("--burstiness", type=float, default=1.0)
-    serve.add_argument("--max-concurrency", type=int, default=None)
-    serve.add_argument("--ready-check-timeout-sec", type=int, default=600)
-    serve.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SEC)
-    serve.add_argument("--seed", type=int, default=0)
-    serve.add_argument("--request-id-prefix", default="bench-")
-    serve.add_argument("--trust-remote-code", action="store_true", default=True)
-    serve.add_argument("--extra-body", type=json.loads, default={})
-    serve.add_argument("--ignore-eos", action="store_true")
-    serve.add_argument("--metric-percentiles", default="50,90,95,99")
-    serve.add_argument(
-        "--metrics",
-        type=_parse_metrics,
-        default=("E2E",),
-        help="Comma-separated output metrics; E2E is required (default: E2E).",
-    )
-    serve.add_argument("--save-result", action="store_true")
-    serve.add_argument("--save-detailed", action="store_true")
-    serve.add_argument("--result-dir", default="bench_results")
-    serve.add_argument("--output-file", default=None)
-    serve.set_defaults(dispatch_function=lambda args: asyncio.run(run_serving_benchmark(args)))

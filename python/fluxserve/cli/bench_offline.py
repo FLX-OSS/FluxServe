@@ -23,7 +23,6 @@
     Offline benchamrk scripts.
 """
 
-import argparse
 import json
 import os
 import string
@@ -35,6 +34,7 @@ import torch
 import tqdm
 from transformers import AutoConfig, AutoTokenizer
 
+from fluxserve.backend.configs import register_configs
 from fluxserve.backend.distributed.launch import (
     destroy_distributed,
     initialize_distributed,
@@ -57,32 +57,17 @@ from fluxserve.backend.layers.moe import initialize_moe_config
 from fluxserve.backend.metrics import record_batch_performance_metrics
 from fluxserve.backend.utils.server_args import ServerArgs
 from fluxserve.backend.utils.runtime_utils import require_nvidia_cuda
-from fluxserve.prompt_utils import render_openai_messages
+from fluxserve.cli.utils import (
+    _check_block_routing_alignment,
+    _reject_unsupported_quantization,
+    normalize_attention_backend_args,
+    set_process_title,
+)
+from fluxserve.backend.utils.prompt_utils import render_openai_messages
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 BUCKET_SIZE = 32
-
-
-class StoreExplicit(argparse.Action):
-    def __call__(self, parser, namespace, values, option_string=None):
-        setattr(namespace, self.dest, values)
-        setattr(namespace, f"{self.dest}_explicit", True)
-
-
-def normalize_attention_backend_args(args) -> None:
-    if args.attention_backend == "flashinfer":
-        return
-    args.flashinfer_prefill_mode = "dense"
-    args.flashinfer_cache_mode = "dense"
-    if args.attention_backend == "fa4":
-        if getattr(args, "kv_cache_layout", "paged") != "paged":
-            raise ValueError("attention_backend='fa4' requires --kv-cache-layout paged")
-        if getattr(args, "page_size", None) is None:
-            args.page_size = int(args.block_length)
-        return
-    args.kv_cache_layout = "dense"
-    args.page_size = None
 
 
 class BenchmarkLogger:
@@ -289,7 +274,11 @@ def build_runner_config(args, batch_info, model_config=None):
     while cache_length < batch_info.max_length:
         cache_lengths.append(cache_length)
         cache_length *= 2
-    cache_lengths.append(cache_length)
+    # ModelRunner takes the maximum of these buckets and max_length. Do not
+    # let a power-of-two bucket enlarge the configured paged-cache capacity.
+    cache_lengths.append(
+        batch_info.max_length if args.kv_cache_layout == "paged" else cache_length
+    )
     return RunnerConfig(
         gen_length=args.gen_len,
         block_length=args.block_length,
@@ -404,6 +393,48 @@ def maybe_disable_sorting(batch_info, disable_sorting):
     if disable_sorting:
         batch_info.sorted_indices = list(range(len(batch_info.input_lengths)))
     return batch_info
+
+
+def resolve_paged_cache_length(args, batch_info, *, is_diffusion_gemma=False):
+    """Size persistent storage for every benchmark batch before graph capture."""
+    requested = getattr(args, "max_model_length", None)
+    if requested is not None and requested <= 0:
+        raise ValueError("--max-model-length must be positive")
+    if args.kv_cache_layout != "paged":
+        if requested is not None:
+            raise ValueError("--max-model-length requires paged KV cache")
+        return batch_info.max_length
+
+    block_length = int(args.block_length)
+
+    def round_up(length):
+        return ((int(length) + block_length - 1) // block_length) * block_length
+
+    # The fixed-shape warmup uses one block of input and one block of output.
+    required = 2 * block_length
+    if args.use_cuda_graph or args.use_prefill_cuda_graph:
+        required = max(required, max(batch_info.prefill_lengths, default=0) + block_length)
+    if is_diffusion_gemma:
+        # Gemma generates complete canvases after each unpadded prompt.
+        for prompt, generation in zip(
+            batch_info.input_lengths, batch_info.padded_gen_lens, strict=True
+        ):
+            required = max(required, prompt + round_up(generation))
+    else:
+        # LLaDA pads prompts within each batch and rounds the total sequence.
+        indices = batch_info.sorted_indices
+        for offset in range(0, len(indices), args.batch_size):
+            batch = indices[offset : offset + args.batch_size]
+            prompt = max(batch_info.input_lengths[i] for i in batch)
+            generation = max(batch_info.padded_gen_lens[i] for i in batch)
+            required = max(required, round_up(prompt + generation))
+    if requested is not None and requested < required:
+        raise ValueError(
+            f"--max-model-length={requested} is too small: paged KV cache "
+            f"requires at least {required} tokens per sequence, including "
+            "block/canvas rounding and warmup"
+        )
+    return requested if requested is not None else required
 
 
 def percentile(values, pct):
@@ -535,8 +566,6 @@ def warmup_runner(runner, args, device, logger):
 
 @torch.no_grad()
 def run_worker(args, *, init_method: str = "env://"):
-    from fluxserve.cli import _reject_unsupported_quantization, set_process_title
-
     server_args = None
     context = None
     runner = None
@@ -549,6 +578,7 @@ def run_worker(args, *, init_method: str = "env://"):
     logger.info(f"started world_size={world_size} rank={rank} gpu_id={gpu_id} args={args}")
     torch.cuda.set_device(gpu_id)
     device = f"cuda:{gpu_id}"
+    register_configs()
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_name,
@@ -598,6 +628,13 @@ def run_worker(args, *, init_method: str = "env://"):
         ),
     )
     batch_info = maybe_disable_sorting(batch_info, args.disable_sorting)
+    batch_info.max_length = resolve_paged_cache_length(
+        args, batch_info, is_diffusion_gemma=is_diffusion_gemma
+    )
+    if args.kv_cache_layout == "paged":
+        logger.info(
+            f"[Info] Paged KV-cache capacity: {batch_info.max_length} tokens per sequence"
+        )
     logger.info(
         "[Info] Input batching order: "
         + ("original dataset order" if args.disable_sorting else "sorted by input length")
@@ -605,8 +642,6 @@ def run_worker(args, *, init_method: str = "env://"):
     log_input_shape_summary(input_lengths, batch_info, args, logger)
 
     logger.info("[Loading model]")
-    from fluxserve.cli import _check_block_routing_alignment
-
     _check_block_routing_alignment(model_config, args.block_length)
 
     server_args = build_server_args(args, model_config)
@@ -647,9 +682,7 @@ def run_worker(args, *, init_method: str = "env://"):
             f"kv_cache_layout={args.kv_cache_layout}, eos_ids={tuple(eos_ids)}"
         )
 
-        if is_diffusion_gemma and getattr(
-            runner, "flashinfer_graph_runner", None
-        ) is not None:
+        if is_diffusion_gemma and runner.use_flashinfer_paged:
             runner._paged_cache(
                 batch_info.max_length,
                 batch_size=args.batch_size,
@@ -823,104 +856,7 @@ def _write_results(
             f.write("\n")
 
 
-def add_bench_offline_subparser(subparsers) -> None:
-    parser = subparsers.add_parser("bench_offline", help="Offline batched benchmark.")
-    parser.add_argument("--model", "--model-name", "--model_name", dest="model_name", required=True)
-    parser.add_argument("--dataset", required=True)
-    parser.add_argument("--device", default="cuda")
-    parser.add_argument("--batch-size", "--batch_size", dest="batch_size", type=int, default=1)
-    parser.add_argument("--mini-batch-size", "--mini_batch_size", dest="mini_batch_size", type=int, default=4)
-    parser.add_argument("--use-naive-batching", "--use_naive_batching", dest="use_naive_batching", action="store_true")
-    parser.add_argument("--tp-size", "--tp_size", dest="tp_size", type=int, default=1)
-    parser.add_argument("--dp-size", "--dp_size", dest="dp_size", type=int, default=1)
-    parser.add_argument("--ep-size", "--ep_size", dest="ep_size", type=int, default=1)
-    parser.add_argument("--pp-size", "--pp_size", dest="pp_size", type=int, default=1)
-    parser.add_argument("--distributed-backend", "--distributed_backend", dest="distributed_backend", default="nccl")
-    parser.add_argument("--use-cuda-graph", "--use_cuda_graph", dest="use_cuda_graph", action="store_true")
-    parser.add_argument("--use-prefill-cuda-graph", "--use_prefill_cuda_graph", dest="use_prefill_cuda_graph", action="store_true")
-    parser.add_argument("--use-decode-cuda-graph", "--use_decode_cuda_graph", dest="use_decode_cuda_graph", action="store_true")
-    parser.add_argument(
-        "--cuda-graph-capture-sizes",
-        "--cuda_graph_capture_sizes",
-        dest="cuda_graph_capture_sizes",
-        type=int,
-        nargs="+",
-        default=[64, 128, 256, 512, 1024],
-        metavar="N",
-        help="Prefill sequence-length buckets captured by CUDA graphs.",
-    )
-    parser.add_argument("--prefilling-limit", "--prefilling_limit", dest="prefilling_limit", type=int, default=128)
-    parser.set_defaults(attention_backend_explicit=False)
-    parser.add_argument("--attention-backend", "--attention_backend", dest="attention_backend", choices=("sdpa", "flex", "flashinfer", "fa4"), default="flashinfer", action=StoreExplicit)
-    parser.add_argument("--flashinfer-decode-batch-mode", "--flashinfer_decode_batch_mode", dest="flashinfer_decode_batch_mode", choices=("default", "max_batch"), default="max_batch")
-    parser.add_argument("--flashinfer-prefill-mode", "--flashinfer_prefill_mode", dest="flashinfer_prefill_mode", choices=("dense", "ragged", "paged"), default="paged")
-    parser.add_argument("--flashinfer-cache-mode", "--flashinfer_cache_mode", dest="flashinfer_cache_mode", choices=("dense", "paged"), default="paged")
-    parser.add_argument("--kv-cache-layout", "--kv_cache_layout", dest="kv_cache_layout", choices=("dense", "paged"), default="paged")
-    parser.add_argument("--page-size", "--page_size", dest="page_size", type=int)
-    parser.add_argument("--gen-len", "--gen_len", dest="gen_len", type=int, default=1024)
-    parser.add_argument("--block-length", "--block_length", dest="block_length", type=int, default=64)
-    parser.add_argument(
-        "--canvas-length", "--canvas_length", dest="canvas_length", type=int
-    )
-    parser.add_argument(
-        "--max-denoising-steps",
-        "--max_denoising_steps",
-        dest="max_denoising_steps",
-        type=int,
-    )
-    parser.add_argument("--threshold", type=float, default=0.9)
-    parser.add_argument("--low-threshold", "--low_threshold", dest="low_threshold", type=float, default=0.3)
-    parser.add_argument("--parallel-decoding", "--parallel_decoding", dest="parallel_decoding", default="threshold")
-    parser.add_argument(
-        "--editing-threshold",
-        "--editing_threshold",
-        dest="editing_threshold",
-        type=float,
-        default=0.5,
-        help="LLaDA2.1 T2T editing threshold (joint_threshold decoding).",
-    )
-    parser.add_argument(
-        "--max-post-steps",
-        "--max_post_steps",
-        dest="max_post_steps",
-        type=int,
-        default=16,
-        help="Max post-mask editing iterations per block (joint_threshold).",
-    )
-    parser.add_argument(
-        "--steps",
-        type=int,
-        default=0,
-        help="LLaDA2.2 M2T transfer-schedule steps (levenshtein_joint); "
-        "0 means block_length.",
-    )
-    parser.add_argument(
-        "--max-steps-per-block",
-        "--max_steps_per_block",
-        dest="max_steps_per_block",
-        type=int,
-        default=1000,
-        help="Hard per-block iteration cap (levenshtein_joint).",
-    )
-    parser.add_argument("--use-credit", "--use_credit", dest="use_credit", action="store_true")
-    parser.add_argument("--dataset-format", "--dataset_format", dest="dataset_format", choices=("auto", "legacy", "openai"), default="openai")
-    parser.add_argument(
-        "--disable-sorting",
-        "--disable_sorting",
-        dest="disable_sorting",
-        action="store_true",
-        default=True,
-    )
-    parser.add_argument("--exp-name", "--exp_name", dest="exp_name", default="exp")
-    parser.add_argument("--output-dir", "--output_dir", dest="output_dir", default="runs/detailed_results")
-    parser.add_argument("--log-file", "--log_file", dest="log_file", default="run.log")
-    parser.add_argument("--trust-remote-code", "--trust_remote_code", dest="trust_remote_code", action="store_true", default=True)
-    parser.add_argument("--process-name", "--process_name", dest="process_name", default="fluxserve")
-
-
 def bench_offline(args) -> None:
-    from fluxserve.cli import set_process_title
-
     reject_external_distributed_launch()
     normalize_attention_backend_args(args)
     args.log_file = resolve_log_file(args)

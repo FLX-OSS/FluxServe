@@ -6,12 +6,12 @@ triggers:
   - manual
 runner:
   labels:
-    - gh200-1gpu
+    - gh200-4gpu
 env:
   CI: "true"
 server:
   command: >-
-    fluxserve serve
+    fluxserve launch
     --model google/diffusiongemma-26B-A4B-it
     --host 127.0.0.1
     --port 8000
