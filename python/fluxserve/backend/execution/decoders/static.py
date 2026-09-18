@@ -18,13 +18,14 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+""" 
+    Stactic deocder. Decode tokens in a fixed number of steps.
+"""
+
 from fluxserve.backend.execution.decoders.base import ParallelDecoder
 from fluxserve.backend.execution.decoders.utils import broadcast_if_needed, get_num_transfer_tokens, get_transfer_index
 
 class StaticParallelDecoder(ParallelDecoder):
-    """ 
-        Decode tokens in a fixed number of steps (static).
-    """
     def __init__(
             self,
             temperature,

@@ -1,8 +1,48 @@
 • Yes. The backend has several worthwhile refactoring opportunities. I would prioritize these:
 
+### Current status
+
+The first refactor is complete: `RequestState` now owns normal completion, error, and
+abort transitions, `OutputProcessor` delegates state mutation to it, and request latency
+timestamps use `time.monotonic()`.
+
+The first concrete cleanup items are also complete: the unused `TokenArray.expand()`
+no-op was removed and the duplicate `is_cpu()` definition was eliminated. The `AsyncLLM`
+lifecycle refactor remains the next larger refactor, after these isolated cleanups.
+
+### Next step: unify `AsyncLLM` request lifecycle handling
+
+`AsyncLLM` has two execution modes with overlapping lifecycle work:
+
+- FIFO execution in `python/fluxserve/backend/engine/async_llm.py:176`
+- Execution-plan handling in `python/fluxserve/backend/engine/async_llm.py:224`
+- Shared failure handling in `python/fluxserve/backend/engine/async_llm.py:315`
+
+Extract narrowly scoped helpers for the shared transitions:
+
+- `_complete_state(state, output, *, scheduler_finish=True)` to enqueue the final output,
+  record metrics, remove the state, and optionally finish it in the scheduler.
+- `_fail_state(state, error)` to mark execution complete, create the error output, record
+  error metrics, abort scheduler state, remove the request, and release executor resources.
+- `_complete_states(states)` or a small `_release_executor_requests(request_ids)` wrapper
+  for batch cleanup, preserving the execution-plan scheduler's `advance_forward` call.
+
+Do not merge FIFO batching with execution-plan token accounting. The refactor should only
+centralize lifecycle side effects; `advance_forward`, token results, reserved tokens, and
+decode-block accounting must remain in the execution-plan path.
+
+Acceptance criteria:
+
+1. FIFO and execution-plan success paths produce the same final state side effects as
+   today: output delivery, metrics, scheduler cleanup, and `_states` removal.
+2. FIFO batch failures, execution-plan failures, and client aborts each produce exactly one
+   terminal output and release executor requests exactly once.
+3. Existing scheduler and engine tests pass, with focused tests covering each lifecycle
+   helper and both execution modes.
+
 ### Highest-value refactors
 
-1. Unify request lifecycle handling in AsyncLLM
+1. Unify request lifecycle handling in AsyncLLM (next)
 
     FIFO execution and execution-plan handling duplicate state transitions, output creation,
     metrics recording, scheduler cleanup, and error handling.
@@ -13,7 +53,7 @@
     Extract helpers such as _complete_state, _fail_state, _remove_state, and
     _release_executor_requests. This would reduce behavioral drift between scheduler modes.
 
-2. Make RequestState the single owner of request state transitions
+2. Make RequestState the single owner of request state transitions (complete)
 
     RequestState already has append_output, but OutputProcessor duplicates its mutation logic:
     - Existing state mutation: python/fluxserve/backend/engine/request.py:56
@@ -71,20 +111,20 @@
 
 5. Fix the unimplemented public method
 
-    TokenArray.expand() is a concrete method that silently does nothing:
+    TokenArray.expand() was a concrete method that silently did nothing and had no
+    repository callers. It has been removed rather than preserving an unspecified resize
+    contract:
 
-    python/fluxserve/backend/managers/kvcache/dense.py:64
+    `python/fluxserve/backend/managers/kvcache/dense.py`
 
-    Either implement it or raise NotImplementedError. A silent no-op is difficult to diagnose
-    and should have a regression test.
+    Existing TokenArray consumers should continue using the fixed-size buffer created at
+    initialization.
 
 6. Remove duplicate runtime helper
 
-    is_cpu() is defined twice in runtime_utils.py:
-    - python/fluxserve/backend/utils/runtime_utils.py:207
-    - python/fluxserve/backend/utils/runtime_utils.py:215
+    Complete. `is_cpu()` is now defined once in runtime_utils.py.
 
-    The second definition currently masks the first.
+    The duplicate definition that previously masked the first has been removed.
 
 7. Separate compatibility shims from runtime utilities
 
@@ -137,15 +177,15 @@ backend-specific tensor construction remains in each implementation.
 
 ### Recommended order
 
-1. RequestState/OutputProcessor ownership and monotonic timing
-2. AsyncLLM lifecycle helper extraction
-3. HTTP endpoint deduplication
-4. ForwardBatch decomposition
-5. Typed distributed messages
-6. KV-cache and runner abstraction cleanup
+1. AsyncLLM lifecycle helper extraction
+2. HTTP endpoint deduplication
+3. ForwardBatch decomposition
+4. Typed distributed messages
+5. KV-cache and runner abstraction cleanup
 
 I would avoid broad refactoring of the CUDA kernels, rotary embedding, and MoE implementations
 initially; those files are large and performance-sensitive, so readability changes there
 should be driven by specific duplication or correctness problems.
 
-No files were changed in this analysis pass.
+This document tracks the completed `RequestState` refactor and the next `AsyncLLM`
+lifecycle refactor.

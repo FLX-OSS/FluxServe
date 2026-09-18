@@ -19,8 +19,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import copy
+"""
+    Dense KV cache.
+"""
 
+import copy
 import torch
 
 
@@ -60,9 +63,6 @@ class TokenArray:
     @property
     def device(self):
         return self.data.device
-
-    def expand(self, new_len):
-        pass
 
     def get_generated_tokens(self):
         if self.batch_size == 1:

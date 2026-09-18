@@ -18,6 +18,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Hierarchy decoder.
+    Only supports batch size 1.
+"""
+
 import math
 
 import torch
@@ -28,11 +33,6 @@ from fluxserve.backend.execution.decoders.utils import add_gumbel_noise, broadca
 
 
 class HierarchyDecoder(ParallelDecoder):
-    """
-        Decode tokens hierarchically to force separate decisions.
-        Only supports batch size 1.
-    """
-
     def __init__(
         self,
         temperature,

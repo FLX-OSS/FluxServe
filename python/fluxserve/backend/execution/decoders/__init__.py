@@ -18,13 +18,75 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from fluxserve.backend.execution.forward_batch_info import RunnerConfig
+from fluxserve.backend.utils.server_args import ServerArgs
+
 from .base import ParallelDecoder
-from .factory import load_decoder
 from .diffusion_gemma import DiffusionGemmaDecoder, DiffusionGemmaSamplingConfig
 from .hierarchy import HierarchyDecoder
 from .joint_threshold import JointThresholdDecoder
 from .static import StaticParallelDecoder
 from .threshold import CreditThresholdParallelDecoder, ThresholdParallelDecoder
+
+KNOWN_DECODERS = ("threshold", "joint_threshold", "hierarchy")
+
+
+def load_decoder(config: RunnerConfig | ServerArgs):
+    """Create the configured decoder implementation."""
+    parallel_decoding = getattr(config, "parallel_decoding", "threshold")
+    threshold = getattr(config, "threshold", 0.9)
+    low_threshold = getattr(config, "low_threshold", 0.3)
+    use_credit = getattr(config, "use_credit", False)
+    mask_id = getattr(config, "mask_id", 156895)
+    eos_id = getattr(config, "eos_id", 156892)
+
+    if parallel_decoding == "threshold":
+        if use_credit:
+            return CreditThresholdParallelDecoder(
+                temperature=0,
+                threshold=threshold,
+                mask_id=mask_id,
+                eos_id=eos_id,
+            )
+        return ThresholdParallelDecoder(
+            temperature=0,
+            threshold=threshold,
+            mask_id=mask_id,
+            eos_id=eos_id,
+        )
+
+    if parallel_decoding == "joint_threshold":
+        num_to_transfer = getattr(config, "num_to_transfer", 1)
+        if num_to_transfer != 1:
+            raise ValueError(
+                "joint_threshold only implements num_to_transfer=1 "
+                f"(got {num_to_transfer}); the reference two-branch selection "
+                "for larger values is not implemented."
+            )
+        return JointThresholdDecoder(
+            temperature=0,
+            threshold=threshold,
+            editing_threshold=getattr(config, "editing_threshold", 0.5),
+            mask_id=mask_id,
+            eos_id=eos_id,
+        )
+
+    if parallel_decoding == "hierarchy":
+        # HierarchyDecoder has no batch_decode and cannot run under the
+        # current runners; it is kept only for explicit opt-in use.
+        return HierarchyDecoder(
+            temperature=0,
+            threshold=threshold,
+            low_threshold=low_threshold,
+            mask_id=mask_id,
+            eos_id=eos_id,
+        )
+
+    raise ValueError(
+        f"Unknown parallel_decoding {parallel_decoding!r}; "
+        f"expected one of {KNOWN_DECODERS}."
+    )
+
 
 __all__ = [
     "CreditThresholdParallelDecoder",

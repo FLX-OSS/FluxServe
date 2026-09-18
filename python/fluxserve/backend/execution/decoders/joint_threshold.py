@@ -18,18 +18,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""LLaDA2.1 joint Mask-to-Token / Token-to-Token decoding.
-
-Reference: ``LLaDA2MoeModelLM.generate()`` shipped inside the
-``inclusionAI/LLaDA2.1-mini`` checkpoint. Two deliberate deviations from that
-reference (see dev-notes/llada2.1-model-support-development-guide.md):
-
-- the ``mask_id`` logit is suppressed before the argmax so that no update path
-  can ever write a mask back into the block (the paper states this invariant;
-  the reference does not enforce it); and
-- M2T uses ``confidence >= actual_threshold`` (matching the existing 2.0
-  decoder) where the reference uses a strict ``>``. The two differ only on an
-  exact floating-point tie at the threshold value.
+"""
+    LLaDA2.1 joint Mask-to-Token / Token-to-Token decoder (M2T + T2T token editing).
 """
 
 import numpy as np
@@ -139,8 +129,6 @@ def joint_threshold_graph_step(
 
 
 class JointThresholdDecoder(ParallelDecoder):
-    """LLaDA2.1 joint threshold decoding (M2T + T2T token editing)."""
-
     # Signals the runners to pass prompt_lengths / allow_edit to batch_decode.
     needs_editing_inputs = True
     # The selection is a fixed-shape tensor program at temperature 0, so the
