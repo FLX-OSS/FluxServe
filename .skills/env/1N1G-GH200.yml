@@ -1,0 +1,5 @@
+gpu_arch: Hopper
+gpu_ids: [0] 
+use_all_gpus: false
+runtime: Apptainer 
+command: ./gh200/run_fa4_container.sh

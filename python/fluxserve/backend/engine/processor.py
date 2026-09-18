@@ -21,7 +21,6 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from fluxserve.backend.engine.io_struct import GenerateReqInput, GenerateReqOutput
@@ -84,35 +83,10 @@ class OutputProcessor:
         text: str,
         finish_reason: str | None,
     ) -> GenerateReqOutput:
-        state.output_ids.extend(token_ids)
-        state.decoded_text += text
-        if finish_reason is not None:
-            state.finished_reason = finish_reason
-            state.completed_time = time.time()
-        return GenerateReqOutput(
-            rid=state.rid,
-            text=text,
-            token_ids=token_ids,
-            finish_reason=state.finished_reason,
-            meta=state.output_metadata() if state.finished else {},
-        )
+        return state.append_output(token_ids, text, finish_reason)
 
     def make_error_output(self, state: RequestState, error: str) -> GenerateReqOutput:
-        state.finished_reason = "error"
-        state.completed_time = time.time()
-        return GenerateReqOutput(
-            rid=state.rid,
-            error=error,
-            finish_reason="error",
-            meta=state.output_metadata(),
-        )
+        return state.make_error_output(error)
 
     def make_abort_output(self, state: RequestState, reason: str) -> GenerateReqOutput:
-        state.finished_reason = "abort"
-        state.completed_time = time.time()
-        return GenerateReqOutput(
-            rid=state.rid,
-            error=reason,
-            finish_reason="abort",
-            meta=state.output_metadata(),
-        )
+        return state.make_abort_output(reason)

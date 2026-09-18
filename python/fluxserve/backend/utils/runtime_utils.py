@@ -212,10 +212,6 @@ def is_cuda() -> bool:
     return torch.cuda.is_available()
 
 
-def is_cpu() -> bool:
-    return not torch.cuda.is_available()
-
-
 def is_hip() -> bool:
     return False
 

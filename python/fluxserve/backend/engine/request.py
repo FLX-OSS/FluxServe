@@ -36,7 +36,7 @@ class RequestState:
     ignore_eos: bool = False
     prompt_text: str = ""
     sampling_params: dict[str, Any] = field(default_factory=dict)
-    created_time: float = field(default_factory=time.time)
+    created_time: float = field(default_factory=time.monotonic)
     queued_time: float | None = None
     scheduled_time: float | None = None
     execution_start_time: float | None = None
@@ -57,14 +57,36 @@ class RequestState:
         self.output_ids.extend(token_ids)
         self.decoded_text += text
         if finish_reason is not None:
-            self.finished_reason = finish_reason
-            self.completed_time = time.time()
+            self.finish(finish_reason)
         return GenerateReqOutput(
             rid=self.rid,
             text=text,
             token_ids=token_ids,
             finish_reason=self.finished_reason,
             meta=self.output_metadata() if self.finished else {},
+        )
+
+    def finish(self, reason: str) -> None:
+        self.finished_reason = reason
+        if self.completed_time is None:
+            self.completed_time = time.monotonic()
+
+    def make_error_output(self, error: str) -> GenerateReqOutput:
+        self.finish("error")
+        return GenerateReqOutput(
+            rid=self.rid,
+            error=error,
+            finish_reason=self.finished_reason,
+            meta=self.output_metadata(),
+        )
+
+    def make_abort_output(self, reason: str) -> GenerateReqOutput:
+        self.finish("abort")
+        return GenerateReqOutput(
+            rid=self.rid,
+            error=reason,
+            finish_reason=self.finished_reason,
+            meta=self.output_metadata(),
         )
 
     @property
@@ -97,10 +119,10 @@ class RequestState:
         return self.completed_time - self.created_time
 
     def mark_queued(self) -> None:
-        self.queued_time = time.time()
+        self.queued_time = time.monotonic()
 
     def mark_scheduled(self) -> None:
-        now = time.time()
+        now = time.monotonic()
         if self.scheduled_time is None:
             self.scheduled_time = now
         if self.execution_start_time is None:
@@ -110,7 +132,7 @@ class RequestState:
         self.current_decode_block += 1
 
     def mark_execution_done(self) -> None:
-        self.execution_end_time = time.time()
+        self.execution_end_time = time.monotonic()
 
     def output_metadata(self) -> dict[str, Any]:
         return {
