@@ -1,5 +1,9 @@
 # Benchmarking
 
+Use `fluxserve launch` to start a server, `fluxserve bench` for online benchmarks,
+and `fluxserve bench_offline` for offline benchmarks. The former `fluxserve serve`
+and `fluxserve bench serve` command forms have been removed.
+
 ## Offline Benchmark
 FluxServe supports offline throughput benchmarking with JSONL input files. Complete the [Docker installation](getting_started.md) first and run the examples from the FluxServe repository directory.
 ```bash
@@ -15,12 +19,18 @@ fluxserve bench_offline \
   --use-decode-cuda-graph
 ```
 
+For offline runs with paged KV cache, add `--max-model-length 2048` to reserve
+2,048 tokens per sequence before warmup. This includes prompt and generation
+space; the value must also cover block/canvas rounding. If omitted, capacity is
+calculated from the dataset and warmup requirements. A value that is too small
+is rejected before model loading.
+
 ## Online Benchmark
 
 1. Launch FluxServe engine
 
 ```bash
-fluxserve serve \
+fluxserve launch \
   --model inclusionAI/LLaDA2.0-mini \
   --host 127.0.0.1 \
   --port 8000 \
@@ -47,7 +57,7 @@ curl -fsS http://127.0.0.1:8000/health
 
 3. In another shell, run the benchmark client against the running server.
 ```bash
-fluxserve bench serve \
+fluxserve bench \
   --model inclusionAI/LLaDA2.0-mini \
   --dataset ./data/humaneval.jsonl \
   --dataset-output-len 512 \

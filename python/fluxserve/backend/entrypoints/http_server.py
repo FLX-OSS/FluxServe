@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from fluxserve import __version__
 from fluxserve.backend.engine import AsyncLLM, GenerateReqInput
 from fluxserve.backend.entrypoints.api_utils import log_startup_banner
-from fluxserve.prompt_utils import render_openai_messages
+from fluxserve.backend.utils.prompt_utils import render_openai_messages
 
 
 @dataclass

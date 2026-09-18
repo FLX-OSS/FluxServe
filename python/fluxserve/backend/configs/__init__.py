@@ -21,3 +21,12 @@
 
 """Config compatibility for FluxServe backend."""
 
+from fluxserve.backend.configs.diffusion_gemma import register_diffusion_gemma_config
+
+
+def register_configs() -> None:
+    """Register FluxServe-native Transformers configs."""
+    register_diffusion_gemma_config()
+
+
+__all__ = ["register_configs"]

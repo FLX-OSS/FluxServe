@@ -19,7 +19,7 @@
 # SOFTWARE.
 
 
-"""Batch-level attention backend selection for diffusion language models.
+"""Batch-level attention backend selection for diffusion language models. (Experiemental Only)
 
 The selector is intentionally independent of CUDA and of any one attention
 implementation.  A scheduler or runner describes the work it intends to put

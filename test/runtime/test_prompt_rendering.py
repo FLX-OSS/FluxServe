@@ -1,4 +1,4 @@
-from fluxserve.prompt_utils import render_openai_messages
+from fluxserve.backend.utils.prompt_utils import render_openai_messages
 from fluxserve.backend.entrypoints.http_server import _messages_to_prompt
 
 

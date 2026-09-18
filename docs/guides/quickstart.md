@@ -5,7 +5,7 @@ Launch LLaDA2.0-mini and send a chat completion request. Complete the [Docker in
 ## Launch the server
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 fluxserve serve \
+CUDA_VISIBLE_DEVICES=0 fluxserve launch \
   --model inclusionAI/LLaDA2.0-mini \
   --host 127.0.0.1 \
   --port 8000 \

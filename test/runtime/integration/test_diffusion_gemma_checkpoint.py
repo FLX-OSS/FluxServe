@@ -4,9 +4,9 @@ import os
 import pytest
 import torch
 
-import fluxserve  # noqa: F401 - registers the native Transformers config
 from transformers import AutoConfig, AutoTokenizer
 
+from fluxserve.backend.configs import register_configs
 from fluxserve.backend.distributed.launch import (
     destroy_distributed,
     initialize_distributed,
@@ -22,6 +22,8 @@ from fluxserve.backend.utils.server_args import ServerArgs
 
 MODEL_ID = "google/diffusiongemma-26B-A4B-it"
 RUN_SMOKE = "FLUXSERVE_RUN_DIFFUSION_GEMMA_SMOKE"
+
+register_configs()
 
 
 @pytest.mark.skipif(

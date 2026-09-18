@@ -18,6 +18,14 @@ from pipeline import (
 )
 
 
+@pytest.mark.parametrize("cmdline", [
+    "/usr/bin/python /usr/local/bin/fluxserve launch --model foo",
+    "fluxserve launch --model foo",
+])
+def test_stale_process_patterns_match_fluxserve_launch(cmdline):
+    assert any(re.search(pattern, cmdline) for pattern in STALE_PROCESS_PATTERNS)
+
+
 def test_stale_process_patterns_match_smg_router_proctitle():
     """`smg launch` rewrites its cmdline to `smg::router` via setproctitle;
     the cleanup list must still match after that, otherwise stale routers
@@ -34,7 +42,7 @@ def test_stale_process_patterns_match_smg_router_proctitle():
 
 def test_stale_process_patterns_match_existing_targets():
     cmdlines = [
-        "/usr/bin/python /usr/local/bin/fluxserve serve --model foo",
+        "/usr/bin/python /usr/local/bin/fluxserve launch --model foo",
         "/usr/bin/python -m smg launch --worker-urls grpc://127.0.0.1:1234",
         "/usr/bin/python /repo/test/runtime/run_ci_suite.py --device cuda",
     ]

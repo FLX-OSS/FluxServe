@@ -11,7 +11,7 @@ env:
   CI: "true"
 server:
   command: >-
-    fluxserve serve
+    fluxserve launch
     --model inclusionAI/LLaDA2.1-mini
     --host 127.0.0.1
     --port 8000
@@ -27,7 +27,7 @@ server:
     --threshold 0.7
     --editing-threshold 0.5
     --max-post-steps 16
-    --attention-backend flashinfer
+    --attention-backend fa4
     --kv-cache-layout paged
     --scheduler-policy paged
     --use-decode-cuda-graph

@@ -1,4 +1,4 @@
-# LLaDA2.1-mini
+# LLaDA2.0-mini
 
 ```bash
 fluxserve launch \
@@ -13,7 +13,7 @@ fluxserve launch \
   --use-decode-cuda-graph
 ```
 
-# LLaDA2.1-flash (TP=EP=4)
+# LLaDA2.0-flash (TP=EP=4)
 ```bash
 fluxserve launch \
   --model inclusionAI/LLaDA2.0-flash \

@@ -19,7 +19,10 @@
 # SOFTWARE.
 
 
-"""Native FluxServe full-model FA4 decode graphs with mutable paged KV inputs."""
+"""
+    FA4 decode graphs runner
+"""
+
 from __future__ import annotations
 
 import bisect

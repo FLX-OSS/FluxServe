@@ -67,7 +67,7 @@ def reject_external_distributed_launch(
     world_size = _read_int_env(env, "WORLD_SIZE", default=1)
     if world_size > 1:
         raise RuntimeError(
-            "External distributed launch is not supported. Run `fluxserve serve` "
+            "External distributed launch is not supported. Run `fluxserve launch` "
             "directly and use --tp-size/--ep-size to launch local GPU workers."
         )
 

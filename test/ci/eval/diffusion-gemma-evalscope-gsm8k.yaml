@@ -6,18 +6,18 @@ triggers:
   - manual
 runner:
   labels:
-    - gh200-1gpu
+    - gh200-4gpu
 env:
   CI: "true"
 server:
   command: >-
-    fluxserve serve
+    fluxserve launch
     --model google/diffusiongemma-26B-A4B-it
     --host 127.0.0.1
     --port 8000
-    --tp-size 1
+    --tp-size 4
     --dp-size 1
-    --ep-size 1
+    --ep-size 4
     --gpu-memory-utilization 0.6
     --max-num-seqs 4
     --max-model-len 8192
@@ -30,7 +30,6 @@ server:
     --scheduler-policy default
     --use-decode-cuda-graph
     --cuda-graph-decode-mode padded
-    --cuda-graph-capture-bs 1 2 4
   ready:
     url: http://127.0.0.1:8000/health
     timeout: 1800

@@ -18,10 +18,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""FluxServe execution APIs.
-
-Import concrete runners from ``fluxserve.backend.execution.runners`` and
-decoders from ``fluxserve.backend.execution.decoders``.
+"""
+    FluxServe execution APIs.
 """
 
 from .forward_batch_info import (

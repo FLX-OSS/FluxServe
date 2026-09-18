@@ -6,7 +6,6 @@ import os
 import pytest
 import torch
 
-import fluxserve  # noqa: F401
 from transformers import (
     AutoConfig,
     AutoTokenizer,
@@ -14,6 +13,7 @@ from transformers import (
     DiffusionGemmaGenerationConfig,
 )
 
+from fluxserve.backend.configs import register_configs
 from fluxserve.backend.distributed.launch import destroy_distributed, initialize_distributed
 from fluxserve.backend.execution.forward_batch_info import RunnerConfig
 from fluxserve.backend.execution.runners.diffusion_gemma import DiffusionGemmaRunner
@@ -26,6 +26,8 @@ RUN_PARITY = "FLUXSERVE_RUN_DIFFUSION_GEMMA_PARITY"
 CANVAS_LENGTH = 256
 MAX_DENOISING_STEPS = 48
 GENERATION_LENGTH = 256
+
+register_configs()
 
 
 def _cosine(a, b):
