@@ -124,12 +124,15 @@ def test_runner_commits_final_input_and_ignores_prompt_eos(runner_kind, eos):
 @pytest.mark.parametrize('eos', [13, 16])
 @pytest.mark.parametrize('ignore_eos', [False, True])
 @pytest.mark.parametrize('transient', [False, True])
-def test_online_publishes_only_stable_block(eos, ignore_eos, transient):
+@pytest.mark.parametrize('backend', ['flashinfer', 'fa4'])
+def test_online_publishes_only_stable_block(eos, ignore_eos, transient, backend):
     from fluxserve.backend.engine.request import RequestState
     from fluxserve.backend.execution.runners.flashinfer_diffusion import FlashInferDiffusionRunner
+    from fluxserve.backend.execution.runners.fa4_diffusion import FA4DiffusionRunner
     from fluxserve.backend.execution.runners.utils import gather_blocks
 
-    runner = FlashInferDiffusionRunner.__new__(FlashInferDiffusionRunner)
+    cls = FlashInferDiffusionRunner if backend == 'flashinfer' else FA4DiffusionRunner
+    runner = cls.__new__(cls)
     runner.device = 'cpu'
     runner.block_length = 4
     runner.server_args = SimpleNamespace(max_num_seqs=5)

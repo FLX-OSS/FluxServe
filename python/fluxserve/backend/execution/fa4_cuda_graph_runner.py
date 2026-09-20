@@ -103,12 +103,19 @@ class FA4CudaGraphRunner:
         prompt = torch.ones_like(ids, dtype=torch.bool)
         allow_edit = torch.zeros(batch_size, device=device, dtype=torch.bool)
         fused = bool(getattr(runner.decoder, "graph_fused_step", False))
+        extra_inputs = (
+            runner.decoder.graph_extra_buffers(batch_size, length, device)
+            if fused and getattr(runner.decoder, "graph_extra_state", False)
+            else {}
+        )
 
         def forward():
             hidden, _ = runner.model.model(ids, positions, kv, use_cache=False,
                                            attention_mask=None, forward_batch=batch)
             logits = runner.model._get_logits(hidden)
-            step = runner.decoder.graph_step(logits, ids, prompt, allow_edit) if fused else None
+            step = runner.decoder.graph_step(
+                logits, ids, prompt, allow_edit, **extra_inputs
+            ) if fused else None
             return logits, step
 
         stream = torch.cuda.Stream(device=device)
@@ -128,10 +135,11 @@ class FA4CudaGraphRunner:
         return SimpleNamespace(graph=graph, input_ids=ids, position_ids=positions,
                                metadata=metadata, dummy_pages=dummy_pages,
                                prompt_positions=prompt, allow_edit=allow_edit,
-                               logits=logits, step=step)
+                               logits=logits, step=step, extra_inputs=extra_inputs)
 
     @torch.inference_mode()
-    def replay(self, runner, input_ids, position_ids, seq_ids, prompt_positions=None, allow_edit=None):
+    def replay(self, runner, input_ids, position_ids, seq_ids, prompt_positions=None,
+               allow_edit=None, extra_inputs=None):
         if self.cache is not runner.past_key_values:
             raise RuntimeError("FA4 graph KV allocation changed; recapture before replay")
         actual = input_ids.shape[0]
@@ -145,6 +153,14 @@ class FA4CudaGraphRunner:
             raise ValueError("FA4 graph expects one full decode block per row")
         if entry.step is not None and (prompt_positions is None or allow_edit is None):
             raise ValueError("Joint decode graph requires prompt protection and editing budget")
+        buffers = entry.extra_inputs
+        if buffers:
+            if extra_inputs is None or buffers.keys() != extra_inputs.keys():
+                raise ValueError("FA4 decode graph requires complete decoder row state")
+            padding = runner.decoder.graph_extra_padding()
+            for name, buffer in buffers.items():
+                buffer[:actual].copy_(extra_inputs[name])
+                buffer[actual:].fill_(padding.get(name, 0))
         entry.input_ids[:actual].copy_(input_ids)
         entry.position_ids[:actual].copy_(position_ids)
         metadata = entry.metadata
@@ -170,8 +186,12 @@ class FA4CudaGraphRunner:
         entry.graph.replay()
         self.replay_count += 1
         self.padded_rows += size - actual
-        return SimpleNamespace(logits=entry.logits[:actual],
-                               step=None if entry.step is None else tuple(t[:actual] for t in entry.step))
+        step = None
+        if entry.step is not None:
+            step = tuple(t[:actual] for t in entry.step[:4])
+            if len(entry.step) == 5:
+                step += ({name: value[:actual] for name, value in entry.step[4].items()},)
+        return SimpleNamespace(logits=entry.logits[:actual], step=step)
 
     def stats(self):
         return {"decode_capture_count": len(self.entries),
