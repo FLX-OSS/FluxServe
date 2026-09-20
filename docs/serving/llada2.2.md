@@ -43,8 +43,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python -m fluxserve.cli serve \
   `--max-post-steps` bounds refinement after original masks disappear;
   `--max-steps-per-block` forces final resolution at the hard cap.
 - Both stop IDs (`156892`, `156900`) load from `generation_config.json`.
-- Decode CUDA graphs use padded batches. The fused decoder step is implemented;
-  H200 capture/replay validation remains outstanding.
+- Decode CUDA graphs use padded batches and include the fused decoder step.
 - For dense-only FlashInfer builds, replace the last five flags with
   `--kv-cache-layout dense --flashinfer-cache-mode dense
   --flashinfer-prefill-mode dense`; this disables decode graphs.
