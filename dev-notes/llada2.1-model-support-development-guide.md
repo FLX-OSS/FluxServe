@@ -251,6 +251,10 @@ and test streaming and non-streaming using identical request parameters.
 
 ## 7. Distributed execution and CUDA graphs
 
+LLaDA2.1 supports FlashInfer and FlashAttention-4 (FA4), including eager
+execution and decode CUDA graphs. Select FA4 with `--attention-backend fa4`
+and `--kv-cache-layout paged`.
+
 ### Rank agreement
 
 All ranks participating in the same request must agree on tokens, completion,
@@ -260,7 +264,9 @@ predicates from the synchronized result and the previous synchronized input.
 This makes budget and block advancement follow the same decisions.
 
 The fused graph returns local `had_mask`, `changed`, and `block_finished`
-alongside updated tokens. The runner consumes these predicates directly.
+alongside updated tokens. The FA4 runner broadcasts both tokens and predicates
+before updating editing budgets or advancing blocks. The FlashInfer runner
+consumes the graph predicates directly.
 Consequently, graph execution depends on predicate agreement across ranks;
 broadcasting tokens alone does not repair a divergent local predicate. A
 robust distributed test injects different local selection results and checks
@@ -276,7 +282,7 @@ predicates. The graph includes the model forward and lm_head. Dynamic token
 array scatter, synchronization, budget updates, and block advancement remain
 outside capture.
 
-Decode graph execution requires the FlashInfer paged cache. The serving
+Decode graph execution uses paged KV with FlashInfer or FA4. The serving
 configuration controls it with:
 
 ```text
@@ -288,10 +294,14 @@ configuration controls it with:
 Use capture sizes appropriate to the configured batch limit. In padded mode,
 unused rows receive protected prompt positions, no editing allowance, and
 isolated dummy KV storage; only real rows are returned to the runner. In
-decomposed mode, each component gathers budget state using global row IDs.
+FlashInfer decomposed mode, each component gathers budget state using global row IDs.
 Every replay refreshes token IDs, positions, page metadata, prompt masks, and
 editing allowances. A previous replay's inputs must never survive as live row
 state.
+
+FA4 decode graphs require padded mode, `page_size == block_length`,
+`TP=EP >= 1`, `DP=PP=1`, and `moe_a2a_backend='none'`. Capture buckets must
+cover `max_num_seqs`. FA4 prefill CUDA graphs are not supported.
 
 ## 8. Test plan
 
@@ -401,6 +411,8 @@ All paths below are relative to the repository root.
 | `python/fluxserve/backend/execution/runners/block_diffusion.py` | Dense/offline block loop and editing inputs |
 | `python/fluxserve/backend/execution/runners/flashinfer_diffusion.py` | Paged block execution and graph integration |
 | `python/fluxserve/backend/execution/flashinfer_cuda_graph_runner.py` | Static capture buffers and replay metadata |
+| `python/fluxserve/backend/execution/runners/fa4_diffusion.py` | FA4 paged execution and synchronized decode progression |
+| `python/fluxserve/backend/execution/fa4_cuda_graph_runner.py` | FA4 padded decode graph capture and replay |
 | `python/fluxserve/cli.py` / `python/fluxserve/bench_offline.py` | Online/offline configuration plumbing |
 | `test/runtime/test_joint_threshold_decoder.py` | Selection, budget, factory, and graph-tail tests |
 | `test/runtime/test_block_finished_equivalence.py` | Legacy completion-predicate regression |

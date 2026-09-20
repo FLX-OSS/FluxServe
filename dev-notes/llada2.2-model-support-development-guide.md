@@ -355,6 +355,10 @@ Do not expose provisional active-block KV as a reusable prefix-cache entry.
 
 ## 8. Distributed execution and CUDA graphs
 
+LLaDA2.2 supports FlashInfer and FlashAttention-4 (FA4), including eager
+execution and decode CUDA graphs with Levenshtein row state. Select FA4 with
+`--attention-backend fa4` and `--kv-cache-layout paged`.
+
 ### Synchronization contract
 
 In eager decoding, tokens and mutable step outputs are broadcast before
@@ -363,7 +367,9 @@ synchronized pre-scan token sequence and append decision. Initialization derives
 synchronized input block; every rank must select the same rows and offsets.
 
 Graph replay similarly returns updated tokens and extra row-state outputs.
-The runner broadcasts these, but consumes graph completion predicates locally.
+The FA4 runner broadcasts tokens, row-state outputs, and completion predicates
+before committing state or advancing blocks. The FlashInfer runner broadcasts
+tokens and row-state outputs, but consumes graph completion predicates locally.
 Thus agreement of token/state broadcasts alone is insufficient: divergent
 local `changed` or `block_finished` values can still advance ranks differently.
 Predicate synchronization or recomputation from synchronized tokens is needed
@@ -392,10 +398,17 @@ outside capture. Finalized padding rows perform no writes, counter increments,
 or history appends. Returned tensors are sliced to the actual batch size.
 Dummy attention metadata must also isolate their KV writes from live requests.
 
-Decode CUDA graphs require paged FlashInfer KV. The serving guide enables
-padded capture sizes `1 2 4 8`. Dense fallback uses eager execution. Decomposed
-capture batches gather state by global row ID, just like eager sub-batches.
-Test H200 capture/replay with the actual FlashInfer build and model; fixed
+Decode CUDA graphs use paged KV with FlashInfer or FA4. The serving guide
+enables padded capture sizes `1 2 4 8`. Dense fallback uses eager execution.
+FlashInfer decomposed capture batches gather state by global row ID, just
+like eager sub-batches. FA4 uses padded capture and refreshes all decoder
+state buffers on replay, with finalized, inert padding rows.
+
+FA4 decode graphs require `page_size == block_length`, `TP=EP >= 1`,
+`DP=PP=1`, and `moe_a2a_backend='none'`. Capture buckets must cover
+`max_num_seqs`. FA4 prefill CUDA graphs are not supported.
+
+Test capture/replay with the actual attention backend build and model; fixed
 shapes and CPU parity alone do not demonstrate device-kernel compatibility.
 
 ## 9. Test plan
@@ -526,6 +539,8 @@ All paths below are relative to the repository root.
 | `python/fluxserve/backend/execution/runners/block_diffusion.py` | Row-state ownership, loop bounds, eager completion |
 | `python/fluxserve/backend/execution/runners/flashinfer_diffusion.py` | Paged execution, packing checks, stable publication, graph state commit |
 | `python/fluxserve/backend/execution/flashinfer_cuda_graph_runner.py` | Static graph buffers, padding, replay input/output transport |
+| `python/fluxserve/backend/execution/runners/fa4_diffusion.py` | FA4 paged execution, EOS handling, and synchronized graph state commit |
+| `python/fluxserve/backend/execution/fa4_cuda_graph_runner.py` | FA4 padded graph capture, decoder state buffers, and replay transport |
 | `python/fluxserve/cli.py` / `python/fluxserve/bench_offline.py` | Alignment checks and online/offline configuration |
 | `test/runtime/conftest.py` | Reference-code discovery and import fixture |
 | `test/ci/eval/llada2.2-flash-evalscope-gsm8k.yaml` | CI evaluation workload definition |
