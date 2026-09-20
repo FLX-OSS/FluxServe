@@ -20,7 +20,7 @@
 
 
 """
-    Flashinfer CUDA graphs runner
+    Flashinfer graph runners.
 """
 
 from __future__ import annotations
@@ -296,11 +296,11 @@ class FlashInferCudaGraphRunner:
         if had_graphs:
             self.invalidation_count += 1
             self.llada2_invalidation_count += 1
-        if had_graphs and log:
-            self.log(
-                "Invalidating LLaDA2 CUDA graphs: prefill=%d decode=%d reason=%s",
-                len(self._graphs), len(self._decode_graphs), reason,
-            )
+        # if had_graphs and log:
+        #     self.log(
+        #         "Invalidating LLaDA2 CUDA graphs: prefill=%d decode=%d reason=%s",
+        #         len(self._graphs), len(self._decode_graphs), reason,
+        #     )
         self._active_entry = None
         self._graphs.clear()
         self._decode_graphs.clear()
@@ -313,11 +313,11 @@ class FlashInferCudaGraphRunner:
         if had_graphs:
             self.invalidation_count += 1
             self.gemma_invalidation_count += 1
-        if had_graphs and log:
-            self.log(
-                "Invalidating Diffusion-Gemma CUDA graphs: decode=%d reason=%s",
-                len(self._gemma_decode_graphs), reason,
-            )
+        # if had_graphs and log:
+        #     self.log(
+        #         "Invalidating Diffusion-Gemma CUDA graphs: decode=%d reason=%s",
+        #         len(self._gemma_decode_graphs), reason,
+        #     )
         self._gemma_decode_graphs.clear()
 
     def reset_serving_counts(self) -> None:

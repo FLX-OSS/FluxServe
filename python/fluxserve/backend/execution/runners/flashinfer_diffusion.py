@@ -305,7 +305,7 @@ class FlashInferDiffusionRunner(BlockDiffusionRunner):
         graph_runner.capture_time_s = time.perf_counter() - started
         graph_runner.record_capture_memory(allocated_before, reserved_before)
         stats = graph_runner.stats()
-        graph_runner.log("CUDA graph online startup complete: %s", stats)
+        # graph_runner.log("CUDA graph online startup complete: %s", stats)
         graph_runner.reset_serving_counts()
         return graph_runner.stats()
 

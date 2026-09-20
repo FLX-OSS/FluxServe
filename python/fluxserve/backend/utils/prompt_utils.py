@@ -18,7 +18,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Prompt rendering shared by offline benchmarking and online serving."""
+"""
+    Prompt rendering shared by offline benchmarking and online serving.
+"""
 
 
 def render_openai_messages(messages) -> str:

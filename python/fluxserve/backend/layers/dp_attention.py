@@ -20,7 +20,7 @@
 
 
 """
-    Data-parallel attention.
+    Data-parallel (DP) attention.
 """
 
 

@@ -20,7 +20,7 @@
 
 
 """
-    FA4 decode graphs runner
+    FA4 decode graph runners.
 """
 
 from __future__ import annotations
