@@ -133,7 +133,8 @@ def test_decode_graph_parallel_topology(
         assert runner.fa4_graph_runner == (1, 2, 4)
 
 
-def test_fused_decode_synchronizes_tokens_and_progress_before_advancing(monkeypatch):
+@pytest.mark.parametrize("with_state", [False, True])
+def test_fused_decode_synchronizes_tokens_and_progress_before_advancing(monkeypatch, with_state):
     import fluxserve.backend.execution.runners.fa4_diffusion as module
 
     group = object()
@@ -155,13 +156,21 @@ def test_fused_decode_synchronizes_tokens_and_progress_before_advancing(monkeypa
     runner.device, runner.block_length = "cpu", 2
     runner.early_stop, runner.num_forwards = False, 0
     runner.decoder = SimpleNamespace(mask_id=9, eos_id=8)
+    committed = []
+    runner.decoder.commit_row_state = lambda state, ids, extra: committed.append(
+        extra["step_id"].clone()
+    )
+    extra_step = ({"step_id": torch.tensor([0])},) if with_state else ()
     runner.fa4_graph_runner = SimpleNamespace(replay=lambda *args: SimpleNamespace(
         logits=None, step=(torch.tensor([[4, 4]]), torch.tensor([False]),
-                           torch.tensor([True]), torch.tensor([False]))))
+                           torch.tensor([True]), torch.tensor([False])) + extra_step))
     x = TokenArray(torch.tensor([[3, 3]]), 0, 9, 8, "cpu")
     starts = torch.zeros(1, dtype=torch.long)
     runner._decode_selected_batch(x, torch.tensor([0]), starts, 2, None, 1)
-    assert calls == [torch.Size([1, 2]), torch.Size([3, 1])]
+    assert calls == [torch.Size([1, 2]), torch.Size([3, 1])] + (
+        [torch.Size([1])] if with_state else []
+    )
+    assert [tensor.tolist() for tensor in committed] == ([[3]] if with_state else [])
     assert x.data.tolist() == [[3, 3]]
     assert starts.tolist() == [2]
 
@@ -189,3 +198,104 @@ def test_ep_shared_expert_output_is_added_once(monkeypatch):
     torch.testing.assert_close(output, x * 11)  # 4 * routed(2) + shared(3)
     assert len(reduced) == 1
     torch.testing.assert_close(reduced[0], x.view(-1, 8) * 2)
+
+
+@pytest.mark.parametrize("fused", [False, True])
+@pytest.mark.parametrize("eos", [13, 16])
+def test_levenshtein_final_kv_row_state_and_per_request_limits(fused, eos, monkeypatch):
+    """Run structural edits to the hard cap, then verify the final KV input.
+
+    The fused variant runs the real decoder tail through a CPU replay adapter;
+    device graph capture is deliberately not claimed by this regression.
+    """
+    from fluxserve.backend.execution.decoders.levenshtein import LevenshteinJointDecoder
+    import fluxserve.backend.execution.runners.fa4_diffusion as module
+
+    monkeypatch.setattr(module, "get_tp_group", lambda: SimpleNamespace(world_size=1))
+    runner = object.__new__(FA4DiffusionRunner)
+    runner.device, runner.block_length = "cpu", 4
+    runner.early_stop, runner.num_forwards = True, 0
+    runner.runner_config = SimpleNamespace(max_post_steps=20)
+    runner.decoder = LevenshteinJointDecoder(
+        .5, .0, mask_id=12, eos_id=13, eos_ids=(13, 16),
+        delete_token_id=14, split_token_id=15, steps=4,
+        max_post_steps=20, max_steps_per_block=3,
+    )
+    runner.past_key_values = SimpleNamespace(layer_paged_kv=lambda _: None)
+    runner._make_decode_forward_batch = lambda *_: None
+    seen = []
+
+    def model(tokens, **kwargs):
+        seen.append(tokens.clone())
+        logits = torch.full((*tokens.shape, 20), -10.)
+        logits[..., 15] = 10.
+        logits[..., 3] = 9.
+        return SimpleNamespace(logits=logits)
+
+    runner.model = model
+    if fused:
+        def replay(owner, tokens, positions, ids, prompt, allow, *, extra_inputs):
+            return SimpleNamespace(logits=None, step=owner.decoder.graph_step(
+                model(tokens).logits, tokens, prompt, allow, **extra_inputs
+            ))
+        runner.fa4_graph_runner = SimpleNamespace(replay=replay)
+    x = TokenArray(torch.tensor([[eos, 2, 12, 12, 12, 12, 12, 12]]), 0, 12, 13, "cpu")
+    x.decode_lengths = torch.tensor([4])
+    starts = torch.zeros(1, dtype=torch.long)
+    runner._decode_batches(x, starts, 8, None, 1, 1, prompt_lengths=torch.tensor([2]))
+    assert starts.tolist() == [4]  # Prompt EOS cannot stop the row at total_length.
+    assert x.data.tolist() == [[eos, 2, 3, 3, 12, 12, 12, 12]]
+    assert torch.equal(seen[-1], x.data[:, :4])
+    assert len(seen) == runner.decoder.max_block_iters
+
+
+def test_fa4_replay_refreshes_row_state_and_resets_padding():
+    from fluxserve.backend.execution.fa4_cuda_graph_runner import FA4CudaGraphRunner
+    from fluxserve.backend.execution.decoders.levenshtein import LevenshteinJointDecoder
+
+    decoder = LevenshteinJointDecoder(.5, .0, mask_id=12, eos_id=13,
+                                     delete_token_id=14, split_token_id=15,
+                                     max_steps_per_block=3)
+    runner = SimpleNamespace(block_length=2, decoder=decoder)
+    cache = SimpleNamespace(device="cpu", page_table=torch.tensor([[0, 1], [2, 3]]))
+    runner.past_key_values = cache
+    graph = object.__new__(FA4CudaGraphRunner)
+    graph.cache, graph.batch_sizes = cache, (2,)
+    graph.replay_count = graph.padded_rows = 0
+    buffers = decoder.graph_extra_buffers(2, 2, "cpu")
+    entry = SimpleNamespace(
+        input_ids=torch.zeros(2, 2, dtype=torch.long),
+        position_ids=torch.zeros(2, 2, dtype=torch.long),
+        prompt_positions=torch.zeros(2, 2, dtype=torch.bool),
+        allow_edit=torch.zeros(2, dtype=torch.bool),
+        dummy_pages=torch.tensor([4, 5]),
+        extra_inputs=buffers, logits=torch.zeros(2, 2, 20),
+        metadata=SimpleNamespace(page_table=torch.zeros(2, 2, dtype=torch.long),
+                                 kv_lens=torch.zeros(2, dtype=torch.long),
+                                 slot_mapping=torch.zeros(4, dtype=torch.long)),
+    )
+    entry.logits[..., 3] = 20
+    entry.step = decoder.graph_step(entry.logits, entry.input_ids,
+                                   entry.prompt_positions, entry.allow_edit, **buffers)
+
+    def replay():
+        entry.step = decoder.graph_step(entry.logits, entry.input_ids,
+                                       entry.prompt_positions, entry.allow_edit, **buffers)
+
+    entry.graph = SimpleNamespace(replay=replay)
+    graph.entries = {2: entry}
+    for actual in (2, 1):
+        ids = torch.arange(actual)
+        tokens = torch.full((actual, 2), 12)
+        state = decoder.make_row_state(actual, 2, "cpu")
+        inputs = decoder.graph_inputs(state, ids, torch.zeros(actual, dtype=torch.long), tokens, 2)
+        result = graph.replay(runner, tokens, torch.arange(2).repeat(actual, 1), ids,
+                              torch.zeros_like(tokens, dtype=torch.bool),
+                              torch.ones(actual, dtype=torch.bool), extra_inputs=inputs)
+        assert result.step[0].shape == (actual, 2)
+        assert all(value.shape[0] == actual for value in result.step[4].values())
+    assert buffers['finalized'][1].item() is True
+    assert buffers['step_id'][1].item() == 0
+    assert not entry.step[4]['history_append'][1].item()
+    assert entry.metadata.slot_mapping.tolist()[2:] == [10, 11]
+    assert graph.replay_count == 2 and graph.padded_rows == 1

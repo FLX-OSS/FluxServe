@@ -38,7 +38,10 @@ import torch
 import torch.nn.functional as F
 
 from fluxserve.backend.execution.decoders.base import ParallelDecoder
-from fluxserve.backend.execution.decoders.utils import broadcast_if_needed
+from fluxserve.backend.execution.decoders.utils import (
+    broadcast_if_needed,
+    normalize_eos_ids,
+)
 
 
 def joint_threshold_update(
@@ -166,6 +169,7 @@ class JointThresholdDecoder(ParallelDecoder):
         temperature=0,
         mask_id=156895,
         eos_id=156892,
+        eos_ids=None,
     ):
         if temperature not in (0, 0.0):
             raise ValueError(
@@ -182,7 +186,8 @@ class JointThresholdDecoder(ParallelDecoder):
         super().__init__(temperature, mask_id=mask_id)
         self.threshold = threshold
         self.editing_threshold = editing_threshold
-        self.eos_id = eos_id
+        self.eos_ids = normalize_eos_ids(eos_ids if eos_ids is not None else eos_id)
+        self.eos_id = self.eos_ids[0]
 
     def batch_decode(
         self,

@@ -30,6 +30,7 @@ from fluxserve.backend.execution.forward_batch_info import ForwardBatch, Forward
 from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner
 from fluxserve.backend.execution.runners.utils import (
     gather_blocks,
+    generated_eos_hit,
     select_batch_sequences_by_mask_number,
 )
 from fluxserve.backend.layers.attention.fa4 import validate_fa4_runtime
@@ -222,9 +223,10 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
         prompt_lengths=None,
     ):
         edit_budget, row_state = self._make_decode_loop_state(decoding_start.shape[0])
-        decoding_flag = (decoding_start + self.block_length) <= total_length
+        decode_lengths = getattr(x, "decode_lengths", total_length)
+        decoding_flag = (decoding_start + self.block_length) <= decode_lengths
         while torch.any(decoding_flag):
-            seq_ids = select_batch_sequences_by_mask_number(
+            seq_ids = self._select_decode_sequences(
                 x, decoding_flag, self.decoder.mask_id, mini_batch_size
             )
             self._decode_selected_batch(
@@ -239,7 +241,7 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
                 row_state=row_state,
             )
             decoding_flag = decoding_flag & (
-                (decoding_start + self.block_length) <= total_length
+                (decoding_start + self.block_length) <= decode_lengths
             )
 
     def _decode_selected_batch(
@@ -271,13 +273,22 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
         fused_step = None
         if graph_runner is not None:
             prompt_positions = allow_edit = None
+            replay_kwargs = {}
             if getattr(self.decoder, "graph_fused_step", False):
                 if prompt_lengths is None or edit_budget is None:
                     raise RuntimeError("Joint decode graph requires prompt_lengths and edit_budget")
                 prompt_positions = decoding_pos_ids < prompt_lengths[seq_ids, None]
                 allow_edit = edit_budget.allow_edit(seq_ids)
+            if getattr(self.decoder, "graph_extra_state", False):
+                if row_state is None:
+                    raise RuntimeError("Levenshtein decode graph requires row state")
+                replay_kwargs["extra_inputs"] = self.decoder.graph_inputs(
+                    row_state, seq_ids, decoding_start[seq_ids], decoding_block,
+                    self.block_length,
+                )
             replay = graph_runner.replay(
-                self, decoding_block, decoding_pos_ids, seq_ids, prompt_positions, allow_edit
+                self, decoding_block, decoding_pos_ids, seq_ids, prompt_positions,
+                allow_edit, **replay_kwargs,
             )
             logits, fused_step = replay.logits, replay.step
         else:
@@ -294,7 +305,8 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
             )
             logits = output.logits[: len(seq_ids)]
         if fused_step is not None:
-            updated, had_mask, changed, block_finished = fused_step
+            updated, had_mask, changed, block_finished = fused_step[:4]
+            extra = fused_step[4] if len(fused_step) == 5 else None
             # Every rank must take the same decode-loop branches after replay.
             # Synchronize both tokens and predicates before updating edit budgets
             # or choosing the next batch (which determines collective shapes).
@@ -305,6 +317,11 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
                 predicates = torch.stack((had_mask, changed, block_finished))
                 dist.broadcast(predicates, src=src, group=tp_group.device_group)
                 had_mask, changed, block_finished = predicates.unbind(0)
+                if extra is not None:
+                    for value in extra.values():
+                        dist.broadcast(value, src=src, group=tp_group.device_group)
+            if extra is not None:
+                self.decoder.commit_row_state(row_state, seq_ids, extra)
             decoding_x.data.scatter_(1, decoding_pos_ids, updated)
         elif callable(getattr(self.decoder, "batch_decode", None)):
             self.decoder.batch_decode(
@@ -332,9 +349,11 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
         decoding_start[seq_ids] += block_finished.long() * self.block_length
         x[seq_ids] = decoding_x.data
         if self.early_stop:
-            eos_mask = (
-                torch.any(x[seq_ids] == self.decoder.eos_id, dim=1) & block_finished
-            )
+            eos_mask = generated_eos_hit(
+                x[seq_ids], self.decoder.eos_ids,
+                prompt_lengths[seq_ids] if prompt_lengths is not None else None,
+                decoding_start[seq_ids],
+            ) & block_finished
             if eos_mask.any():
                 stop_seq_ids = seq_ids[eos_mask.nonzero(as_tuple=True)[0]]
                 decoding_start[stop_seq_ids] = total_length
@@ -614,7 +633,7 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
             raise RuntimeError("FA4 paged decode block did not finish")
 
         results = []
-        eos_id = int(self.decoder.eos_id)
+        eos_ids = frozenset(int(t) for t in self.decoder.eos_ids)
         mask_id = int(self.decoder.mask_id)
         for local_idx, row in enumerate(active_rows):
             rid = request_ids[row]
@@ -629,14 +648,18 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
                 .tolist()[:remaining]
             )
             finish_reason = None
-            if not state.ignore_eos and eos_id in generated:
-                generated = generated[: generated.index(eos_id)]
-                finish_reason = "stop"
+            if not state.ignore_eos:
+                stop_index = next(
+                    (i for i, token in enumerate(generated) if token in eos_ids), None
+                )
+                if stop_index is not None:
+                    generated = generated[:stop_index]
+                    finish_reason = "stop"
             if state.ignore_eos:
                 generated = [token for token in generated if token != mask_id]
             else:
                 generated = [
-                    token for token in generated if token != mask_id and token != eos_id
+                    token for token in generated if token != mask_id and token not in eos_ids
                 ]
             finished = (
                 finish_reason == "stop"

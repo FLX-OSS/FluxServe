@@ -22,6 +22,7 @@ def test_flashinfer_unaligned_prompt_prefills_aligned_prefix_and_replays_partial
     runner.num_forwards = 0
     runner.decoder = SimpleNamespace(mask_id=-1, eos_id=-2)
     runner.runner_config = SimpleNamespace(
+        gen_length=28,
         mini_batch_size=1,
         cache="prefix",
         attention_backend="flashinfer",
@@ -32,7 +33,7 @@ def test_flashinfer_unaligned_prompt_prefills_aligned_prefix_and_replays_partial
     runner.model = SimpleNamespace(
         model=SimpleNamespace(config=SimpleNamespace(num_hidden_layers=1))
     )
-    runner.preprocess_inputs = lambda prompts: (128, 28, 2)
+    runner.preprocess_inputs = lambda prompts, **kwargs: (128, 28, 2)
     runner.allocate_kv_cache = lambda batch_size: object()
 
     observed = {}
@@ -58,6 +59,7 @@ def test_flashinfer_unaligned_prompt_prefills_aligned_prefix_and_replays_partial
         pos_ids,
         num_layers,
         mini_batch_size,
+        prompt_lengths=None,
     ):
         observed["decode_start"] = decoding_start.clone()
 
@@ -170,3 +172,80 @@ def test_flashinfer_native_append_matches_fluxserve_slot_mapping(external_pages)
     actual_v = layer_cache[1][slots // cache.page_size, slots % cache.page_size]
     torch.testing.assert_close(actual_k, packed_k)
     torch.testing.assert_close(actual_v, packed_v)
+
+
+def test_token_array_preserves_prompt_eos_and_batch_shape():
+    from fluxserve.backend.managers.kvcache import TokenArray
+    from fluxserve.backend.metrics.performance import count_completion_tokens
+
+    for batch in (1, 2):
+        prompt = torch.tensor([[13, 2]]).repeat(batch, 1)
+        x = TokenArray(prompt, 4, mask_id=12, eos_id=13, device="cpu")
+        x.data[:, 2:] = torch.tensor([3, 16, 4, 12])
+        before = x.data.clone()
+        result = x.get_generated_tokens()
+        assert torch.equal(result, before)
+        assert torch.equal(x.data, before)
+        assert result.shape == (batch, 6)
+        assert count_completion_tokens(result[0], 2, (13, 16), 12) == 2
+
+
+@pytest.mark.parametrize("kind", ["dense", "default", "max_batch"])
+@pytest.mark.parametrize("lengths", [[5, 3], [0, 3]])
+def test_offline_generation_limits_rows_and_preserves_prompt(kind, lengths):
+    """Exercise real decode loops: cap both forwards and published tokens."""
+    from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner
+    from fluxserve.backend.execution.decoders.joint_threshold import JointThresholdDecoder
+    from fluxserve.backend.metrics.performance import count_completion_tokens
+
+    cls = BlockDiffusionRunner if kind == "dense" else FlashInferDiffusionRunner
+    runner = cls.__new__(cls)
+    runner.device = torch.device("cpu")
+    runner.block_length = 4
+    runner.max_length = 16
+    runner.prefilling_limit = 16
+    runner.num_forwards = 0
+    runner.early_stop = True
+    runner.runner_config = SimpleNamespace(
+        gen_length=5, block_length=4, mini_batch_size=2, cache="prefix",
+        attention_backend="sdpa" if kind == "dense" else "flashinfer",
+        max_post_steps=2, max_cache_length_align=4,
+        flashinfer_decode_batch_mode=kind,
+    )
+    runner.decoder = JointThresholdDecoder(.5, 0, mask_id=12, eos_ids=(13, 16))
+    runner.flashinfer_graph_runner = None
+    runner._use_flashinfer_paged_cache = lambda: False
+    runner._use_flashinfer_paged_prefill = lambda: False
+    runner._make_forward_batch = lambda *a, **kw: None
+    runner._make_decode_forward_batch = lambda *a, **kw: None
+    runner.allocate_kv_cache = lambda batch: torch.zeros(1, 2, batch, 1, 16, 1)
+    runner._prefill_batches = lambda *a, **kw: None
+    committed = []
+
+    def model(tokens, **kw):
+        logits = torch.full((*tokens.shape, 20), -10.)
+        logits[..., 7] = 10.
+        return SimpleNamespace(logits=logits, input_tokens=tokens.clone())
+
+    model.model = SimpleNamespace(config=SimpleNamespace(num_hidden_layers=1))
+    runner.model = model
+
+    def commit(output, ids, starts, finished, *args):
+        for row in finished.nonzero(as_tuple=True)[0].tolist():
+            committed.append((int(ids[row]), int(starts[ids[row]]), output.input_tokens[row]))
+
+    runner._update_finished_kv_cache = commit
+    prompts = torch.tensor([[13, 2, 12, 12, 12, 12], [1, 2, 3, 4, 5, 6]])
+    result = runner.generate(prompts, prompt_lengths=[2, 6], generation_lengths=lengths)
+    for row, prompt_len in enumerate([2, 6]):
+        assert torch.equal(result[row, :prompt_len], prompts[row, :prompt_len])
+        assert result[row, prompt_len:prompt_len + lengths[row]].tolist() == [7] * lengths[row]
+        assert (result[row, prompt_len + lengths[row]:] == 12).all()
+        assert count_completion_tokens(result[row], prompt_len, (13, 16), 12) == lengths[row]
+    expected = {(1, 4), (1, 8)}
+    if lengths[0]:
+        expected |= {(0, 0), (0, 4)}
+    assert {(row, start) for row, start, _ in committed} == expected
+    for row, start, tokens in committed:
+        end = min(start + 4, [2, 6][row] + lengths[row])
+        assert torch.equal(tokens[:end-start], result[row, start:end])

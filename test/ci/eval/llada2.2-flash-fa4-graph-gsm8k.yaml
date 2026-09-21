@@ -1,0 +1,47 @@
+api_version: ci.fluxserve.io/v1
+name: eval-llada2.2-flash-fa4-graph-gsm8k
+type: eval
+triggers: [per-commit, manual]
+priority: high
+runner:
+  labels: [b200-4gpu]
+env:
+  CI: "true"
+  HF_HUB_OFFLINE: "0"
+  TRANSFORMERS_OFFLINE: "0"
+install:
+  - bash test/ci_system/fa4/install.sh .ci-artifacts/llada22-fa4-graph-gsm8k
+server:
+  command: >-
+    . .ci-artifacts/fa4-runtime/bin/activate &&
+    fluxserve serve
+    --model inclusionAI/LLaDA2.2-flash
+    --host 127.0.0.1 --port 8000
+    --tp-size 4 --dp-size 1 --ep-size 4
+    --gpu-memory-utilization 0.85
+    --max-num-seqs 16 --max-model-len 8192 --max-scheduled-tokens 2048
+    --block-length 32
+    --parallel-decoding levenshtein_joint
+    --threshold 0.5 --editing-threshold 0.0
+    --steps 32 --max-post-steps 16 --max-steps-per-block 1000
+    --attention-backend fa4
+    --kv-cache-layout paged --scheduler-policy paged
+    --use-decode-cuda-graph --cuda-graph-decode-mode padded
+    --cuda-graph-capture-bs 1 2 4 8 16
+  ready:
+    url: http://127.0.0.1:8000/health
+    timeout: 3600
+    interval: 10
+eval:
+  command: >-
+    .ci-artifacts/fa4-evalscope/bin/python -m evalscope.cli.cli eval
+    --model inclusionAI/LLaDA2.2-flash --model-id llada22-fa4-graph
+    --eval-type openai_api --api-url http://127.0.0.1:8000/v1/chat/completions
+    --api-key EMPTY --datasets gsm8k --eval-batch-size 4 --judge-strategy rule
+    --generation-config '{"max_tokens": 2048, "temperature": 0.0}'
+    --work-dir .ci-artifacts/llada22-fa4-graph-gsm8k
+    --no-timestamp --no-collect-perf
+report:
+  github_step_summary: true
+# Match the LLaDA2.2 FlashInfer evaluation's acceptance threshold.
+score_threshold: 0.85

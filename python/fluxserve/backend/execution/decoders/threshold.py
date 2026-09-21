@@ -28,6 +28,7 @@ from fluxserve.backend.execution.decoders.base import ParallelDecoder
 from fluxserve.backend.execution.decoders.utils import (
     add_gumbel_noise,
     broadcast_if_needed,
+    normalize_eos_ids,
 )
 
 
@@ -80,11 +81,13 @@ class ThresholdParallelDecoder(ParallelDecoder):
             remasking='low_confidence',
             mask_id=126336,
             eos_id=126081,
+            eos_ids=None,
             use_float64=False,
     ):
         super().__init__(temperature, remasking, mask_id)
         self.threshold = threshold
-        self.eos_id = eos_id
+        self.eos_ids = normalize_eos_ids(eos_ids if eos_ids is not None else eos_id)
+        self.eos_id = self.eos_ids[0]
         self.use_float64 = use_float64
 
     def decode(self, logits, block_start, block_end, x, iter_threshold=None):

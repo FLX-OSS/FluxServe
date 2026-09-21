@@ -23,9 +23,16 @@ from fluxserve.backend.utils.server_args import ServerArgs
 
 from .hierarchy import HierarchyDecoder
 from .joint_threshold import JointThresholdDecoder
+from .levenshtein import LevenshteinJointDecoder
 from .threshold import CreditThresholdParallelDecoder, ThresholdParallelDecoder
+from .utils import normalize_eos_ids
 
-KNOWN_DECODERS = ("threshold", "joint_threshold", "hierarchy")
+KNOWN_DECODERS = (
+    "threshold",
+    "joint_threshold",
+    "levenshtein_joint",
+    "hierarchy",
+)
 
 
 def load_decoder(config: RunnerConfig | ServerArgs):
@@ -35,6 +42,9 @@ def load_decoder(config: RunnerConfig | ServerArgs):
     use_credit = getattr(config, "use_credit", False)
     mask_id = getattr(config, "mask_id", 156895)
     eos_id = getattr(config, "eos_id", 156892)
+    # The primary eos_id always leads; extra stop tokens (e.g. LLaDA2.2's
+    # <|role_end|>) come from RunnerConfig.eos_ids and are deduplicated.
+    eos_ids = normalize_eos_ids((eos_id, *(getattr(config, "eos_ids", ()) or ())))
 
     if parallel_decoding == "threshold":
         if use_credit:
@@ -42,13 +52,13 @@ def load_decoder(config: RunnerConfig | ServerArgs):
                 temperature=0,
                 threshold=threshold,
                 mask_id=mask_id,
-                eos_id=eos_id,
+                eos_ids=eos_ids,
             )
         return ThresholdParallelDecoder(
             temperature=0,
             threshold=threshold,
             mask_id=mask_id,
-            eos_id=eos_id,
+            eos_ids=eos_ids,
         )
 
     if parallel_decoding == "joint_threshold":
@@ -64,7 +74,23 @@ def load_decoder(config: RunnerConfig | ServerArgs):
             threshold=threshold,
             editing_threshold=getattr(config, "editing_threshold", 0.5),
             mask_id=mask_id,
-            eos_id=eos_id,
+            eos_ids=eos_ids,
+        )
+
+    if parallel_decoding == "levenshtein_joint":
+        block_length = int(getattr(config, "block_length", 32))
+        steps = int(getattr(config, "steps", 0) or 0)
+        return LevenshteinJointDecoder(
+            temperature=0,
+            threshold=threshold,
+            editing_threshold=getattr(config, "editing_threshold", 0.5),
+            mask_id=mask_id,
+            eos_ids=eos_ids,
+            delete_token_id=getattr(config, "delete_token_id", 156930),
+            split_token_id=getattr(config, "split_token_id", 156931),
+            steps=steps if steps > 0 else block_length,
+            max_post_steps=getattr(config, "max_post_steps", 16),
+            max_steps_per_block=getattr(config, "max_steps_per_block", 1000),
         )
 
     if parallel_decoding == "hierarchy":
@@ -75,7 +101,7 @@ def load_decoder(config: RunnerConfig | ServerArgs):
             threshold=threshold,
             low_threshold=low_threshold,
             mask_id=mask_id,
-            eos_id=eos_id,
+            eos_ids=eos_ids,
         )
 
     raise ValueError(
