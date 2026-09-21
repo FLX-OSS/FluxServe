@@ -5,7 +5,7 @@ This recipe uses one NVIDIA GPU with compute capability 9.0 or newer and enough 
 ## Launch configuration
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 fluxserve serve \
+CUDA_VISIBLE_DEVICES=0 fluxserve launch \
   --model inclusionAI/LLaDA2.0-mini \
   --host 127.0.0.1 --port 8000 \
   --tp-size 1 --dp-size 1 --ep-size 1 \

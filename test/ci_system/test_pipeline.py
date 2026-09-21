@@ -25,7 +25,7 @@ def test_stale_process_patterns_exclude_unrelated_routers():
 
 def test_stale_process_patterns_match_existing_targets():
     cmdlines = [
-        "/usr/bin/python /usr/local/bin/fluxserve serve --model foo",
+        "/usr/bin/python /usr/local/bin/fluxserve launch --model foo",
         "/usr/bin/python /repo/test/runtime/run_ci_suite.py --device cuda",
     ]
     for cmdline in cmdlines:

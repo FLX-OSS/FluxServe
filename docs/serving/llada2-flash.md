@@ -7,7 +7,7 @@ Complete the [Docker installation](../guides/getting_started.md) first. This rec
 TP=4, EP=4, Paged Flashinfer (H100, 4 x SM90)
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 fluxserve serve \
+CUDA_VISIBLE_DEVICES=0,1,2,3 fluxserve launch \
   --model inclusionAI/LLaDA2.0-flash \
   --host 127.0.0.1 \
   --port 8000 \

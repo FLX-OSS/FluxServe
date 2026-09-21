@@ -55,7 +55,7 @@ def test_async_llm_uses_default_scheduler_unless_one_is_injected():
 
 def test_scheduler_policy_defaults_to_default():
     assert ServerArgs().scheduler_policy == "default"
-    args = build_parser().parse_args(["serve", "--model", "model"])
+    args = build_parser().parse_args(["launch", "--model", "model"])
     assert args.scheduler_policy == "default"
     assert args.apply_template is False
 
@@ -74,12 +74,12 @@ def test_default_cuda_graph_capture_batch_sizes(max_num_seqs, expected):
 
 
 def test_cuda_graph_capture_batch_sizes_are_optional():
-    args = build_parser().parse_args(["serve", "--model", "model"])
+    args = build_parser().parse_args(["launch", "--model", "model"])
     assert args.cuda_graph_capture_bs is None
 
     args = build_parser().parse_args(
         [
-            "serve", "--model", "model",
+            "launch", "--model", "model",
             "--cuda-graph-capture-bs", "1", "4", "8",
         ]
     )
@@ -88,14 +88,14 @@ def test_cuda_graph_capture_batch_sizes_are_optional():
 
 def test_cli_accepts_apply_template():
     args = build_parser().parse_args(
-        ["serve", "--model", "model", "--apply-template"]
+        ["launch", "--model", "model", "--apply-template"]
     )
     assert args.apply_template is True
 
 
 def test_cli_accepts_canvas_length():
     args = build_parser().parse_args(
-        ["serve", "--model", "model", "--canvas-length", "32"]
+        ["launch", "--model", "model", "--canvas-length", "32"]
     )
     assert args.canvas_length == 32
 
@@ -136,7 +136,7 @@ def test_input_processor_rejects_prompt_without_room_for_generation_block():
 @pytest.mark.parametrize("policy", ["default", "paged"])
 def test_cli_accepts_supported_scheduler_policies(policy):
     args = build_parser().parse_args(
-        ["serve", "--model", "model", "--scheduler-policy", policy]
+        ["launch", "--model", "model", "--scheduler-policy", policy]
     )
     assert args.scheduler_policy == policy
 
@@ -145,5 +145,5 @@ def test_cli_accepts_supported_scheduler_policies(policy):
 def test_cli_rejects_removed_scheduler_policies(policy):
     with pytest.raises(SystemExit):
         build_parser().parse_args(
-            ["serve", "--model", "model", "--scheduler-policy", policy]
+            ["launch", "--model", "model", "--scheduler-policy", policy]
         )

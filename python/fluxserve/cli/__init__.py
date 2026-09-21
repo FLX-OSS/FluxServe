@@ -29,8 +29,8 @@ import os
 import torch
 from transformers import AutoConfig, AutoTokenizer
 
-from fluxserve.bench import add_bench_subparser
-from fluxserve.bench_offline import (
+from .bench import add_bench_subparser
+from .bench_offline import (
     StoreExplicit,
     add_bench_offline_subparser,
     bench_offline,
@@ -72,7 +72,7 @@ def configure_logging(rank: int = 0) -> None:
     handler configured by default, so every one of those messages was being
     dropped: the LLaDA2.2 "MoE block routing active" banner, the grouped-topk
     fallback warning that would catch a silent routing regression, and the
-    serve-path notices. Scoped to ``fluxserve`` rather than the root logger so
+    launch-path notices. Scoped to ``fluxserve`` rather than the root logger so
     third-party INFO chatter (transformers, torch) stays out of the logs.
     Emits from every rank -- for a TP correctness signal, seeing all ranks
     agree is the point.
@@ -109,11 +109,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fluxserve")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    serve = sub.add_parser("serve", help='Launch the FluxServe server')
-    serve.add_argument("--model", "--model-name", dest="model_name", required=True)
-    serve.add_argument("--host", default="0.0.0.0")
-    serve.add_argument("--port", type=int, default=8000)
-    serve.add_argument(
+    launch = sub.add_parser("launch", help='Launch the FluxServe server')
+    launch.add_argument("--model", "--model-name", dest="model_name", required=True)
+    launch.add_argument("--host", default="0.0.0.0")
+    launch.add_argument("--port", type=int, default=8000)
+    launch.add_argument(
         "--apply-template",
         action="store_true",
         help=(
@@ -121,21 +121,21 @@ def build_parser() -> argparse.ArgumentParser:
             "By default FluxServe uses its LLaDA-compatible prompt renderer."
         ),
     )
-    serve.add_argument("--device", default="cuda", help='GPU device type')
-    serve.add_argument("--max-num-seqs", type=int, default=8)
-    serve.add_argument("--max-scheduled-tokens", type=int, default=512)
-    serve.add_argument("--max-model-len", type=int, default=2048)
-    serve.add_argument("--max-new-tokens", type=int, default=128)
-    serve.add_argument(
+    launch.add_argument("--device", default="cuda", help='GPU device type')
+    launch.add_argument("--max-num-seqs", type=int, default=8)
+    launch.add_argument("--max-scheduled-tokens", type=int, default=512)
+    launch.add_argument("--max-model-len", type=int, default=2048)
+    launch.add_argument("--max-new-tokens", type=int, default=128)
+    launch.add_argument(
         "--scheduler-policy",
         choices=("default", "paged"),
         default="default",
     )
-    serve.add_argument("--scheduler-num-device-pages", type=int, default=0)
-    serve.add_argument("--gpu-memory-utilization", type=float, default=0.90)
-    serve.add_argument("--gpu-memory-safety-reserve", type=float, default=0.05)
-    serve.add_argument("--block-length", type=int, default=64)
-    serve.add_argument(
+    launch.add_argument("--scheduler-num-device-pages", type=int, default=0)
+    launch.add_argument("--gpu-memory-utilization", type=float, default=0.90)
+    launch.add_argument("--gpu-memory-safety-reserve", type=float, default=0.05)
+    launch.add_argument("--block-length", type=int, default=64)
+    launch.add_argument(
         "--canvas-length",
         "--canvas_length",
         dest="canvas_length",
@@ -146,82 +146,82 @@ def build_parser() -> argparse.ArgumentParser:
             "Defaults to the checkpoint configuration."
         ),
     )
-    serve.add_argument(
+    launch.add_argument(
         "--max-denoising-steps",
         type=int,
         default=None,
         help="Override checkpoint denoising steps (primarily for smoke tests).",
     )
-    serve.add_argument("--prefilling-limit", type=int, default=128)
-    serve.add_argument("--mini-batch-size", type=int, default=4)
-    serve.add_argument(
+    launch.add_argument("--prefilling-limit", type=int, default=128)
+    launch.add_argument("--mini-batch-size", type=int, default=4)
+    launch.add_argument(
         "--attention-backend",
         choices=("sdpa", "flex", "flashinfer", "fa4"),
         default="flashinfer",
         action=StoreExplicit,
     )
-    serve.set_defaults(attention_backend_explicit=False)
-    serve.add_argument(
+    launch.set_defaults(attention_backend_explicit=False)
+    launch.add_argument(
         "--flashinfer-decode-batch-mode",
         choices=("default", "max_batch"),
         default="max_batch",
     )
-    serve.add_argument(
+    launch.add_argument(
         "--flashinfer-prefill-mode",
         choices=("dense", "ragged", "paged"),
         default="paged",
     )
-    serve.add_argument(
+    launch.add_argument(
         "--flashinfer-cache-mode",
         choices=("dense", "paged"),
         default="paged",
     )
-    serve.add_argument(
+    launch.add_argument(
         "--kv-cache-layout",
         choices=("dense", "paged"),
         default="paged",
     )
-    serve.add_argument("--page-size", type=int, default=None)
-    serve.add_argument("--parallel-decoding", default="threshold")
-    serve.add_argument("--threshold", type=float, default=0.9)
-    serve.add_argument("--low-threshold", type=float, default=0.3)
-    serve.add_argument(
+    launch.add_argument("--page-size", type=int, default=None)
+    launch.add_argument("--parallel-decoding", default="threshold")
+    launch.add_argument("--threshold", type=float, default=0.9)
+    launch.add_argument("--low-threshold", type=float, default=0.3)
+    launch.add_argument(
         "--editing-threshold",
         type=float,
         default=0.5,
         help="LLaDA2.1 T2T editing threshold (joint_threshold decoding). "
         "Official presets: 0.5 (Quality), 0.0 (Speed).",
     )
-    serve.add_argument(
+    launch.add_argument(
         "--max-post-steps",
         type=int,
         default=16,
         help="Max post-mask editing iterations per block (joint_threshold).",
     )
-    serve.add_argument(
+    launch.add_argument(
         "--steps",
         type=int,
         default=0,
         help="LLaDA2.2 M2T transfer-schedule steps (levenshtein_joint); "
         "0 means block_length.",
     )
-    serve.add_argument(
+    launch.add_argument(
         "--max-steps-per-block",
         type=int,
         default=1000,
         help="Hard per-block iteration cap (levenshtein_joint).",
     )
-    serve.add_argument("--tp-size", type=int, default=1)
-    serve.add_argument("--dp-size", type=int, default=1)
-    serve.add_argument("--ep-size", type=int, default=1)
-    serve.add_argument("--pp-size", type=int, default=1)
-    serve.add_argument("--enable-dp-attention", action="store_true", default=False)
-    serve.add_argument("--distributed-backend", default="nccl")
-    serve.add_argument("--use-cuda-graph", action="store_true")
-    serve.add_argument("--use-prefill-cuda-graph", action="store_true")
-    serve.add_argument("--use-decode-cuda-graph", action="store_true")
-    serve.add_argument("--cuda-graph-decode-mode", choices=("decomposed", "padded"), default="decomposed")
-    serve.add_argument(
+    launch.add_argument("--tp-size", type=int, default=1)
+    launch.add_argument("--dp-size", type=int, default=1)
+    launch.add_argument("--ep-size", type=int, default=1)
+    launch.add_argument("--pp-size", type=int, default=1)
+    launch.add_argument("--enable-dp-attention", action="store_true", default=False)
+    launch.add_argument("--distributed-backend", default="nccl")
+    launch.add_argument("--use-cuda-graph", action="store_true")
+    launch.add_argument("--use-prefill-cuda-graph", action="store_true")
+    launch.add_argument("--use-decode-cuda-graph", action="store_true")
+    launch.add_argument("--cuda-graph-decode-mode", choices=("decomposed", "padded"), default="decomposed")
+    launch.add_argument(
         "--cuda-graph-capture-bs",
         "--cuda_graph_capture_bs",
         type=int,
@@ -233,7 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
             "every even size up to --max-num-seqs."
         ),
     )
-    serve.add_argument(
+    launch.add_argument(
         "--cuda-graph-capture-sizes",
         type=int,
         nargs="+",
@@ -241,8 +241,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Prefill sequence-length buckets captured by CUDA graphs.",
     )
-    serve.add_argument("--trust-remote-code", action="store_true", default=True)
-    serve.add_argument(
+    launch.add_argument("--trust-remote-code", action="store_true", default=True)
+    launch.add_argument(
         "--process-name",
         default="fluxserve",
         help="Process title shown by ps/top for online serving.",
@@ -320,7 +320,7 @@ def normalize_diffusion_gemma_serve_args(args, model_config) -> bool:
     return True
 
 
-def serve(args) -> None:
+def launch(args) -> None:
     reject_external_distributed_launch()
     normalize_attention_backend_args(args)
     if should_launch_local_workers(args.tp_size):
@@ -560,8 +560,8 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
 def main() -> None:
     configure_logging()
     args = build_parser().parse_args()
-    if args.command == "serve":
-        serve(args)
+    if args.command == "launch":
+        launch(args)
     elif args.command == "env":
         from fluxserve.env import main as env_main
 

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-exec fluxserve serve \
+exec fluxserve launch \
    --model inclusionAI/LLaDA2.2-flash \
    --host 127.0.0.1 \
    --port 8000 \

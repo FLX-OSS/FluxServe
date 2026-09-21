@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from fluxserve.backend.metrics import count_completion_tokens
-from fluxserve.bench_offline import (
+from fluxserve.cli.bench_offline import (
     bucket_length,
     calc_padded_gen_lens,
     compact_batch_output,
@@ -123,7 +123,7 @@ def test_diffusion_gemma_allows_decode_only_cuda_graph():
 
 def test_diffusion_gemma_online_decode_graph_selects_flashinfer_paged_defaults():
     args = build_parser().parse_args(
-        ["serve", "--model", "model", "--use-decode-cuda-graph"]
+        ["launch", "--model", "model", "--use-decode-cuda-graph"]
     )
     config = SimpleNamespace(
         model_type="diffusion_gemma",
@@ -139,7 +139,7 @@ def test_diffusion_gemma_online_decode_graph_selects_flashinfer_paged_defaults()
 
 def test_diffusion_gemma_online_accepts_canvas_override():
     args = build_parser().parse_args(
-        ["serve", "--model", "model", "--canvas-length", "32"]
+        ["launch", "--model", "model", "--canvas-length", "32"]
     )
     config = SimpleNamespace(
         model_type="diffusion_gemma",
@@ -153,7 +153,7 @@ def test_diffusion_gemma_online_accepts_canvas_override():
 
 def test_diffusion_gemma_online_rejects_invalid_canvas_override():
     args = build_parser().parse_args(
-        ["serve", "--model", "model", "--canvas-length", "0"]
+        ["launch", "--model", "model", "--canvas-length", "0"]
     )
     config = SimpleNamespace(model_type="diffusion_gemma", architectures=[])
 
@@ -163,7 +163,7 @@ def test_diffusion_gemma_online_rejects_invalid_canvas_override():
 
 @pytest.mark.parametrize("flag", ["--use-cuda-graph", "--use-prefill-cuda-graph"])
 def test_diffusion_gemma_online_rejects_non_decode_graphs(flag):
-    args = build_parser().parse_args(["serve", "--model", "model", flag])
+    args = build_parser().parse_args(["launch", "--model", "model", flag])
     config = SimpleNamespace(model_type="diffusion_gemma", architectures=[])
 
     with pytest.raises(ValueError, match="decode CUDA graphs only"):

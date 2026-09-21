@@ -9,7 +9,7 @@ runner:
     - gh200-4gpu
 server:
   command: >-
-    fluxserve serve
+    fluxserve launch
     --model inclusionAI/LLaDA2.2-flash
     --host 127.0.0.1 
     --port 8000

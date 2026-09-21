@@ -33,7 +33,7 @@ def test_quantization_flags_are_removed():
     parser = build_parser()
 
     with pytest.raises(SystemExit):
-        parser.parse_args(["serve", "--model", "test", "--quantization", "fp8"])
+        parser.parse_args(["launch", "--model", "test", "--quantization", "fp8"])
     with pytest.raises(SystemExit):
         parser.parse_args(
             ["bench_offline", "--model", "test", "--dataset", "test", "--use-quant"]

@@ -38,7 +38,7 @@ DEFAULT_PRIORITY = "normal"
 _PRIORITY_ORDER = {value: index for index, value in enumerate(SUPPORTED_PRIORITIES)}
 B200_RUNNER_LABEL_ENV = "FLUXSERVE_B200_RUNNER_LABEL"
 STALE_PROCESS_PATTERNS = [
-    r"fluxserve serve",
+    r"fluxserve launch",
     r"run_ci_suite",
 ]
 RUNNER_SM_PREFIXES = (

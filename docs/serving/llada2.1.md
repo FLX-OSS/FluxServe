@@ -13,7 +13,7 @@ See the [model support development guide](../../dev-notes/llada2.1-model-support
 ### Mini — one GPU, TP=1 / EP=1
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python -m fluxserve.cli serve \
+CUDA_VISIBLE_DEVICES=0 python -m fluxserve.cli launch \
   --model inclusionAI/LLaDA2.1-mini \
   --host 127.0.0.1 --port 8000 \
   --tp-size 1 --dp-size 1 --ep-size 1 \
@@ -35,7 +35,7 @@ CUDA_VISIBLE_DEVICES=0 python -m fluxserve.cli serve \
 ### Flash — four GPUs, TP=4 / EP=4
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 python -m fluxserve.cli serve \
+CUDA_VISIBLE_DEVICES=0,1,2,3 python -m fluxserve.cli launch \
   --model inclusionAI/LLaDA2.1-flash \
   --host 127.0.0.1 --port 8000 \
   --tp-size 4 --dp-size 1 --ep-size 4 \

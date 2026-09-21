@@ -541,7 +541,7 @@ All paths below are relative to the repository root.
 | `python/fluxserve/backend/execution/flashinfer_cuda_graph_runner.py` | Static graph buffers, padding, replay input/output transport |
 | `python/fluxserve/backend/execution/runners/fa4_diffusion.py` | FA4 paged execution, EOS handling, and synchronized graph state commit |
 | `python/fluxserve/backend/execution/fa4_cuda_graph_runner.py` | FA4 padded graph capture, decoder state buffers, and replay transport |
-| `python/fluxserve/cli.py` / `python/fluxserve/bench_offline.py` | Alignment checks and online/offline configuration |
+| `python/fluxserve/cli/__init__.py` / `python/fluxserve/cli/bench_offline.py` | Alignment checks and online/offline configuration |
 | `test/runtime/conftest.py` | Reference-code discovery and import fixture |
 | `test/ci/eval/llada2.2-flash-evalscope-gsm8k.yaml` | CI evaluation workload definition |
 
