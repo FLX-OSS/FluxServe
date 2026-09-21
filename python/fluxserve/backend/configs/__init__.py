@@ -19,5 +19,7 @@
 # SOFTWARE.
 
 
-"""Config compatibility for FluxServe backend."""
+"""
+    FluxServe model configs.
+"""
 
