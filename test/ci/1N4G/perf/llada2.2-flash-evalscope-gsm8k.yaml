@@ -1,18 +1,18 @@
 api_version: ci.fluxserve.io/v1
-name: perf-llada2.0-flash-fa4-gsm8k
+name: perf-llada2.2-flash-gsm8k
 type: perf
 triggers:
   - per-commit
   - manual
 runner:
   labels:
-    - gh200-1gpu
+    - gh200-4gpu
 env:
   CI: "true"
 server:
   command: >-
     fluxserve serve
-    --model inclusionAI/LLaDA2.0-flash
+    --model inclusionAI/LLaDA2.2-flash
     --host 127.0.0.1 
     --port 8000
     --tp-size 4 
@@ -23,14 +23,17 @@ server:
     --max-model-len 65536 
     --max-scheduled-tokens 2048
     --block-length 64 
-    --parallel-decoding threshold
-    --threshold 0.95
+    --parallel-decoding levenshtein_joint
+    --threshold 0.5 
+    --editing-threshold 0.0
+    --steps 32 
+    --max-post-steps 16 
+    --max-steps-per-block 1000
     --attention-backend fa4 
     --kv-cache-layout paged 
     --scheduler-policy paged 
     --use-decode-cuda-graph 
     --cuda-graph-decode-mode padded 
-    --cuda-graph-capture-bs 1 2 4 8 10 12 16
   ready:
     url: http://127.0.0.1:8000/health
     timeout: 1800
@@ -40,10 +43,10 @@ perf:
     - python3 -m venv /tmp/evalscope-venv && /tmp/evalscope-venv/bin/python -m pip install "evalscope[perf] @ git+https://github.com/modelscope/evalscope.git@acd09b44384d53174768bb1063f675420f76fae9"
   command: >-
     /tmp/evalscope-venv/bin/python -m evalscope.cli.cli perf
-    --model inclusionAI/LLaDA2.0-flash
+    --model inclusionAI/LLaDA2.2-flash
     --url http://127.0.0.1:8000/v1/chat/completions 
     --api openai
-    --tokenizer-path inclusionAI/LLaDA2.0-flash 
+    --tokenizer-path inclusionAI/LLaDA2.2-flash 
     --dataset line_by_line
     --dataset-path ./data/gsm8k.jsonl 
     --max-tokens 2048 
@@ -51,10 +54,14 @@ perf:
     --num 1000 
     --parallel 16 
     --rate 16 
-    --name llada2.0-fa4-graph
-    --outputs-dir .ci-artifacts/perf-llada2.0-flash-fa4 
+    --name llada2.2-flash-perf
+    --outputs-dir .ci-artifacts/perf-llada2.2-flash 
     --no-timestamp &&
-    python test/ci_system/fa4/check_perf.py .ci-artifacts/perf-llada2.0-flash-fa4
+    python3 -c 'import glob,json; p=glob.glob(".ci-artifacts/perf-llada2.2-flash/**/benchmark_summary.json", recursive=True)[0]; s=json.load(open(p)); print("config,Conc.,Total Throughput (tok/s),Output Throughput (tok/s),Approx Cache Hit,Decoded Tok/Iter"); print("llada2.2-flash,16,{:.4f},{:.4f},0,0".format(s["Total Throughput (tok/s)"], s["Output Throughput (tok/s)"]))'
 report:
   github_step_summary: true
-# Measurement only until a same-environment FA4 performance baseline is established.
+report:
+  github_step_summary: true
+perf_threshold: 0.9
+perf_reference:
+  16: []

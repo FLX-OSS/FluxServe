@@ -19,9 +19,8 @@ exec fluxserve serve \
     --threshold 0.7 \
     --editing-threshold 0.5 \
     --max-post-steps 16 \
-    --attention-backend flashinfer \
+    --attention-backend fa4 \
     --kv-cache-layout paged \
     --scheduler-policy paged \
     --use-decode-cuda-graph \
-    --cuda-graph-decode-mode padded \
-    --cuda-graph-capture-bs 1 2 4 8 10 12 16 \
+    --cuda-graph-decode-mode padded 

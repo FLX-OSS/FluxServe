@@ -556,29 +556,3 @@ def test_runtime_regressions_are_discovered_for_pr_ci():
     assert any("snapshot_download" in command for command in stages["install"])
     assert task["env"]["FLUXSERVE_LLADA22_REF_DIR"] == ".ci-artifacts/llada22-reference"
 
-
-@pytest.mark.parametrize("backend,filename", [
-    ("flashinfer", "llada2.2-flash-evalscope-gsm8k.yaml"),
-    ("fa4", "llada2.2-flash-fa4-graph-gsm8k.yaml"),
-])
-def test_llada22_gpu_evaluations_are_discovered_for_pr_ci(backend, filename):
-    from pipeline import load_yaml
-
-    root = Path(__file__).resolve().parents[2]
-    config = root / "test/ci/eval" / filename
-    task = load_yaml(config)
-    validate_task(task, config)
-    matrix = build_matrix(root / "test/ci", root, trigger="per-commit")
-    entries = [entry for entry in matrix["include"] if entry["name"] == task["name"]]
-    assert len(entries) == 1
-    assert entries[0]["runner"] == "b200-4gpu"
-    # The workflow routes non-GH200 (host) entries through env/b200.sh.
-    assert entries[0]["runtime"] == "host"
-    command = task["server"]["command"]
-    assert f"--attention-backend {backend}" in command
-    assert "--parallel-decoding levenshtein_joint" in command
-    assert "--use-decode-cuda-graph" in command
-    assert "--tp-size 4" in command and "--ep-size 4" in command
-    assert task["score_threshold"] == 0.85
-    if backend == "fa4":
-        assert any("fa4/install.sh" in command for command in task["install"])

@@ -1,4 +1,4 @@
-name: PR Tests
+name: PR Tests 1N1G
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ on:
           - manual
           - debug
 concurrency:
-  group: pr-test-${{ github.ref }}
+  group: pr-test-1N1G-${{ github.ref }}
   cancel-in-progress: true
 permissions:
   contents: read
@@ -24,8 +24,8 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
        (
-         (github.event.action == 'labeled' && github.event.label.name == 'ci:run') ||
-         (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ci:run'))
+         (github.event.action == 'labeled' && github.event.label.name == 'ci:run-1N1G') ||
+         (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ci:run-1N1G'))
        ))
     runs-on: ubuntu-latest
     outputs:
@@ -51,7 +51,7 @@ jobs:
           fi
 
           matrix=$(python3 test/ci_system/pipeline.py scan \
-            --root test/ci \
+            --root test/ci/1N1G \
             --trigger "$trigger")
 
           {
@@ -145,8 +145,8 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'pull_request' &&
         (
-          (github.event.action == 'labeled' && github.event.label.name == 'ci:run') ||
-          (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ci:run'))
+          (github.event.action == 'labeled' && github.event.label.name == 'ci:run-1N1G') ||
+          (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ci:run-1N1G'))
         )))
     needs:
       - scan

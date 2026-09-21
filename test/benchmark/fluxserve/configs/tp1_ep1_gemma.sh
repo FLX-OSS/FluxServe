@@ -21,4 +21,5 @@ exec fluxserve serve \
     --flashinfer-cache-mode paged \
     --kv-cache-layout paged \
     --scheduler-policy default \
-    --use-decode-cuda-graph
+    --use-decode-cuda-graph \
+    --cuda-graph-decode-mode padded

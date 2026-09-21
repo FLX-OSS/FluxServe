@@ -17,7 +17,7 @@ exec fluxserve serve \
     --block-length 64 \
     --parallel-decoding threshold \
     --threshold 0.95 \
-    --attention-backend flashinfer \
+    --attention-backend fa4 \
     --kv-cache-layout paged \
     --scheduler-policy paged \
     --use-decode-cuda-graph \

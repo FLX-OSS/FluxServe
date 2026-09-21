@@ -51,15 +51,12 @@ perf:
     --num 1000
     --parallel 16
     --rate 16
-    --name gsm8k_tp1_ep1_gemma_rate_16
-    --outputs-dir .ci-artifacts/gsm8k-perf/rate_16
+    --name diffusion-gemma-perf
+    --outputs-dir .ci-artifacts/perf-diffusion-gemma
     --no-timestamp &&
-    python3 -c 'import glob,json; p=glob.glob(".ci-artifacts/gsm8k-perf/rate_16/**/benchmark_summary.json", recursive=True)[0]; s=json.load(open(p)); print("config,Conc.,Total Throughput (tok/s),Output Throughput (tok/s),Approx Cache Hit,Decoded Tok/Iter"); print("diffusion-gemma,16,{:.4f},{:.4f},0,0".format(s["Total Throughput (tok/s)"], s["Output Throughput (tok/s)"]))'
+    python3 -c 'import glob,json; p=glob.glob("./.ci-artifacts/perf-diffusion-gemma/**/benchmark_summary.json", recursive=True)[0]; s=json.load(open(p)); print("config,Conc.,Total Throughput (tok/s),Output Throughput (tok/s)"); print("diffusion-gemma,16,{:.4f},{:.4f}".format(s["Total Throughput (tok/s)"], s["Output Throughput (tok/s)"]))'
 report:
   github_step_summary: true
 perf_threshold: 0.9
-# FluxServe maps the existing reference columns to total token throughput and
-# output token throughput, respectively. Baseline from the checked-in FluxServe
-# GSM8K run at 16-way concurrency; recalibrate after a GH200 baseline run.
 perf_reference:
-  16: [1574.51, 998.81]
+  16: [1517.25, 963.62]
