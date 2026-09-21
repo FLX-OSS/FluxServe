@@ -13,7 +13,8 @@ from fluxserve.cli.bench_offline import (
     normalize_diffusion_gemma_args,
     warmup_runner,
 )
-from fluxserve.cli import build_parser, normalize_diffusion_gemma_serve_args
+from fluxserve.cli.app import build_parser
+from fluxserve.cli.launch import normalize_diffusion_gemma_serve_args
 from fluxserve.backend.execution.runners.diffusion_gemma import DiffusionGemmaRunner
 
 

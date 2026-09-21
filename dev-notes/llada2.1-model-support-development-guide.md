@@ -413,7 +413,7 @@ All paths below are relative to the repository root.
 | `python/fluxserve/backend/execution/flashinfer_cuda_graph_runner.py` | Static capture buffers and replay metadata |
 | `python/fluxserve/backend/execution/runners/fa4_diffusion.py` | FA4 paged execution and synchronized decode progression |
 | `python/fluxserve/backend/execution/fa4_cuda_graph_runner.py` | FA4 padded decode graph capture and replay |
-| `python/fluxserve/cli/__init__.py` / `python/fluxserve/cli/bench_offline.py` | Online/offline configuration plumbing |
+| `python/fluxserve/cli/launch.py` / `python/fluxserve/cli/bench_offline.py` | Online/offline configuration plumbing |
 | `test/runtime/test_joint_threshold_decoder.py` | Selection, budget, factory, and graph-tail tests |
 | `test/runtime/test_block_finished_equivalence.py` | Legacy completion-predicate regression |
 

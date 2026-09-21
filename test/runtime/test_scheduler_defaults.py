@@ -6,7 +6,8 @@ from fluxserve.backend.engine.async_llm import AsyncLLM
 from fluxserve.backend.engine.processor import InputProcessor
 from fluxserve.backend.engine.scheduler_adapter import DefaultSchedulerAdapter
 from fluxserve.backend.utils.server_args import ServerArgs
-from fluxserve.cli import build_parser, default_cuda_graph_capture_batch_sizes
+from fluxserve.cli.app import build_parser
+from fluxserve.cli.common import default_cuda_graph_capture_batch_sizes
 
 
 def test_default_scheduler_batches_and_deduplicates_requests():

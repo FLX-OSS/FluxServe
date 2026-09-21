@@ -54,32 +54,19 @@ from fluxserve.backend.layers.moe import initialize_moe_config
 from fluxserve.backend.metrics import record_batch_performance_metrics
 from fluxserve.backend.utils.server_args import ServerArgs
 from fluxserve.backend.utils.runtime_utils import require_nvidia_cuda
-from fluxserve.prompt_utils import render_openai_messages
+from fluxserve.backend.entrypoints.prompt_utils import render_openai_messages
+from fluxserve.cli.common import (
+    StoreExplicit,
+    check_block_routing_alignment,
+    configure_logging,
+    normalize_attention_backend_args,
+    reject_unsupported_quantization,
+    set_process_title,
+)
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 BUCKET_SIZE = 32
-
-
-class StoreExplicit(argparse.Action):
-    def __call__(self, parser, namespace, values, option_string=None):
-        setattr(namespace, self.dest, values)
-        setattr(namespace, f"{self.dest}_explicit", True)
-
-
-def normalize_attention_backend_args(args) -> None:
-    if args.attention_backend == "flashinfer":
-        return
-    args.flashinfer_prefill_mode = "dense"
-    args.flashinfer_cache_mode = "dense"
-    if args.attention_backend == "fa4":
-        if getattr(args, "kv_cache_layout", "paged") != "paged":
-            raise ValueError("attention_backend='fa4' requires --kv-cache-layout paged")
-        if getattr(args, "page_size", None) is None:
-            args.page_size = int(args.block_length)
-        return
-    args.kv_cache_layout = "dense"
-    args.page_size = None
 
 
 class BenchmarkLogger:
@@ -533,12 +520,6 @@ def warmup_runner(runner, args, device, logger):
 
 @torch.no_grad()
 def run_worker(args, *, init_method: str = "env://"):
-    from fluxserve.cli import (
-        _reject_unsupported_quantization,
-        configure_logging,
-        set_process_title,
-    )
-
     server_args = None
     context = None
     runner = None
@@ -567,7 +548,7 @@ def run_worker(args, *, init_method: str = "env://"):
             "[Info] Diffusion-Gemma attention backend: "
             f"{args.attention_backend}, KV cache: {args.kv_cache_layout}."
         )
-    _reject_unsupported_quantization(model_config)
+    reject_unsupported_quantization(model_config)
     model_config.quant_config = None
     all_input_ids, prompts, questions, ids = load_inputs(
         args.dataset,
@@ -608,9 +589,7 @@ def run_worker(args, *, init_method: str = "env://"):
     log_input_shape_summary(input_lengths, batch_info, args, logger)
 
     logger.info("[Loading model]")
-    from fluxserve.cli import _check_block_routing_alignment
-
-    _check_block_routing_alignment(model_config, args.block_length)
+    check_block_routing_alignment(model_config, args.block_length)
 
     server_args = build_server_args(args, model_config)
     server_args.device = device
@@ -928,8 +907,6 @@ def add_bench_offline_subparser(subparsers) -> None:
 
 
 def bench_offline(args) -> None:
-    from fluxserve.cli import set_process_title
-
     reject_external_distributed_launch()
     normalize_attention_backend_args(args)
     args.log_file = resolve_log_file(args)

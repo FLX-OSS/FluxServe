@@ -39,7 +39,7 @@ import aiohttp
 import numpy as np
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
-from fluxserve.prompt_utils import render_openai_messages
+from fluxserve.backend.entrypoints.prompt_utils import render_openai_messages
 
 
 DEFAULT_TIMEOUT_SEC = 60 * 60

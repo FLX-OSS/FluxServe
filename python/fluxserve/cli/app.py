@@ -18,7 +18,28 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Top-level FluxServe CLI parser and command dispatcher.
+"""
 
-"""
-    FluxServe CLI commands.
-"""
+from __future__ import annotations
+
+from fluxserve.cli.bench_offline import bench_offline
+from fluxserve.cli.common import configure_logging
+from fluxserve.cli.launch import build_parser, launch
+
+
+def main() -> None:
+    """Parse the command line and dispatch the selected command."""
+    configure_logging()
+    args = build_parser().parse_args()
+    if args.command == "launch":
+        launch(args)
+    elif args.command == "env":
+        from fluxserve.env import main as env_main
+
+        env_main()
+    elif args.command == "bench":
+        args.dispatch_function(args)
+    elif args.command == "bench_offline":
+        bench_offline(args)

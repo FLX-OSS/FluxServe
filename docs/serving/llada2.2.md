@@ -13,7 +13,7 @@ See the [model support development guide](../../dev-notes/llada2.2-model-support
 Four GPUs, TP=4 / EP=4, paged FlashInfer with decode CUDA graphs:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 python -m fluxserve.cli launch \
+CUDA_VISIBLE_DEVICES=0,1,2,3 fluxserve launch \
   --model inclusionAI/LLaDA2.2-flash \
   --host 127.0.0.1 --port 8000 \
   --tp-size 4 --dp-size 1 --ep-size 4 \

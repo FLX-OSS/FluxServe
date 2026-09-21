@@ -2,7 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from fluxserve.cli import _reject_unsupported_quantization, build_parser
+from fluxserve.cli.app import build_parser
+from fluxserve.cli.common import reject_unsupported_quantization as _reject_unsupported_quantization
 
 
 @pytest.mark.parametrize(
