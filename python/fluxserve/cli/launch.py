@@ -186,7 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--use-cuda-graph", action="store_true")
     launch.add_argument("--use-prefill-cuda-graph", action="store_true")
     launch.add_argument("--use-decode-cuda-graph", action="store_true")
-    launch.add_argument("--cuda-graph-decode-mode", choices=("decomposed", "padded"), default="decomposed")
+    launch.add_argument("--cuda-graph-decode-mode", choices=("decomposed", "padded"), default="padded")
     launch.add_argument(
         "--cuda-graph-capture-bs",
         "--cuda_graph_capture_bs",

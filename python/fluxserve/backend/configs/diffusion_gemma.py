@@ -19,7 +19,7 @@
 # SOFTWARE.
 
 """
-# Transformers configs for Diffusion-Gemma.
+    Transformers configs for Diffusion-Gemma.
 """
 
 from __future__ import annotations
