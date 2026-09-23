@@ -1,0 +1,54 @@
+api_version: ci.fluxserve.io/v1
+name: eval-nemotron-diffusion-14b-tp4-fa4-graph-gsm8k
+type: eval
+triggers: [manual, nightly]
+runner:
+  labels: [gh200-4gpu]
+# Sharding coverage on the upstream four-GPU runner pool.
+#
+# The model is 27 GB and fits one card, so this is not about capacity -- it is
+# the only thing in CI that exercises the parallel linear layers, the sharded
+# KV geometry and the attention/expert collectives for this checkpoint.
+#
+# Nightly rather than per-commit: the single-card paged task is the gate, and a
+# four-way shard on every push buys little when nothing about the model is
+# parallelism-specific.
+env:
+  CI: "true"
+  HF_HUB_OFFLINE: "0"
+  TRANSFORMERS_OFFLINE: "0"
+server:
+  command: >-
+    fluxserve launch
+    --model nvidia/Nemotron-Labs-Diffusion-14B
+    --host 127.0.0.1 --port 8000
+    --tp-size 4 --dp-size 1 --ep-size 4
+    --gpu-memory-utilization 0.85
+    --max-num-seqs 8 --max-model-len 8192 --max-scheduled-tokens 2048
+    --block-length 32 --page-size 32
+    --parallel-decoding threshold --threshold 0.9
+    --attention-backend fa4
+    --kv-cache-layout paged --scheduler-policy paged
+    --use-decode-cuda-graph --cuda-graph-decode-mode padded
+    --cuda-graph-capture-bs 1 2 4 8
+    --trust-remote-code
+  ready:
+    url: http://127.0.0.1:8000/health
+    timeout: 3600
+    interval: 10
+eval:
+  install:
+    - python3 -m venv /tmp/evalscope-venv && /tmp/evalscope-venv/bin/python -m pip install "evalscope @ git+https://github.com/modelscope/evalscope.git@acd09b44384d53174768bb1063f675420f76fae9"
+  command: >-
+    /tmp/evalscope-venv/bin/python -m evalscope.cli.cli eval
+    --model nvidia/Nemotron-Labs-Diffusion-14B --model-id nemotron-tp4-fa4-graph
+    --eval-type openai_api --api-url http://127.0.0.1:8000/v1/chat/completions
+    --api-key EMPTY --datasets gsm8k --eval-batch-size 4 --judge-strategy rule
+    --generation-config '{"max_tokens": 2048, "temperature": 0.0}'
+    --work-dir .ci-artifacts/nemotron-tp4-fa4-graph-gsm8k
+    --no-timestamp --no-collect-perf
+report:
+  github_step_summary: true
+# Equal to the single-card paged task: sharding changes reduction order, so
+# individual completions may differ, but aggregate accuracy should not.
+score_threshold: 0.6

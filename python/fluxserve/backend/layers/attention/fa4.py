@@ -98,6 +98,7 @@ class FA4PagedAttention:
         )
         return bool(
             isinstance(metadata, PagedAttentionMetadata)
+            and metadata.backend == "fa4"
             and attention_mask is None
             and isinstance(past_key_values, (tuple, list))
             and len(past_key_values) == 2
@@ -166,7 +167,7 @@ class FA4PagedAttention:
             max_seqlen_k=metadata.max_kv_len,
             page_table=metadata.page_table,
             softmax_scale=self.config.scale,
-            causal=False,
+            causal=bool(getattr(metadata, "causal", False)),
             return_lse=False,
         )
         output = result[0] if isinstance(result, tuple) else result

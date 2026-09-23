@@ -120,6 +120,7 @@ class PagedSchedulerAdapter:
         page_size: int,
         num_device_pages: int,
         max_model_len: int,
+        full_prompt_prefill: bool = False,
     ):
         try:
             from flux_scheduler import (
@@ -149,6 +150,11 @@ class PagedSchedulerAdapter:
         self._scheduler = Scheduler(cfg)
         self.page_size = int(page_size)
         self.max_model_len = int(max_model_len)
+        # LLaDA folds the prompt's unaligned tail into its first decode block,
+        # so it prefills the block-aligned floor. A model whose blocks must
+        # start after the whole prompt -- because the block's first position is
+        # seeded by the prefill's own last logit -- needs the full length.
+        self.full_prompt_prefill = bool(full_prompt_prefill)
         self._active: set[str] = set()
 
     def submit(self, requests: Iterable[RequestState]) -> None:
@@ -160,7 +166,11 @@ class PagedSchedulerAdapter:
             spec = self._request_spec_cls()
             spec.request_id = req.rid
             spec.tokens = list(req.input_ids)
-            spec.prefill_length = req.aligned_prefill_length(self.page_size)
+            spec.prefill_length = (
+                len(req.input_ids)
+                if self.full_prompt_prefill
+                else req.aligned_prefill_length(self.page_size)
+            )
             if spec.prefill_length > self.max_model_len:
                 raise ValueError(
                     f"aligned prefill length {spec.prefill_length} exceeds "

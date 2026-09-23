@@ -62,6 +62,17 @@ from fluxserve.backend.execution.runners import (
     FA4DiffusionRunner,
     FlashInferDiffusionRunner,
 )
+from fluxserve.backend.execution.runners.nemotron import get_nemotron_runner
+from fluxserve.backend.execution.runners.nemotron_selfspec import (
+    NemotronSelfSpecRunner,
+)
+from fluxserve.backend.execution.runners.nemotron_selfspec_paged import (
+    NemotronSelfSpecPagedRunner,
+)
+from fluxserve.backend.model_loader.nemotron import (
+    apply_nemotron_runner_config,
+    normalize_nemotron_args,
+)
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
 from fluxserve.backend.layers.moe.utils import initialize_moe_config
 from fluxserve.backend.utils.runtime_utils import require_nvidia_cuda
@@ -149,6 +160,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     launch.add_argument("--page-size", type=int, default=None)
     launch.add_argument("--parallel-decoding", default="threshold")
+    # Nemotron-Labs-Diffusion sampling and thinking budget.
+    launch.add_argument("--max-thinking-tokens", type=int, default=None)
+    launch.add_argument("--temperature", type=float, default=0.0, help="Nemotron default sampling temperature")
+    launch.add_argument("--seed", type=int, default=None, help="Nemotron default request seed")
+    launch.add_argument("--nemotron-prefill-chunk-size", type=int, default=1024)
+    launch.add_argument("--end-think-token-id", type=int, default=None)
     launch.add_argument("--threshold", type=float, default=0.9)
     launch.add_argument("--low-threshold", type=float, default=0.3)
     launch.add_argument(
@@ -283,9 +300,10 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
         trust_remote_code=args.trust_remote_code,
     )
     is_diffusion_gemma = normalize_diffusion_gemma_serve_args(args, model_config)
-    apply_template = bool(args.apply_template or is_diffusion_gemma)
-    if is_diffusion_gemma and not args.apply_template:
-        logger.info("Diffusion-Gemma chat requests use the checkpoint chat template.")
+    is_nemotron = normalize_nemotron_args(args, model_config)
+    apply_template = bool(args.apply_template or is_diffusion_gemma or is_nemotron)
+    if (is_diffusion_gemma or is_nemotron) and not args.apply_template:
+        logger.info("Chat requests use the checkpoint chat template.")
     if is_diffusion_gemma and args.scheduler_policy == "paged":
         raise RuntimeError(
             "Diffusion-Gemma FlashInfer does not support scheduler_policy='paged' yet."
@@ -437,7 +455,14 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
                 args.model_name, trust_remote_code=args.trust_remote_code
             ),
         )
-        if is_diffusion_gemma:
+        if is_nemotron:
+            apply_nemotron_runner_config(runner_config, model_config, args)
+            server_args.sampling_defaults = {"temperature": args.temperature, "seed": args.seed}
+            server_args.speculative_context_margin = (
+                args.block_length if args.parallel_decoding == "self_speculation" else 0
+            )
+            runner_cls = get_nemotron_runner(args.attention_backend, args.parallel_decoding)
+        elif is_diffusion_gemma:
             runner_cls = DiffusionGemmaRunner
         else:
             if args.attention_backend == "flashinfer":
@@ -452,6 +477,10 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             runner_config=runner_config,
             device=args.device,
         )
+        if isinstance(
+            runner, (NemotronSelfSpecRunner, NemotronSelfSpecPagedRunner)
+        ):
+            runner.load_draft_adapter()
         if args.scheduler_policy == "paged" and int(server_args.scheduler_num_device_pages) <= 0:
             server_args.scheduler_num_device_pages = profile_paged_kv_pages(
                 runner=runner, page_size=int(args.page_size or args.block_length),
@@ -470,6 +499,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
                     page_size=page_size,
                     num_device_pages=num_device_pages,
                     max_model_len=args.max_model_len,
+                    full_prompt_prefill=is_nemotron,
                 )
             engine = AsyncLLM(
                 server_args=server_args,

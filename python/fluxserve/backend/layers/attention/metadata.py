@@ -34,6 +34,14 @@ class PagedAttentionMetadata:
     Prefill represents every block as a virtual varlen sequence.  Consequently
     a non-causal attention call has exactly LLaDA's block-causal semantics while
     all virtual sequences continue to share the same physical KV pages.
+
+    ``causal`` selects token-level causality *within* each virtual sequence.
+    FlashAttention aligns its causal mask bottom-right, so a task whose queries
+    sit at the end of its visible keys gets ``k <= q + (kv_len - q_len)``: full
+    visibility of the committed prefix plus causality inside the block. It
+    defaults to ``False``, preserving LLaDA's block-causal behaviour. Nemotron
+    selects causality per phase. ``backend`` defaults to FA4; the native
+    FlashInfer token-paged path selects it explicitly.
     """
 
     phase: Literal["prefill", "decode"]
@@ -50,6 +58,8 @@ class PagedAttentionMetadata:
     slot_mapping: torch.Tensor
     max_q_len: int
     max_kv_len: int
+    causal: bool = False
+    backend: Literal["fa4", "flashinfer"] = "fa4"
 
     @property
     def is_identity_mapping(self) -> bool:
@@ -74,6 +84,7 @@ def build_block_diffusion_paged_metadata(
     max_input_len: int,
     block_length: int,
     page_size: int,
+    causal: bool = False,
 ) -> PagedAttentionMetadata:
     """Build one FA-style varlen plan without depending on a backend API."""
 
@@ -194,4 +205,5 @@ def build_block_diffusion_paged_metadata(
         slot_mapping=slot_mapping,
         max_q_len=int(block_length),
         max_kv_len=max_kv_len,
+        causal=bool(causal),
     )

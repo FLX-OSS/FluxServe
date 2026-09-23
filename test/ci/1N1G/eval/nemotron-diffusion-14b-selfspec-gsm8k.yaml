@@ -1,0 +1,52 @@
+api_version: ci.fluxserve.io/v1
+name: eval-nemotron-diffusion-14b-selfspec-gsm8k
+type: eval
+triggers: [manual]
+runner:
+  labels: [gh200-1gpu]
+# Linear self-speculation: the diffusion mode drafts a block, the
+# autoregressive mode verifies it, and the longest matching prefix plus one
+# bonus token is accepted. Emitted tokens are the verifier's, so accuracy
+# should match the dense task; what this run is really for is the acceptance
+# length behind it.
+#
+# Manual only, and deliberately so. The reference restricts the mode to batch
+# size one and the runner refuses to batch rather than silently serialising, so
+# `--max-num-seqs 1` and `--eval-batch-size 1` are requirements, not tuning.
+# That makes it far too slow for a per-commit gate.
+env:
+  CI: "true"
+  HF_HUB_OFFLINE: "0"
+  TRANSFORMERS_OFFLINE: "0"
+install:
+  - python3 -m pip install pytest pyyaml
+server:
+  command: >-
+    fluxserve launch
+    --model nvidia/Nemotron-Labs-Diffusion-14B
+    --host 127.0.0.1 --port 8000
+    --tp-size 1 --dp-size 1 --ep-size 1
+    --gpu-memory-utilization 0.85
+    --max-num-seqs 1 --max-model-len 8192 --max-scheduled-tokens 2048
+    --block-length 32
+    --parallel-decoding self_speculation --threshold 0.9
+    --attention-backend sdpa --kv-cache-layout dense
+    --trust-remote-code
+  ready:
+    url: http://127.0.0.1:8000/health
+    timeout: 3600
+    interval: 10
+eval:
+  install:
+    - python3 -m venv /tmp/evalscope-venv && /tmp/evalscope-venv/bin/python -m pip install "evalscope @ git+https://github.com/modelscope/evalscope.git@acd09b44384d53174768bb1063f675420f76fae9"
+  command: >-
+    /tmp/evalscope-venv/bin/python -m evalscope.cli.cli eval
+    --model nvidia/Nemotron-Labs-Diffusion-14B --model-id nemotron-selfspec
+    --eval-type openai_api --api-url http://127.0.0.1:8000/v1/chat/completions
+    --api-key EMPTY --datasets gsm8k --eval-batch-size 1 --judge-strategy rule
+    --generation-config '{"max_tokens": 1024, "temperature": 0.0}'
+    --work-dir .ci-artifacts/nemotron-selfspec-gsm8k
+    --no-timestamp --no-collect-perf
+report:
+  github_step_summary: true
+score_threshold: 0.6

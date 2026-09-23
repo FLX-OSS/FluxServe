@@ -1,0 +1,52 @@
+api_version: ci.fluxserve.io/v1
+name: eval-nemotron-diffusion-14b-fa4-graph-gsm8k
+type: eval
+triggers: [per-commit, manual]
+priority: high
+runner:
+  labels: [gh200-1gpu]
+# Nemotron-Labs-Diffusion is dense and 27 GB in bfloat16, so it serves on one
+# GH200 at TP=1 -- no tensor or expert parallelism to configure.
+#
+# FA4 decode graphs use paged metadata. This task covers continuous
+# scheduling, per-call attention causality and both graph variants at once.
+env:
+  CI: "true"
+  HF_HUB_OFFLINE: "0"
+  TRANSFORMERS_OFFLINE: "0"
+server:
+  command: >-
+    fluxserve launch
+    --model nvidia/Nemotron-Labs-Diffusion-14B
+    --host 127.0.0.1 --port 8000
+    --tp-size 1 --dp-size 1 --ep-size 1
+    --gpu-memory-utilization 0.85
+    --max-num-seqs 8 --max-model-len 8192 --max-scheduled-tokens 2048
+    --block-length 32 --page-size 32
+    --parallel-decoding threshold --threshold 0.9
+    --attention-backend fa4
+    --kv-cache-layout paged --scheduler-policy paged
+    --use-decode-cuda-graph --cuda-graph-decode-mode padded
+    --cuda-graph-capture-bs 1 2 4 8
+    --trust-remote-code
+  ready:
+    url: http://127.0.0.1:8000/health
+    timeout: 3600
+    interval: 10
+eval:
+  install:
+    - python3 -m venv /tmp/evalscope-venv && /tmp/evalscope-venv/bin/python -m pip install "evalscope @ git+https://github.com/modelscope/evalscope.git@acd09b44384d53174768bb1063f675420f76fae9"
+  command: >-
+    /tmp/evalscope-venv/bin/python -m evalscope.cli.cli eval
+    --model nvidia/Nemotron-Labs-Diffusion-14B --model-id nemotron-fa4-graph
+    --eval-type openai_api --api-url http://127.0.0.1:8000/v1/chat/completions
+    --api-key EMPTY --datasets gsm8k --eval-batch-size 4 --judge-strategy rule
+    --generation-config '{"max_tokens": 2048, "temperature": 0.0}'
+    --work-dir .ci-artifacts/nemotron-fa4-graph-gsm8k
+    --no-timestamp --no-collect-perf
+report:
+  github_step_summary: true
+# Provisional: no GSM8K number has been measured for this model on any GPU yet.
+# Set deliberately low so the first green run establishes a baseline rather than
+# the threshold pretending to be one. Raise it once a measured score exists.
+score_threshold: 0.6

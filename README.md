@@ -10,7 +10,7 @@ Its core features include:
 
 - **Native Block-Causal Attention**: Provides efficient attention runtime with a block-casual attention mechanism suitable for AR diffusion in real-world scenarios, including *varlen prefill* and *varlen block-deocde* with CUDA graph support.
 - **Dynamic Request Scheduler**: Provides scheduler with low-overhead C++ control plane and Python execution plane with fine-grained block-level request management suitable for block diffusion models.
-- **Open Model Support**: Provides native support for a wide range of open diffusion language models, such as LLaDA2.X and Diffusion-Gemma.
+- **Open Model Support**: Provides native support for LLaDA2.X, Diffusion-Gemma, and [Nemotron-Labs-Diffusion](docs/serving/nemotron/nemotron-labs-diffusion-14B.md).
 - **Efficient Multi-GPU Serving**: Provides tensor paralllel (TP), data parallel (DP) and expert parallel (EP) support for large-scale models.
 
 ## [Getting Started](docs/guides/getting_started.md)

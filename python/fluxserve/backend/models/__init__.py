@@ -20,5 +20,10 @@
 
 from .llada2 import LLaDA2LLM
 from .diffusion_gemma import DiffusionGemmaForConditionalGeneration
+from .nemotron_diffusion import NemotronLabsDiffusionLLM
 
-__all__ = ["DiffusionGemmaForConditionalGeneration", "LLaDA2LLM"]
+__all__ = [
+    "DiffusionGemmaForConditionalGeneration",
+    "LLaDA2LLM",
+    "NemotronLabsDiffusionLLM",
+]

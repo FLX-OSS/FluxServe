@@ -96,12 +96,23 @@ class BlockDiffusionExecutor:
         original_gen_length = self.runner.runner_config.gen_length
         original_early_stop = self.runner.early_stop
         self.runner.runner_config.gen_length = max(req.max_new_tokens for req in requests)
-        if any(req.ignore_eos for req in requests):
+        if not getattr(self.runner, "supports_request_sampling", False) and any(
+            req.ignore_eos for req in requests
+        ):
             self.runner.early_stop = False
         try:
             if getattr(self.runner, "requires_prompt_lengths", False):
+                extra = {}
+                if getattr(self.runner, "supports_request_sampling", False):
+                    extra = {
+                        "sampling_params": [
+                            {**req.sampling_params, "ignore_eos": req.ignore_eos}
+                            for req in requests
+                        ],
+                        "generation_lengths": [req.max_new_tokens for req in requests],
+                    }
                 output = self.runner.generate(
-                    prompt, prompt_lengths=[len(ids) for ids in prompt_ids]
+                    prompt, prompt_lengths=[len(ids) for ids in prompt_ids], **extra
                 )
             else:
                 output = self.runner.generate(prompt)

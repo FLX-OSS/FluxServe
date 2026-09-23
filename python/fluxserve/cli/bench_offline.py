@@ -49,6 +49,17 @@ from fluxserve.backend.execution.runners import (
     FA4DiffusionRunner,
     FlashInferDiffusionRunner,
 )
+from fluxserve.backend.execution.runners.nemotron import get_nemotron_runner
+from fluxserve.backend.execution.runners.nemotron_selfspec import (
+    NemotronSelfSpecRunner,
+)
+from fluxserve.backend.execution.runners.nemotron_selfspec_paged import (
+    NemotronSelfSpecPagedRunner,
+)
+from fluxserve.backend.model_loader.nemotron import (
+    apply_nemotron_runner_config,
+    normalize_nemotron_args,
+)
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
 from fluxserve.backend.layers.moe import initialize_moe_config
 from fluxserve.backend.metrics import record_batch_performance_metrics
@@ -543,6 +554,7 @@ def run_worker(args, *, init_method: str = "env://"):
         trust_remote_code=args.trust_remote_code,
     )
     is_diffusion_gemma = normalize_diffusion_gemma_args(args, model_config)
+    is_nemotron = normalize_nemotron_args(args, model_config)
     if is_diffusion_gemma:
         logger.info(
             "[Info] Diffusion-Gemma attention backend: "
@@ -604,7 +616,10 @@ def run_worker(args, *, init_method: str = "env://"):
 
         runner_config = build_runner_config(args, batch_info, model_config)
         runner_config.cuda_graph_log_callback = logger.info
-        if is_diffusion_gemma:
+        if is_nemotron:
+            apply_nemotron_runner_config(runner_config, model_config, args)
+            runner_cls = get_nemotron_runner(args.attention_backend, args.parallel_decoding)
+        elif is_diffusion_gemma:
             runner_cls = DiffusionGemmaRunner
         else:
             if args.attention_backend == "flashinfer":
@@ -619,6 +634,10 @@ def run_worker(args, *, init_method: str = "env://"):
             runner_config=runner_config,
             device=device,
         )
+        if isinstance(
+            runner, (NemotronSelfSpecRunner, NemotronSelfSpecPagedRunner)
+        ):
+            runner.load_draft_adapter()
         eos_ids = getattr(runner.decoder, "eos_ids", (runner.decoder.eos_id,))
         logger.info(
             "[Info] Runner configuration: "
@@ -674,6 +693,13 @@ def run_worker(args, *, init_method: str = "env://"):
                     prompt_lengths=[sample.shape[1] for sample in input_ids],
                     generation_lengths=[args.gen_len] * len(input_ids),
                 )
+                if is_nemotron:
+                    # Nemotron returns generations after the padded prompt;
+                    # metrics and saved outputs use each original prompt length.
+                    out = compact_batch_output(
+                        out, input_ids, [args.gen_len] * len(input_ids),
+                        runner.decoder.mask_id,
+                    )
             denoising_steps = (
                 getattr(runner, "last_denoising_steps", None)
                 if is_diffusion_gemma
@@ -847,6 +873,9 @@ def add_bench_offline_subparser(subparsers) -> None:
     parser.add_argument("--page-size", "--page_size", dest="page_size", type=int)
     parser.add_argument("--gen-len", "--gen_len", dest="gen_len", type=int, default=1024)
     parser.add_argument("--block-length", "--block_length", dest="block_length", type=int, default=64)
+    parser.add_argument("--temperature", type=float, default=0.0, help="Nemotron sampling temperature")
+    parser.add_argument("--seed", type=int, default=None, help="Nemotron sampling seed (offline default: 0)")
+    parser.add_argument("--nemotron-prefill-chunk-size", type=int, default=1024)
     parser.add_argument(
         "--canvas-length", "--canvas_length", dest="canvas_length", type=int
     )

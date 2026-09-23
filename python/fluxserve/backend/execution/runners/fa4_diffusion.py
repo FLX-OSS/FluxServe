@@ -45,6 +45,26 @@ from fluxserve.backend.managers.kvcache import PagedKVCache
 class FA4DiffusionRunner(BlockDiffusionRunner):
     """LLaDA 2.x runner backed directly by standalone FlashAttention-4."""
 
+    # Architecture keys this runner will serve. A subclass that implements a
+    # different block contract on the same paging overrides it rather than
+    # removing the check.
+    supported_architecture_keys: tuple[str, ...] = ("llada2",)
+    supported_architecture_label: str = "LLaDA 2.x"
+
+    @classmethod
+    def _validate_architecture(cls, model_config) -> None:
+        architecture_names = " ".join(
+            str(name).lower()
+            for name in (getattr(model_config, "architectures", ()) or ())
+        )
+        model_type = str(getattr(model_config, "model_type", "")).lower()
+        haystack = f"{architecture_names} {model_type}"
+        if not any(key in haystack for key in cls.supported_architecture_keys):
+            raise ValueError(
+                f"{cls.__name__} currently supports "
+                f"{cls.supported_architecture_label} only."
+            )
+
     def __init__(self, *args, **kwargs):
         runner_config = kwargs.get("runner_config")
         if runner_config is None and len(args) >= 3:
@@ -76,13 +96,7 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
                 raise ValueError("FA4 decode graph buckets must cover max_num_seqs")
         if int(runner_config.page_size or runner_config.block_length) % 16 != 0:
             raise ValueError("FA4 page_size must be a multiple of 16.")
-        architecture_names = " ".join(
-            str(name).lower()
-            for name in (getattr(model_config, "architectures", ()) or ())
-        )
-        model_type = str(getattr(model_config, "model_type", "")).lower()
-        if "llada2" not in architecture_names and "llada2" not in model_type:
-            raise ValueError("FA4DiffusionRunner currently supports LLaDA 2.x only.")
+        self._validate_architecture(model_config)
         validate_fa4_runtime(device)
         super().__init__(*args, **kwargs)
         self._paged_request_slots: dict[str, int] = {}
@@ -126,6 +140,7 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
         max_input_len: int,
         is_prefill: bool,
         forward_batch: ForwardBatch | None = None,
+        causal: bool = False,
     ) -> ForwardBatch:
         if not isinstance(self.past_key_values, PagedKVCache):
             raise RuntimeError("FA4 requires FluxServe PagedKVCache.")
@@ -144,6 +159,7 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
             max_input_len=max_input_len,
             block_length=int(self.block_length),
             page_size=int(self.past_key_values.page_size),
+            causal=causal,
         )
         return forward_batch
 
