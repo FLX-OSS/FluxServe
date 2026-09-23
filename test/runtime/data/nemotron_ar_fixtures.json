@@ -1,5 +1,7 @@
 {
  "repo_id": "nvidia/Nemotron-Labs-Diffusion-14B",
+ "compatible_repo_ids": ["nvidia/Nemotron-Labs-Diffusion-3B", "nvidia/Nemotron-Labs-Diffusion-8B"],
+ "tokenizer_file_sha256": "623c34567aebb18582765289fbe23d901c62704d6518d71866e0e58db892b5b7",
  "revision": "f8c3e2c078e193599b8882d965b1001c456ba738",
  "tokenizer_vocab_sha256_16": "45eb000ce5cef996",
  "bos_token_id": 1,

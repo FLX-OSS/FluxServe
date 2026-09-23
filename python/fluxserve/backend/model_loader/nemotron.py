@@ -83,6 +83,7 @@ def resolve_nemotron_snapshot(model_config, *, local_files_only: bool = False) -
     snapshot = Path(
         snapshot_download(
             repo_id=model_name,
+            revision=getattr(model_config, "_commit_hash", None),
             allow_patterns=[WEIGHT_FILE, "*.json", "*.jinja"],
             local_files_only=local_files_only,
         )

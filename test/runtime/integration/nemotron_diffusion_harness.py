@@ -50,6 +50,13 @@ from pathlib import Path
 
 import torch
 
+# Also importable when this file is loaded directly with importlib in CPU tests.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from nemotron_test_utils import (
+    add_checkpoint_args, resolve_revision, validate_fixture_model,
+    check_artifact_models,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_FIXTURES = REPO_ROOT / "test" / "runtime" / "data" / "nemotron_ar_fixtures.json"
 MODEL = "nvidia/Nemotron-Labs-Diffusion-14B"
@@ -59,6 +66,7 @@ REVISION = "f8c3e2c078e193599b8882d965b1001c456ba738"
 def load_fixtures(path: str) -> list[dict]:
     with open(path) as handle:
         manifest = json.load(handle)
+    validate_fixture_model(manifest, MODEL)
     if "diffusion" not in manifest:
         raise ValueError(f"{path} has no 'diffusion' fixtures")
     return manifest["diffusion"]
@@ -86,6 +94,8 @@ def provenance() -> dict:
             return "unknown"
 
     return {
+        "model": MODEL,
+        "revision": REVISION,
         "commit": git("rev-parse", "HEAD"),
         "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
         "dirty": bool(git("status", "--porcelain")),
@@ -693,6 +703,7 @@ def compare_flashinfer(output_dir: Path, dense: dict) -> dict:
     """Fail if a requested FlashInfer artifact is missing or incomplete."""
     path = output_dir / "flashinfer.pt"
     paged = torch.load(path, weights_only=False)
+    check_artifact_models(dense, paged)
     checks = {"flashinfer_fixture_coverage": bool(dense["results"]) and (
         set(paged["results"]) == set(dense["results"])
     )}
@@ -792,6 +803,7 @@ def compare_extra_pass(key, expected, produced, produced_fixture, block_length):
 def compare_paged_selfspec(output_dir: Path, dense: dict, mode: str) -> dict:
     """Paged self-speculation against the dense lane, adapter state by adapter state."""
     paged = torch.load(output_dir / f"{mode}.pt", weights_only=False)
+    check_artifact_models(dense, paged)
     checks = {
         f"{mode}_fixture_coverage": bool(dense["results"])
         and set(paged["results"]) == set(dense["results"])
@@ -822,11 +834,13 @@ def compare_paged_selfspec(output_dir: Path, dense: dict, mode: str) -> dict:
             "results": paged["results"]}
 
 
-def compare(output_dir: Path, kv_nrms_tolerance: float, *, require_flashinfer=False) -> dict:
+def compare(output_dir: Path, kv_nrms_tolerance: float, *, require_flashinfer=False,
+            expected_checkpoint=None) -> dict:
     reference = torch.load(output_dir / "reference.pt", weights_only=False)
     dense = torch.load(output_dir / "dense.pt", weights_only=False)
     fa4_path = output_dir / "fa4.pt"
     fa4 = torch.load(fa4_path, weights_only=False) if fa4_path.exists() else None
+    check_artifact_models(reference, dense, fa4, expected_checkpoint=expected_checkpoint)
 
     record = {"fixtures": {}, "fa4_present": fa4 is not None,
               "kv_nrms_tolerance": kv_nrms_tolerance}
@@ -1162,7 +1176,9 @@ def render(record: dict) -> str:
 
 
 def main() -> int:
+    global MODEL, REVISION
     parser = argparse.ArgumentParser(description=__doc__)
+    add_checkpoint_args(parser)
     parser.add_argument("--mode", required=True,
                         choices=("reference", "dense", "fa4", "flashinfer",
                                  *SELFSPEC_PAGED_MODES, "compare"))
@@ -1177,13 +1193,16 @@ def main() -> int:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--kv-nrms-tolerance", type=float, default=0.05)
     args = parser.parse_args()
+    MODEL = args.model
+    REVISION = resolve_revision(MODEL, args.revision)
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.mode == "compare":
         record = compare(output_dir, args.kv_nrms_tolerance,
-                         require_flashinfer=args.require_flashinfer)
+                         require_flashinfer=args.require_flashinfer,
+                         expected_checkpoint=(MODEL, REVISION))
         (output_dir / "diffusion_metrics.json").write_text(
             json.dumps(
                 {

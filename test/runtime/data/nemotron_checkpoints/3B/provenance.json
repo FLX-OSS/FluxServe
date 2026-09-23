@@ -1,0 +1,9 @@
+{
+  "repo_id": "nvidia/Nemotron-Labs-Diffusion-3B",
+  "revision": "0d51902da1f8869f83413ce642fab402fa5641e0",
+  "header_sha256": "f1fd72a428d98973aa16feed709383d71027c64e018ff5b0b87d26e05dcb4953",
+  "tokenizer_sha256": "623c34567aebb18582765289fbe23d901c62704d6518d71866e0e58db892b5b7",
+  "source": "https://huggingface.co/nvidia/Nemotron-Labs-Diffusion-3B/tree/0d51902da1f8869f83413ce642fab402fa5641e0",
+  "note": "Official configuration and safetensors header only; no weights or generated outputs.",
+  "adapter_header_sha256": "f83c6c8138f2780e01bcf4dc92e75dca15036f3dbb5b32475de5d8e42cd8bf7d"
+}

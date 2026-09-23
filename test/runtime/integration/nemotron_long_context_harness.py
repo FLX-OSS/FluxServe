@@ -37,6 +37,12 @@ from pathlib import Path
 
 import torch
 
+# Also importable when this file is loaded directly with importlib in CPU tests.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from nemotron_test_utils import (
+    add_checkpoint_args, resolve_revision, validate_fixture_model,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_FIXTURES = REPO_ROOT / "test" / "runtime" / "data" / "nemotron_ar_fixtures.json"
 MODEL = "nvidia/Nemotron-Labs-Diffusion-14B"
@@ -68,6 +74,8 @@ def provenance() -> dict:
             return "unknown"
 
     return {
+        "model": MODEL,
+        "revision": REVISION,
         "commit": git("rev-parse", "HEAD"),
         "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
         "dirty": bool(git("status", "--porcelain")),
@@ -83,6 +91,7 @@ def probe_tokens(fixtures_path: str, length: int) -> list[int]:
     but make the logits meaningless."""
     with open(fixtures_path) as handle:
         manifest = json.load(handle)
+    validate_fixture_model(manifest, MODEL)
     source = manifest["diffusion"][0]["input_ids"]
     return (source * ((length + len(source) - 1) // len(source)))[:length]
 
@@ -274,7 +283,9 @@ def render(record: dict) -> str:
 
 
 def main() -> int:
+    global MODEL, REVISION
     parser = argparse.ArgumentParser(description=__doc__)
+    add_checkpoint_args(parser)
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--fixtures", default=str(DEFAULT_FIXTURES))
@@ -284,6 +295,8 @@ def main() -> int:
         help="comma-separated absolute position offsets; 0 must be included",
     )
     args = parser.parse_args()
+    MODEL = args.model
+    REVISION = resolve_revision(MODEL, args.revision)
 
     offsets = [int(value) for value in args.offsets.split(",") if value != ""]
     if 0 not in offsets:

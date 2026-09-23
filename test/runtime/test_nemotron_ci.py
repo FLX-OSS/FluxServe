@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from test_nemotron_model import checkpoint_config
+from nemotron_test_utils import MODEL_SIZES, checkpoint_config
 
 CI_ROOT = pathlib.Path(__file__).resolve().parents[1] / "ci"
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -104,8 +104,7 @@ def test_every_server_command_parses_and_normalizes(index):
 
     _, data = nemotron_tasks()[index]
     args = server_args_for(data)
-    assert normalize_nemotron_args(args, checkpoint_config()) is True
-    assert args.model_name == "nvidia/Nemotron-Labs-Diffusion-14B"
+    assert normalize_nemotron_args(args, checkpoint_config(args.model_name)) is True
     assert args.block_length == 32, "the checkpoint's own block_size"
 
 
@@ -189,6 +188,40 @@ def test_the_paged_and_dense_lanes_share_a_threshold_and_decoding_recipe():
         by_name["eval-nemotron-diffusion-14b-fa4-graph-gsm8k"]["score_threshold"]
         == by_name["eval-nemotron-diffusion-14b-dense-gsm8k"]["score_threshold"]
     )
+
+
+@pytest.mark.parametrize("size", MODEL_SIZES)
+def test_every_size_has_all_backends_and_decoding_modes(size):
+    tasks = [data for _, data in nemotron_tasks()
+             if server_args_for(data).model_name == f"nvidia/Nemotron-Labs-Diffusion-{size}"]
+    coverage = {
+        (args.attention_backend, args.parallel_decoding, args.tp_size)
+        for args in map(server_args_for, tasks)
+    }
+    assert coverage == {
+        (backend, mode, 1)
+        for backend in ("sdpa", "fa4", "flashinfer")
+        for mode in ("threshold", "self_speculation")
+    } | {("fa4", "threshold", 4)}
+    for data in tasks:
+        args = server_args_for(data)
+        tokens = shlex.split(data["eval"]["command"])
+        assert tokens[tokens.index("--model") + 1] == args.model_name
+    by_backend = {server_args_for(data).attention_backend: data for data in tasks
+                  if server_args_for(data).parallel_decoding == "threshold"
+                  and server_args_for(data).tp_size == 1}
+    for field in ("threshold", "block_length", "max_model_len"):
+        assert len({getattr(server_args_for(data), field)
+                    for data in by_backend.values()}) == 1
+    assert len({data["score_threshold"] for data in by_backend.values()}) == 1
+
+
+def test_evaluation_outputs_are_unique_across_model_sizes():
+    outputs = []
+    for _, data in nemotron_tasks():
+        tokens = shlex.split(data["eval"]["command"])
+        outputs.append(tokens[tokens.index("--work-dir") + 1])
+    assert len(outputs) == len(set(outputs))
 
 
 def test_score_thresholds_are_marked_provisional():

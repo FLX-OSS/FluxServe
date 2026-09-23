@@ -197,7 +197,8 @@ def test_the_graphs_lane_is_optional_but_the_others_are_not(tmp_path):
         gate(tmp_path)
 
 
-def test_server_command_carries_the_paged_and_graph_flags():
+@pytest.mark.parametrize("model_path", [None, "/tmp/nemotron-3b-pinned"])
+def test_server_command_carries_the_paged_and_graph_flags(model_path):
     module = harness()
     _, handle, command = None, None, None
     try:
@@ -210,10 +211,12 @@ def test_server_command_carries_the_paged_and_graph_flags():
             _, handle, command = module.launch_server(
                 12345, graphs=True, max_model_len=512,
                 log_path=pathlib.Path("/dev/null"),
+                model_path=model_path,
             )
     finally:
         pass
     assert command[:4] == [sys.executable, "-m", "fluxserve.cli.launch", "launch"]
+    assert command[command.index("--model") + 1] == (model_path or module.MODEL)
     for flag in (
         "--attention-backend", "fa4",
         "--kv-cache-layout", "paged",

@@ -46,6 +46,13 @@ from urllib.request import Request, urlopen
 
 import torch
 
+# Also importable when this file is loaded directly with importlib in CPU tests.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from nemotron_test_utils import (
+    add_checkpoint_args, resolve_revision, validate_fixture_model,
+    check_artifact_models,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_FIXTURES = REPO_ROOT / "test" / "runtime" / "data" / "nemotron_ar_fixtures.json"
 MODEL = "nvidia/Nemotron-Labs-Diffusion-14B"
@@ -70,6 +77,7 @@ EXTRA_LANES = (
 def load_fixtures(path: str) -> list[dict]:
     with open(path) as handle:
         manifest = json.load(handle)
+    validate_fixture_model(manifest, MODEL)
     return manifest["diffusion"]
 
 
@@ -98,6 +106,8 @@ def provenance() -> dict:
             return "unknown"
 
     return {
+        "model": MODEL,
+        "revision": REVISION,
         "commit": git("rev-parse", "HEAD"),
         "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
         "dirty": bool(git("status", "--porcelain")),
@@ -151,7 +161,7 @@ def run_offline(fixtures, device: str, *, decoding="threshold",
     config = AutoConfig.from_pretrained(
         MODEL, revision=REVISION, trust_remote_code=True
     )
-    tokenizer = AutoTokenizer.from_pretrained(MODEL, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL, revision=REVISION, trust_remote_code=True)
     max_length = max(
         fixture["length"] + fixture["max_new_tokens"] for fixture in fixtures
     ) + BLOCK_LENGTH
@@ -263,10 +273,10 @@ def wait_ready(base_url: str, process, timeout: float = 2400) -> None:
 def launch_server(port: int, *, graphs: bool, max_model_len: int, log_path: Path,
                   tp_size: int = 1, backend: str = "fa4",
                   decoding: str = "threshold", max_num_seqs: int = MAX_NUM_SEQS,
-                  thinking: int | None = None):
+                  thinking: int | None = None, model_path: str | None = None):
     command = [
         sys.executable, "-m", "fluxserve.cli.launch", "launch",
-        "--model", MODEL,
+        "--model", model_path or MODEL,
         "--host", "127.0.0.1", "--port", str(port),
         "--tp-size", str(tp_size), "--dp-size", "1",
         "--ep-size", str(tp_size),
@@ -337,6 +347,11 @@ def run_serve(fixtures, *, graphs: bool, output_dir: Path, tp_size: int = 1,
               label: str | None = None, backend: str = "fa4",
               decoding: str = "threshold", max_num_seqs: int = MAX_NUM_SEQS,
               thinking: int | None = None, flood: bool = True) -> dict:
+    from transformers import AutoConfig
+    from fluxserve.backend.model_loader.nemotron import resolve_nemotron_snapshot
+
+    config = AutoConfig.from_pretrained(MODEL, revision=REVISION, trust_remote_code=True)
+    model_path = str(resolve_nemotron_snapshot(config))
     max_model_len = max(
         fixture["length"] + fixture["max_new_tokens"] for fixture in fixtures
     ) + 4 * BLOCK_LENGTH
@@ -347,7 +362,7 @@ def run_serve(fixtures, *, graphs: bool, output_dir: Path, tp_size: int = 1,
     process, handle, command = launch_server(
         port, graphs=graphs, max_model_len=max_model_len, log_path=log_path,
         tp_size=tp_size, backend=backend, decoding=decoding,
-        max_num_seqs=max_num_seqs, thinking=thinking,
+        max_num_seqs=max_num_seqs, thinking=thinking, model_path=model_path,
     )
     record = {"graphs": graphs, "tp_size": tp_size, "label": label,
               "backend": backend, "decoding": decoding,
@@ -431,10 +446,16 @@ def run_serve(fixtures, *, graphs: bool, output_dir: Path, tp_size: int = 1,
 # ---------------------------------------------------------------------------
 
 
-def compare(output_dir: Path) -> dict:
+def compare(output_dir: Path, *, expected_checkpoint=None) -> dict:
+    loaded = []
+
     def load(name):
         path = output_dir / f"{name}.json"
-        return json.loads(path.read_text()) if path.exists() else None
+        artifact = json.loads(path.read_text()) if path.exists() else None
+        check_artifact_models(*loaded, artifact, expected_checkpoint=expected_checkpoint)
+        if artifact is not None:
+            loaded.append(artifact)
+        return artifact
 
     offline = load("online_offline")
     eager = load("online_eager")
@@ -772,7 +793,9 @@ def render(record: dict) -> str:
 
 
 def main() -> int:
+    global MODEL, REVISION
     parser = argparse.ArgumentParser(description=__doc__)
+    add_checkpoint_args(parser)
     parser.add_argument("--mode", required=True,
                         choices=("offline", "serve", "compare"))
     parser.add_argument("--output", required=True)
@@ -798,12 +821,14 @@ def main() -> int:
         help="artifact name suffix; defaults to eager/graphs",
     )
     args = parser.parse_args()
+    MODEL = args.model
+    REVISION = resolve_revision(MODEL, args.revision)
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.mode == "compare":
-        record = compare(output_dir)
+        record = compare(output_dir, expected_checkpoint=(MODEL, REVISION))
         (output_dir / "online_metrics.json").write_text(json.dumps(record, indent=2))
         (output_dir / "online_summary.md").write_text(render(record))
         print(json.dumps(record["checks"], indent=2), flush=True)

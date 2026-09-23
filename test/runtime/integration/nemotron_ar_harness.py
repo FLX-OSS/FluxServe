@@ -37,6 +37,12 @@ from pathlib import Path
 
 import torch
 
+# Also importable when this file is loaded directly with importlib in CPU tests.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from nemotron_test_utils import (
+    add_checkpoint_args, resolve_revision, validate_fixture_model,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_FIXTURES = REPO_ROOT / "test" / "runtime" / "data" / "nemotron_ar_fixtures.json"
 
@@ -552,10 +558,7 @@ def environment_record(args) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default="nvidia/Nemotron-Labs-Diffusion-14B")
-    parser.add_argument(
-        "--revision", default="f8c3e2c078e193599b8882d965b1001c456ba738"
-    )
+    add_checkpoint_args(parser)
     parser.add_argument("--fixtures", default=str(DEFAULT_FIXTURES))
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", default="cuda:0")
@@ -568,16 +571,14 @@ def main() -> int:
     )
     parser.add_argument("--skip-greedy", action="store_true")
     args = parser.parse_args()
+    args.revision = resolve_revision(args.model, args.revision)
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     with open(args.fixtures) as handle:
         manifest = json.load(handle)
-    if manifest["repo_id"] != args.model:
-        raise ValueError(
-            f"fixture manifest targets {manifest['repo_id']}, not {args.model}"
-        )
+    validate_fixture_model(manifest, args.model)
 
     from transformers import AutoConfig
 
