@@ -18,6 +18,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Layer communicators.
+"""
+
 from dataclasses import dataclass
 from enum import Enum, auto
 from functools import partial

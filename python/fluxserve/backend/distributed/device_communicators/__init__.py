@@ -19,5 +19,7 @@
 # SOFTWARE.
 
 
-"""Device communicator compatibility."""
+"""
+    Device communicator compatibility.
+"""
 

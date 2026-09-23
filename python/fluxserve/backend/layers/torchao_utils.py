@@ -19,7 +19,7 @@
 # SOFTWARE.
 
 """
-Common utilities for torchao.
+    Utilities for torchao.
 """
 
 import logging

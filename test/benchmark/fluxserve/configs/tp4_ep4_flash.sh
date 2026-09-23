@@ -3,7 +3,7 @@
 set -euo pipefail
 
 
-exec fluxserve serve \
+exec fluxserve launch \
     --model inclusionAI/LLaDA2.0-flash \
     --host 127.0.0.1 \
     --port 8000 \
@@ -17,7 +17,7 @@ exec fluxserve serve \
     --block-length 64 \
     --parallel-decoding threshold \
     --threshold 0.95 \
-    --attention-backend flashinfer \
+    --attention-backend fa4 \
     --kv-cache-layout paged \
     --scheduler-policy paged \
     --use-decode-cuda-graph \

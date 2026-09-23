@@ -237,7 +237,7 @@ class TestBlockRoutingBanner:
 
 class TestFluxserveLoggingSetup:
     def test_attaches_one_scoped_handler_and_is_idempotent(self):
-        from fluxserve.cli import configure_logging
+        from fluxserve.cli.common import configure_logging
 
         namespace = logging.getLogger('fluxserve')
         saved = list(namespace.handlers)

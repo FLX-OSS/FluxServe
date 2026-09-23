@@ -15,5 +15,7 @@ exec sglang serve  \
     --mem-fraction-static 0.8 \
     --dllm-algorithm LowConfidence \
     --attention-backend flashinfer \
+    --dllm-algorithm-config ./test/benchmark/sglang/configs/llada_config.yaml \
     --disable-radix-cache \
-    --chat-template ./test/benchmark/sglang/llada2_chat_template.jinja
+    --disable-piecewise-cuda-graph \
+    --chat-template ./test/benchmark/sglang/configs/llada2_chat_template.jinja

@@ -351,9 +351,9 @@ def make_manager(term_timeout: float = 10.0) -> ProcessGroupManager:
     Build a ProcessGroupManager from the environment.
 
     Looks for a stable runner identifier in order:
-      1. RUNNER_NAME   – set by GitHub Actions per registered runner
-      2. CI_RUNNER_NAME – set by GitLab CI
-      3. HOSTNAME      – machine hostname (stable on dedicated hosts)
+      1. RUNNER_NAME   - set by GitHub Actions per registered runner
+      2. CI_RUNNER_NAME - set by GitLab CI
+      3. HOSTNAME      - machine hostname (stable on dedicated hosts)
 
     Raises RuntimeError if none of the above is available.
     """

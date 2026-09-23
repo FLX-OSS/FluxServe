@@ -19,6 +19,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Parameter modules.
+"""
+
+
 import logging
 from fractions import Fraction
 from typing import Callable, Optional, Union

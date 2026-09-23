@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # LLaDA2.1-flash, joint M2T/T2T decoding, Quality preset (0.7/0.5).
-exec fluxserve serve \
+exec fluxserve launch \
     --model inclusionAI/LLaDA2.1-flash \
     --host 127.0.0.1 \
     --port 8000 \
@@ -19,9 +19,8 @@ exec fluxserve serve \
     --threshold 0.7 \
     --editing-threshold 0.5 \
     --max-post-steps 16 \
-    --attention-backend flashinfer \
+    --attention-backend fa4 \
     --kv-cache-layout paged \
     --scheduler-policy paged \
     --use-decode-cuda-graph \
-    --cuda-graph-decode-mode padded \
-    --cuda-graph-capture-bs 1 2 4 8 10 12 16 \
+    --cuda-graph-decode-mode padded

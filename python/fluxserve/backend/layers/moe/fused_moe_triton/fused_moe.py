@@ -20,7 +20,9 @@
 # SOFTWARE.
 
 
-"""Fused MoE kernel."""
+"""
+    Fused MoE kernel.
+"""
 
 from __future__ import annotations
 

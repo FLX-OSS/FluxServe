@@ -67,7 +67,7 @@ setup(
     package_data={'': [os.path.join('datasets', 'dataset_checksums', '*.txt')]},
     entry_points={
         "console_scripts": [
-            "fluxserve=fluxserve.cli:main",
+            "fluxserve=fluxserve.cli.app:main",
         ],
     },
     extras_require={

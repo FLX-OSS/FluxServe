@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-exec fluxserve serve \
+exec fluxserve launch \
     --model google/diffusiongemma-26B-A4B-it \
     --host 127.0.0.1 \
     --port 8000 \
@@ -13,6 +13,7 @@ exec fluxserve serve \
     --max-num-seqs 4 \
     --max-model-len 8192 \
     --max-scheduled-tokens 2048 \
+    --max-denoising-steps 48 \
     --block-length 256 \
     --canvas-length 256 \
     --page-size 256 \
@@ -21,4 +22,5 @@ exec fluxserve serve \
     --flashinfer-cache-mode paged \
     --kv-cache-layout paged \
     --scheduler-policy default \
-    --use-decode-cuda-graph
+    --use-decode-cuda-graph \
+    --cuda-graph-decode-mode padded

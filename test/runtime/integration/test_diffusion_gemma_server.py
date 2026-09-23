@@ -87,7 +87,7 @@ def test_official_diffusion_gemma_single_gpu_server(tmp_path):
         sys.executable,
         "-m",
         "fluxserve.cli",
-        "serve",
+        "launch",
         "--model",
         model_name,
         "--host",

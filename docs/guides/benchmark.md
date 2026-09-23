@@ -20,7 +20,7 @@ fluxserve bench_offline \
 1. Launch FluxServe engine
 
 ```bash
-fluxserve serve \
+fluxserve launch \
   --model inclusionAI/LLaDA2.0-mini \
   --host 127.0.0.1 \
   --port 8000 \

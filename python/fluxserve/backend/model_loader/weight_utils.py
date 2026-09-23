@@ -18,6 +18,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Utilities for weight loading.
+"""
+
 import json
 from dataclasses import dataclass
 from functools import lru_cache
