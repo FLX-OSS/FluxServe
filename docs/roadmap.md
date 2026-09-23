@@ -1,9 +1,7 @@
 # Development planning notes
 
-This historical checklist is retained for development reference and does not represent current model or feature support. See the [public documentation](../docs/index.md) for supported serving recipes.
-
 ### Model Support
-
+- [ ] [Nemotron-Labs-Diffusion](https://huggingface.co/collections/nvidia/nemotron-labs-diffusion)
 
 ### Kernel Support
 - [ ] Flash-Attn-4
@@ -24,4 +22,4 @@ This historical checklist is retained for development reference and does not rep
   - [ ] DeepEP
   - [ ] EPLB
 - [ ] Model Gateway
-  - [ ] GRPC
+  - [ ] gRPC
