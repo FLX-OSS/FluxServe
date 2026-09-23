@@ -22,6 +22,7 @@
 """
     Rotary positional embeddings (RoPE).
 """
+
 import itertools
 import math
 from typing import Any, Dict, List, Optional, Tuple, Union

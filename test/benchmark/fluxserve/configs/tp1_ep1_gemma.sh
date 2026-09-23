@@ -13,6 +13,7 @@ exec fluxserve launch \
     --max-num-seqs 4 \
     --max-model-len 8192 \
     --max-scheduled-tokens 2048 \
+    --max-denoising-steps 48 \
     --block-length 256 \
     --canvas-length 256 \
     --page-size 256 \

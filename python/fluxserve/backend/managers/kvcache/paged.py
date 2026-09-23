@@ -18,6 +18,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Paged KV cache implementation.
+"""
+
+
 from __future__ import annotations
 
 import math
@@ -26,8 +31,6 @@ import torch
 
 
 class PagedKVCache:
-    """Flashinfer-style Paged KV cache."""
-
     def __init__(
         self,
         *,

@@ -4,7 +4,7 @@ set -euo pipefail
 
 
 exec sglang serve  \
-    --model-path inclusionAI/LLaDA2.0-flash \
+    --model-path inclusionAI/LLaDA2.1-flash \
     --trust-remote-code \
     --host 127.0.0.1 \
     --port 8000 \
@@ -13,9 +13,9 @@ exec sglang serve  \
     --data-parallel-size 1 \
     --max-running-requests 16 \
     --mem-fraction-static 0.8 \
-    --dllm-algorithm LowConfidence \
+    --dllm-algorithm JointThreshold \
+    --dllm-algorithm-config ./test/benchmark/sglang/configs/llada21_config.yaml \
     --attention-backend flashinfer \
-    --dllm-algorithm-config ./test/benchmark/sglang/configs/llada_config.yaml \
     --disable-radix-cache \
     --disable-piecewise-cuda-graph \
     --chat-template ./test/benchmark/sglang/configs/llada2_chat_template.jinja

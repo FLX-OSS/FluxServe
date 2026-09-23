@@ -1,0 +1,15 @@
+# Number of reverse denoising steps per canvas.
+max_denoising_steps: 48
+# Optional. Makes the renoise sampling reproducible (also shared across TP ranks).
+seed: 1234
+sampler_config:
+  # Entropy budget. Accept the lowest-entropy canvas positions within this bound each step (the rest are re-noised).
+  entropy_bound: 0.1
+# Linear temperature schedule applied over the denoising steps.
+temperature_schedule:
+  t_min: 0.1
+  t_max: 1
+# Stop early once the canvas is stable and confident.
+stopping_config:
+  confidence_threshold: 0.1
+  stability_threshold: 1
