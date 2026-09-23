@@ -15,8 +15,6 @@ Its core features include:
 
 ## [Getting Started](docs/guides/getting_started.md)
 
-## [Documentation](docs/index.md)
-
 ## Performance Results
 <img src="./assets/figures/online_throughput.png" alt="FluxServe vs. SGLang on LLaDA-2.0/2.1" width="960px" margin="10px"></img>
 
