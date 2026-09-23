@@ -9,7 +9,7 @@ result artifact.
 
 It is a developer harness, not a serving mode, and not a pytest module: run it
 from a GPU job. See
-``docs/serving/nemotron/nemotron-labs-diffusion-14B.md`` for configuration.
+``docs/serving/nemotron/nemotron-labs-diffusion.md`` for configuration.
 
 AR execution contract under test:
 

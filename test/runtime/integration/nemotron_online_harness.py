@@ -25,7 +25,7 @@ Modes, run as separate processes because each loads the model:
     --mode serve     launch a server and run the scenarios (--graphs to capture)
     --mode compare   read the artifacts, gate, write the summary
 
-See ``docs/serving/nemotron/nemotron-labs-diffusion-14B.md`` for configuration.
+See ``docs/serving/nemotron/nemotron-labs-diffusion.md`` for configuration.
 """
 
 from __future__ import annotations

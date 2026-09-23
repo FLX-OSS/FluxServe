@@ -27,7 +27,7 @@ pattern a forward runs under. This module owns only the architecture; causality
 belongs to the caller, which supplies either a dense ``attention_mask`` or paged
 attention metadata.
 
-See ``docs/serving/nemotron/nemotron-labs-diffusion-14B.md``.
+See ``docs/serving/nemotron/nemotron-labs-diffusion.md``.
 """
 
 from __future__ import annotations

@@ -161,8 +161,9 @@ def test_harness_comparison_rejects_mixed_sizes_before_comparing_tokens(kind, tm
 def test_documented_launch_commands_are_valid_for_their_checkpoint(size):
     from fluxserve.cli.launch import build_parser
 
-    doc = ROOT / f"docs/serving/nemotron/nemotron-labs-diffusion-{size}.md"
-    command = doc.read_text().split("```bash\n", 1)[1].split("```", 1)[0]
+    doc = ROOT / "docs/serving/nemotron/nemotron-labs-diffusion.md"
+    section = doc.read_text().split(f"### Nemotron-Labs-Diffusion-{size} ", 1)[1]
+    command = section.split("```bash\n", 1)[1].split("```", 1)[0]
     tokens = shlex.split(command.replace("\\\n", " "))
     args = build_parser().parse_args(tokens[1:])
     assert args.model_name == f"nvidia/Nemotron-Labs-Diffusion-{size}"

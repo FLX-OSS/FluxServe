@@ -35,7 +35,7 @@ block, and each block's committed keys and values per layer. A run that agrees
 on the final tokens but disagrees on the committed KV has not reproduced the
 model, it has been lucky.
 
-See ``docs/serving/nemotron/nemotron-labs-diffusion-14B.md`` for configuration.
+See ``docs/serving/nemotron/nemotron-labs-diffusion.md`` for configuration.
 """
 
 from __future__ import annotations

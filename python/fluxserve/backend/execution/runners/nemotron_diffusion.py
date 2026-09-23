@@ -45,7 +45,7 @@ COMMIT   block, causal within block     write the block's KV; last logit
 Transition to COMMIT is decided on the block *after* the decoder update, so a
 resolved block does not pay for an extra no-op denoising forward.
 
-See ``docs/serving/nemotron/nemotron-labs-diffusion-14B.md`` for configuration.
+See ``docs/serving/nemotron/nemotron-labs-diffusion.md`` for configuration.
 """
 
 from __future__ import annotations

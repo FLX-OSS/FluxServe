@@ -42,7 +42,7 @@ forward just because a neighbour is still working.
 
 Decode CUDA graphs capture a denoise and a commit variant per batch bucket;
 see ``NemotronCudaGraphRunner``. Configuration is documented in
-``docs/serving/nemotron/nemotron-labs-diffusion-14B.md``.
+``docs/serving/nemotron/nemotron-labs-diffusion.md``.
 """
 
 from __future__ import annotations

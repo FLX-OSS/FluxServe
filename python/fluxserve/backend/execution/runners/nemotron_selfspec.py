@@ -24,7 +24,7 @@ One set of weights plays both roles against one KV cache: the diffusion mode
 drafts a block under bidirectional attention, the autoregressive mode verifies
 it under causal attention, and the longest matching prefix plus one bonus token
 is accepted. See
-``docs/serving/nemotron/nemotron-labs-diffusion-14B.md`` for configuration.
+``docs/serving/nemotron/nemotron-labs-diffusion.md`` for configuration.
 
 Two properties carry over from diffusion mode rather than fighting it. The
 committed KV always comes from the causal verify forward, which is the rule G1
