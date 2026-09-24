@@ -165,15 +165,22 @@ def test_self_speculation_tasks_match_what_their_runner_supports(index):
         assert "--eval-batch-size 1" in data["eval"]["command"]
 
 
-def test_exactly_one_task_gates_every_commit():
-    per_commit = [
+def test_every_model_size_has_a_gpu_gate_in_the_pr_matrix():
+    expected = {
+        f"eval-nemotron-diffusion-{size.lower()}-fa4-graph-gsm8k"
+        for size in MODEL_SIZES
+    }
+    per_commit = {
         data["name"] for _, data in nemotron_tasks()
         if "per-commit" in data["triggers"]
-    ]
-    assert per_commit == ["eval-nemotron-diffusion-14b-fa4-graph-gsm8k"], (
-        "one paged task gates pushes; the dense attribution lane and the "
-        "self-speculation lane are nightly and manual"
+    }
+    assert per_commit == expected
+    matrix = pipeline_module().build_matrix(
+        CI_ROOT / "1N1G", REPO_ROOT, trigger="per-commit"
     )
+    discovered = {entry["name"] for entry in matrix["include"]}
+    assert expected <= discovered
+    assert "ut-runtime" in discovered
 
 
 def test_the_paged_and_dense_lanes_share_a_threshold_and_decoding_recipe():

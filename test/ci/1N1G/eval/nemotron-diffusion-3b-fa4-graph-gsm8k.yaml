@@ -1,7 +1,8 @@
 api_version: ci.fluxserve.io/v1
 name: eval-nemotron-diffusion-3b-fa4-graph-gsm8k
 type: eval
-triggers: [manual]
+triggers: [per-commit, manual]
+priority: high
 runner:
   labels: [gh200-1gpu]
 env:

@@ -55,6 +55,9 @@ and matching offline baselines.
 
 Each size has seven GSM8K CI recipes under `test/ci/1N1G/eval/` and
 `test/ci/1N4G/eval/`: dense, FA4 graphs, FlashInfer, three self-speculation
-backends, and TP4 FA4 graphs. New 3B/8B recipes are manual tasks, with provisional
-score thresholds that must be calibrated after actual runs. Adding these files
-does not trigger Actions on a push to the `nemotron` branch.
+backends, and TP4 FA4 graphs. The 3B, 8B and 14B FA4 graph recipes run together
+with runtime regressions when a PR targeting `main` gets the `ci:run-1N1G`
+label, and on subsequent PR updates while that label remains. Other recipes
+are manual or nightly tasks. Score thresholds remain provisional until measured
+runs establish a baseline. A push to `nemotron` without a labeled PR does not
+trigger these GPU jobs.
