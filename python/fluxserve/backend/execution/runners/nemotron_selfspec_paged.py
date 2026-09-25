@@ -99,16 +99,6 @@ class NemotronSelfSpecPagedRunner(NemotronFA4DiffusionRunner):
     requires_prompt_lengths = True
 
     def __init__(self, *args, **kwargs):
-        runner_config = kwargs.get("runner_config")
-        if runner_config is None and len(args) >= 3:
-            runner_config = args[2]
-        if runner_config is not None and runner_config.enable_decode_cuda_graph:
-            raise ValueError(
-                "Paged self-speculation is eager: a draft launch and a verify "
-                "launch have the same token shape but different causality, and "
-                "the accepted length varies per iteration, so a captured graph "
-                "would need its own design."
-            )
         super().__init__(*args, **kwargs)
         self.draft_threshold = float(
             getattr(self.runner_config, "draft_threshold", 0.0) or 0.0
@@ -129,7 +119,26 @@ class NemotronSelfSpecPagedRunner(NemotronFA4DiffusionRunner):
     def load_draft_adapter(self, path=None) -> None:
         from fluxserve.backend.model_loader.nemotron import load_nemotron_lora
 
+        # Captured kernels retain the adapter's weight addresses. Destroy them
+        # before replacing either weight set, and load against base weights.
+        graph_runner = getattr(self, "nemotron_graph_runner", None)
+        if graph_runner is not None:
+            graph_runner.invalidate()
+        if self.lora is not None:
+            self.lora.apply(False)
         self.lora = load_nemotron_lora(self.model, self.model_config, path)
+        # Say so either way. A silent `None` is indistinguishable from a
+        # loaded adapter in the log, and acceptance length depends on it.
+        if self.lora is None:
+            logger.info("Nemotron draft adapter not present; drafting with base weights")
+        else:
+            logger.info(
+                "Nemotron draft adapter loaded for %d o_proj layers",
+                len(self.lora.layers),
+            )
+
+    def graph_capture_context(self, *, causal: bool):
+        return self._adapters(enabled=not causal)
 
     def _adapters(self, *, enabled: bool):
         return NemotronSelfSpecRunner._adapters(self, enabled=enabled)
@@ -143,10 +152,9 @@ class NemotronSelfSpecPagedRunner(NemotronFA4DiffusionRunner):
     # tokens to the scheduler, which is what keeps the scheduler's notion of the
     # request length in step with the cache.
     #
-    # Nothing has to be released. The verify forward writes a whole block into
-    # slots the previous round's `reserve_tokens = block_length` already caused
-    # to be allocated, and the rejected tail stays inside pages the request
-    # still owns until the next iteration overwrites it.
+    # The initial decode reserves one full block. Each later iteration extends
+    # that high-water mark only by the accepted length: the rejected tail is
+    # already reserved and is overwritten by the next draft/verify pair.
 
     def _release_paged_slot(self, request_id: str) -> None:
         super()._release_paged_slot(request_id)
@@ -274,6 +282,7 @@ class NemotronSelfSpecPagedRunner(NemotronFA4DiffusionRunner):
         for row in rows:
             rid = request_ids[row.index]
             state = states_by_id[rid]
+            accepted = row.prefix_length - self._request_prefix[str(rid)]
             self._request_seeds[str(rid)] = row.seed
             self._request_prefix[str(rid)] = row.prefix_length
             remaining = max(0, state.max_new_tokens - len(state.output_ids))
@@ -306,10 +315,9 @@ class NemotronSelfSpecPagedRunner(NemotronFA4DiffusionRunner):
                     text=tokenizer.decode(generated, skip_special_tokens=True),
                     finished=finished,
                     finish_reason=finish_reason,
-                    # Reserve one speculative block for the next iteration. The
-                    # scheduler grows the page table from this; nothing is
-                    # returned when fewer tokens are accepted.
-                    reserve_tokens=0 if finished else block_length,
+                    # Acquire() adds to the previous reservation; it does not
+                    # replace it. Only the accepted prefix needs new capacity.
+                    reserve_tokens=0 if finished else accepted,
                     # Deliberately False: `current_decode_block` counts fixed
                     # strides, and a speculation iteration does not advance by
                     # one. The prefix is tracked here instead.
@@ -332,6 +340,14 @@ class NemotronSelfSpecPagedRunner(NemotronFA4DiffusionRunner):
             torch.arange(int(self.block_length), device=self.device).unsqueeze(0)
             + q_offsets.unsqueeze(1)
         )
+        # Only model forwards are captured. Acceptance, rollback and sampling
+        # stay outside the graph; replay refreshes each row's actual prefix and
+        # page table, including unaligned blocks after partial acceptance.
+        replay = self._graph_replay(
+            seq_ids=seq_ids, tokens=tokens, positions=positions, causal=causal
+        )
+        if replay is not None:
+            return replay.logits
         return self._paged_forward(
             seq_ids=seq_ids,
             tokens=tokens,

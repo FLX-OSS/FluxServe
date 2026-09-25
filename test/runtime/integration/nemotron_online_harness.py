@@ -346,15 +346,18 @@ def disconnect_midstream(port: int, fixture: dict) -> None:
 def run_serve(fixtures, *, graphs: bool, output_dir: Path, tp_size: int = 1,
               label: str | None = None, backend: str = "fa4",
               decoding: str = "threshold", max_num_seqs: int = MAX_NUM_SEQS,
-              thinking: int | None = None, flood: bool = True) -> dict:
+              thinking: int | None = None, flood: bool = True,
+              max_model_len: int | None = None) -> dict:
     from transformers import AutoConfig
     from fluxserve.backend.model_loader.nemotron import resolve_nemotron_snapshot
 
     config = AutoConfig.from_pretrained(MODEL, revision=REVISION, trust_remote_code=True)
     model_path = str(resolve_nemotron_snapshot(config))
-    max_model_len = max(
-        fixture["length"] + fixture["max_new_tokens"] for fixture in fixtures
-    ) + 4 * BLOCK_LENGTH
+    if max_model_len is None:
+        max_model_len = max(
+            fixture["length"] + fixture["max_new_tokens"] for fixture in fixtures
+        ) + 4 * BLOCK_LENGTH
+    max_model_len = ((max_model_len + BLOCK_LENGTH - 1) // BLOCK_LENGTH) * BLOCK_LENGTH
     port = free_port()
     base_url = f"http://127.0.0.1:{port}"
     label = label or ("graphs" if graphs else "eager")

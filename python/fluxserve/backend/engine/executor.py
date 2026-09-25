@@ -77,6 +77,12 @@ class BlockDiffusionExecutor:
         stats = getattr(self.runner, "cuda_graph_stats", None)
         return stats() if stats is not None else {}
 
+    def runner_stats(self) -> dict[str, int | float]:
+        # generated_tokens / num_forwards is the tokens-per-forward of a
+        # diffusion decode, which is what a throughput comparison between two
+        # diffusion models actually turns on.
+        return {"num_forwards": int(getattr(self.runner, "num_forwards", 0))}
+
     async def execute_batch(self, requests: list[RequestState]) -> list[ExecutionResult]:
         if not requests:
             return []

@@ -8,7 +8,9 @@ prefix/seed ownership. Only backend initialization and attention dispatch differ
 from FA4; LLaDA's block-extend runner is never involved.
 
 Decode CUDA graphs are supported through the same ``NemotronCudaGraphRunner``
-FA4 uses, which re-plans FlashInfer outside each replay. Prefill graphs are not:
+FA4 uses, with a fixed FlashInfer plan and refreshed page buffers per replay.
+Both diffusion and self-speculation use separate causal/non-causal captures.
+Prefill graphs are not supported:
 prefill shapes vary per request, as on FA4.
 """
 

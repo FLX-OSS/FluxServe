@@ -45,12 +45,17 @@ splits planning from running, and its plan is host work: a
 ``FlashInferTokenPagedGraphState`` is therefore planned once, with split-KV
 disabled so the schedule does not depend on the KV lengths, and each replay only
 rewrites that state's CSR buffers with device ops before replaying.
+
+Self-speculation reuses these two forward shapes for draft and verify. Its
+capture context selects draft-adapter versus base weights; variable acceptance
+and rollback remain outside the graph and refresh positions on the next replay.
 """
 
 from __future__ import annotations
 
 import bisect
 import time
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import torch
@@ -109,7 +114,12 @@ class NemotronCudaGraphRunner:
             for causal in (DENOISE, COMMIT):
                 key = (batch_size, causal)
                 if key not in self.entries:
-                    self.entries[key] = self._capture(runner, batch_size, causal)
+                    # Self-speculation drafts with fused LoRA weights and
+                    # verifies with base weights. CUDA graphs retain addresses,
+                    # so select the weights during capture, not just replay.
+                    context = getattr(runner, "graph_capture_context", None)
+                    with context(causal=causal) if context else nullcontext():
+                        self.entries[key] = self._capture(runner, batch_size, causal)
         torch.cuda.synchronize(cache.device)
         self.capture_time_s += time.perf_counter() - started
         self.capture_memory_bytes = torch.cuda.memory_allocated(cache.device) - before

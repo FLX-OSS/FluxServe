@@ -212,18 +212,22 @@ def test_eos_in_the_accepted_tokens_finishes_that_row_only():
     assert runner.last_stats[1]["iterations"] >= 1
 
 
-def test_decode_graphs_are_refused_with_a_reason():
-    """A draft and a verify launch share a shape but differ in causality, and
-    the accepted length varies, so a captured graph needs its own design."""
+def test_decode_graphs_initialize_for_both_backends(monkeypatch):
+    def init(self, *args, **kwargs):
+        self.runner_config = kwargs["runner_config"]
+        self.block_length = self.runner_config.block_length
+        self.init_decoder()
+        self.fa4_graph_runner = None
+
+    monkeypatch.setattr(_paged_runner_cls, "_init_paged_backend", init)
     config = SimpleNamespace(
-        attention_backend="fa4", kv_cache_layout="paged",
         enable_prefill_cuda_graph=False, enable_decode_cuda_graph=True,
-        page_size=16, block_length=16,
+        block_length=16, threshold=0.9, mask_id=MASK_ID, eos_id=EOS_ID,
+        eos_ids=(EOS_ID,), cuda_graph_capture_batch_sizes=(1, 2, 4),
     )
-    with pytest.raises(ValueError, match="eager"):
-        NemotronSelfSpecPagedRunner(
-            SimpleNamespace(), SimpleNamespace(), config, "cuda"
-        )
+    runner = _paged_runner_cls(runner_config=config)
+    assert runner.nemotron_graph_runner.backend == runner.paged_attention_backend
+    assert runner.nemotron_graph_runner.batch_sizes == (1, 2, 4)
 
 
 def test_normalization_routes_self_speculation_by_backend():
@@ -350,6 +354,10 @@ def test_the_prefix_advances_by_the_accepted_length_across_plan_calls():
     for _ in range(3):
         op = FakePlanOp(["r0"], [], [], [], [[0, 1, 2, 3, 4, 5]], 0)
         results = run_plan(runner, op, states)
+        assert results[0].reserve_tokens == 2, (
+            "the rejected tail is already reserved; acquiring a whole block "
+            "again leaks capacity on every partial acceptance"
+        )
         states["r0"].output_ids.extend(results[0].token_ids)
         prefixes.append(runner._request_prefix["r0"])
 
