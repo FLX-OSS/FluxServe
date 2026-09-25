@@ -31,13 +31,23 @@ def get_model(
         DefaultModelLoader,
         DiffusionGemmaModelLoader,
     )
+    from fluxserve.backend.models.nemotron_diffusion import (
+        is_nemotron_diffusion_config,
+    )
 
     architectures = set(getattr(model_config, "architectures", ()) or ())
     is_diffusion_gemma = (
         "DiffusionGemmaForBlockDiffusion" in architectures
         or getattr(model_config, "model_type", None) == "diffusion_gemma"
     )
-    loader = DiffusionGemmaModelLoader() if is_diffusion_gemma else DefaultModelLoader()
+    if is_nemotron_diffusion_config(model_config):
+        from fluxserve.backend.model_loader.nemotron import NemotronModelLoader
+
+        loader = NemotronModelLoader()
+    elif is_diffusion_gemma:
+        loader = DiffusionGemmaModelLoader()
+    else:
+        loader = DefaultModelLoader()
     return loader.load_model(
         model_config=model_config,
         device=device,

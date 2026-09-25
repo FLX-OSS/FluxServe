@@ -67,9 +67,14 @@ class AsyncLLM:
         self._new_request_event = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._closed = False
+        self._executor_lock = asyncio.Lock()
 
     async def _execute(self, method, *args):
         """Run synchronous CUDA/NCCL coroutine bodies away from the HTTP loop."""
+        async with self._executor_lock:
+            return await self._execute_unlocked(method, *args)
+
+    async def _execute_unlocked(self, method, *args):
         if not getattr(self.executor, "offload_execution", False):
             result = method(*args)
             return await result if inspect.isawaitable(result) else result
@@ -80,7 +85,14 @@ class AsyncLLM:
                 return asyncio.run(result)
             return result
 
-        return await asyncio.to_thread(run)
+        task = asyncio.create_task(asyncio.to_thread(run))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Cancelling the await does not stop its worker. Keep the lock
+            # until it exits so request cleanup cannot race CUDA/KV writes.
+            await task
+            raise
 
     async def start(self) -> None:
         if self._task is None:
@@ -131,20 +143,47 @@ class AsyncLLM:
             raise
 
     async def abort(self, rid: str, reason: str = "aborted") -> None:
-        state = self._states.get(rid)
+        # Tell the scheduler on the spot, before yielding: one plan call is
+        # enough to schedule a request that is already going away.
         self.scheduler.abort(rid)
-        await self._release_executor_requests([rid])
+        # The rest has to survive the caller. A disconnecting request aborts
+        # itself from inside its own cancelled task, and releasing waits on the
+        # executor lock behind an in-flight forward. `Lock.acquire` is a
+        # checkpoint, so a re-delivered cancel would abandon the release and
+        # leave the request holding its runner slot for the life of the server.
+        task = asyncio.ensure_future(self._abort(rid, reason))
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            task.add_done_callback(self._report_abort_failure)
+            raise
+
+    async def _abort(self, rid: str, reason: str) -> None:
+        state = self._states.get(rid)
         if state is not None and not state.finished:
             output = self.output_processor.make_abort_output(state, reason)
             self.metrics.record_aborted(state)
             self._states.pop(state.rid, None)
             await state.queue.put(output)
+        await self._release_executor_requests([rid])
+
+    @staticmethod
+    def _report_abort_failure(task: asyncio.Task) -> None:
+        """Nobody awaits a detached cleanup, so surface its failure here."""
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error("request cleanup after abort failed", exc_info=error)
 
     def get_metrics_snapshot(self) -> dict[str, int | float]:
         snapshot = self.metrics.snapshot()
         stats = getattr(self.executor, "cuda_graph_stats", None)
         if stats is not None:
             snapshot.update({f"cuda_graph_{k}": v for k, v in stats().items()})
+        runner_stats = getattr(self.executor, "runner_stats", None)
+        if runner_stats is not None:
+            snapshot.update(runner_stats())
         return snapshot
 
     async def _collect_one(self, state: RequestState) -> GenerateReqOutput:
@@ -328,7 +367,7 @@ class AsyncLLM:
     async def _release_executor_requests(self, request_ids) -> None:
         release = getattr(self.executor, "release_requests", None)
         if release is not None and request_ids:
-            await release(request_ids)
+            await self._execute(release, request_ids)
 
     async def _fail_all_active(self, error: str) -> None:
         await self._fail_states(list(self._states.values()), error)

@@ -69,6 +69,10 @@ class DistributedGenerationExecutor:
         stats = getattr(self.base_executor, "cuda_graph_stats", None)
         return stats() if stats is not None else {}
 
+    def runner_stats(self) -> dict[str, int | float]:
+        stats = getattr(self.base_executor, "runner_stats", None)
+        return stats() if stats is not None else {}
+
     async def execute_batch(self, requests: list[RequestState]) -> list[ExecutionResult]:
         if not self.context.is_distributed:
             return await self.base_executor.execute_batch(requests)

@@ -43,7 +43,18 @@ class InputProcessor:
             input_ids = self.tokenizer.encode(prompt_text, add_special_tokens=False)
         input_ids = [int(x) for x in input_ids]
 
-        params = item["sampling_params"] or {}
+        params = dict(item["sampling_params"] or {})
+        defaults = getattr(self.server_args, "sampling_defaults", None)
+        if defaults is not None:
+            import secrets
+            from fluxserve.backend.execution.nemotron_sampling import validate_sampling_params
+
+            params = dict(defaults) | params
+            validate_sampling_params(params)
+            if params.get("seed") is None:
+                # Resolve once before the distributed executor broadcasts the
+                # request, so all TP ranks use the same private RNG stream.
+                params["seed"] = secrets.randbits(63)
         remaining_context = self.server_args.max_model_len - len(input_ids)
         if remaining_context <= 0:
             raise ValueError(
@@ -54,7 +65,8 @@ class InputProcessor:
             1, int(getattr(self.server_args, "generation_block_size", 1))
         )
         usable_context = (
-            remaining_context // generation_block_size * generation_block_size
+            (remaining_context - int(getattr(self.server_args, "speculative_context_margin", 0)))
+            // generation_block_size * generation_block_size
         )
         if usable_context <= 0:
             raise ValueError(

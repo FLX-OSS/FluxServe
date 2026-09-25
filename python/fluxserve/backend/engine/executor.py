@@ -77,6 +77,12 @@ class BlockDiffusionExecutor:
         stats = getattr(self.runner, "cuda_graph_stats", None)
         return stats() if stats is not None else {}
 
+    def runner_stats(self) -> dict[str, int | float]:
+        # generated_tokens / num_forwards is the tokens-per-forward of a
+        # diffusion decode, which is what a throughput comparison between two
+        # diffusion models actually turns on.
+        return {"num_forwards": int(getattr(self.runner, "num_forwards", 0))}
+
     async def execute_batch(self, requests: list[RequestState]) -> list[ExecutionResult]:
         if not requests:
             return []
@@ -96,12 +102,23 @@ class BlockDiffusionExecutor:
         original_gen_length = self.runner.runner_config.gen_length
         original_early_stop = self.runner.early_stop
         self.runner.runner_config.gen_length = max(req.max_new_tokens for req in requests)
-        if any(req.ignore_eos for req in requests):
+        if not getattr(self.runner, "supports_request_sampling", False) and any(
+            req.ignore_eos for req in requests
+        ):
             self.runner.early_stop = False
         try:
             if getattr(self.runner, "requires_prompt_lengths", False):
+                extra = {}
+                if getattr(self.runner, "supports_request_sampling", False):
+                    extra = {
+                        "sampling_params": [
+                            {**req.sampling_params, "ignore_eos": req.ignore_eos}
+                            for req in requests
+                        ],
+                        "generation_lengths": [req.max_new_tokens for req in requests],
+                    }
                 output = self.runner.generate(
-                    prompt, prompt_lengths=[len(ids) for ids in prompt_ids]
+                    prompt, prompt_lengths=[len(ids) for ids in prompt_ids], **extra
                 )
             else:
                 output = self.runner.generate(prompt)

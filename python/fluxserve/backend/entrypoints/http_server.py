@@ -261,6 +261,17 @@ def create_app(engine: AsyncLLM):
             media_type="text/event-stream",
         )
 
+    def sampling_error(params):
+        defaults = getattr(engine.server_args, "sampling_defaults", None)
+        if defaults is not None:
+            from fluxserve.backend.execution.nemotron_sampling import validate_sampling_params
+
+            try:
+                validate_sampling_params({**defaults, **params})
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+        return None
+
     @app.post("/v1/completions")
     async def completions(request: Request):
         received_at = time.perf_counter()
@@ -273,6 +284,12 @@ def create_app(engine: AsyncLLM):
             "max_tokens": body.get("max_tokens", body.get("max_new_tokens", 128)),
             "ignore_eos": bool(body.get("ignore_eos", False)),
         }
+        params.update({key: body[key] for key in (
+            "temperature", "seed", "top_p", "top_k", "frequency_penalty", "presence_penalty"
+        ) if key in body})
+        error = sampling_error(params)
+        if error is not None:
+            return error
         rid = request.headers.get("x-request-id")
         req = GenerateReqInput(
             text=prompt, input_ids=input_ids, sampling_params=params, stream=stream, rid=rid
@@ -308,6 +325,12 @@ def create_app(engine: AsyncLLM):
             "max_tokens": body.get("max_tokens", body.get("max_new_tokens", 128)),
             "ignore_eos": bool(body.get("ignore_eos", False)),
         }
+        params.update({key: body[key] for key in (
+            "temperature", "seed", "top_p", "top_k", "frequency_penalty", "presence_penalty"
+        ) if key in body})
+        error = sampling_error(params)
+        if error is not None:
+            return error
         rid = request.headers.get("x-request-id")
         req = GenerateReqInput(text=prompt, sampling_params=params, stream=stream, rid=rid)
         if stream:

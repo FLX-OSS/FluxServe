@@ -139,7 +139,10 @@ class BlockDiffusionRunner(ModelRunner):
         num_layers = config.num_hidden_layers
         num_kv_heads = config.num_key_value_heads
         num_heads = config.num_attention_heads
-        head_dim = config.hidden_size // num_heads
+        # Attention modules read `config.head_dim` when the checkpoint declares
+        # one; the cache must be shaped the same way. The division stays as the
+        # fallback, and is what every checkpoint served so far resolves to.
+        head_dim = getattr(config, "head_dim", None) or config.hidden_size // num_heads
         tp_size = get_attention_tp_size()
         local_kv_heads = max(1, num_kv_heads // tp_size)
         if self._use_paged_kv_cache():
