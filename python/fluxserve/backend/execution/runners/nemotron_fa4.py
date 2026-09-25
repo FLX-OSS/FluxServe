@@ -56,6 +56,7 @@ from fluxserve.backend.execution.decoders.nemotron import (
     NemotronThresholdDecoder,
     load_thinking_budget,
 )
+from fluxserve.backend.execution.forward_batch_info import ForwardBatch, ForwardMode
 from fluxserve.backend.execution.runners.fa4_diffusion import FA4DiffusionRunner
 from fluxserve.backend.execution.runners.nemotron_diffusion import (
     BlockStats,
@@ -282,6 +283,13 @@ class NemotronFA4DiffusionRunner(NemotronSamplingMixin, FA4DiffusionRunner):
         forward_batch = self._make_forward_batch(
             len(seq_ids) * max_input_len, is_prefill=is_prefill
         )
+        if forward_batch is None:
+            # _make_forward_batch only speaks for DP padding, so it returns None
+            # at DP=1 -- every single-GPU configuration. The metadata below
+            # still needs somewhere to live, as in FA4DiffusionRunner.
+            forward_batch = ForwardBatch(
+                forward_mode=ForwardMode.EXTEND if is_prefill else ForwardMode.DECODE
+            )
         if not isinstance(self.past_key_values, PagedKVCache):
             raise RuntimeError("Nemotron paged execution requires PagedKVCache.")
         selected_page_table = self.past_key_values.page_table.index_select(
