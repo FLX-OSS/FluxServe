@@ -38,6 +38,13 @@ Padding rows reuse the existing reserved-dummy-page convention, so a bucket may
 be replayed with fewer live rows than it was captured for -- which happens
 constantly here, because rows finish denoising at different steps and only some
 are ready to commit on any given iteration.
+
+Both paged backends are supported. FA4 reads the page table out of the metadata
+tensors at run time, so a replay only has to refresh those tensors. FlashInfer
+splits planning from running, and its plan is host work: a
+``FlashInferTokenPagedGraphState`` is therefore planned once, with split-KV
+disabled so the schedule does not depend on the KV lengths, and each replay only
+rewrites that state's CSR buffers with device ops before replaying.
 """
 
 from __future__ import annotations
@@ -57,12 +64,17 @@ COMMIT = True
 
 
 class NemotronCudaGraphRunner:
-    """Capture denoise and commit graphs per batch bucket."""
+    """Capture denoise and commit graphs per batch bucket, on FA4 or FlashInfer."""
 
-    def __init__(self, batch_sizes):
+    def __init__(self, batch_sizes, backend: str = "fa4"):
         self.batch_sizes = tuple(sorted(set(map(int, batch_sizes))))
         if not self.batch_sizes or self.batch_sizes[0] < 1:
             raise ValueError("Nemotron decode graphs need positive batch buckets")
+        if backend not in {"fa4", "flashinfer"}:
+            raise ValueError(
+                f"Nemotron decode graphs support 'fa4' or 'flashinfer', got {backend!r}"
+            )
+        self.backend = backend
         # Keyed by (batch_size, causal).
         self.entries: dict[tuple[int, bool], SimpleNamespace] = {}
         self.cache = None
@@ -74,6 +86,7 @@ class NemotronCudaGraphRunner:
         self.capture_memory_bytes = 0
         self.replay_count = 0
         self.padded_rows = 0
+        self.fallback_count = 0
 
     def invalidate(self) -> None:
         if self.entries:
@@ -144,6 +157,7 @@ class NemotronCudaGraphRunner:
             max_q_len=length,
             max_kv_len=cache.max_length,
             causal=causal,
+            backend=self.backend,
         )
         batch = ForwardBatch(
             forward_mode=ForwardMode.DECODE, paged_attention_metadata=metadata
@@ -161,24 +175,63 @@ class NemotronCudaGraphRunner:
             seed = logits[:, -1].argmax(dim=-1) if causal else None
             return logits, seed
 
-        stream = torch.cuda.Stream(device=device)
-        stream.wait_stream(torch.cuda.current_stream(device))
-        with model_capture_mode(), torch.cuda.stream(stream):
-            for _ in range(3):
-                forward()
-        torch.cuda.current_stream(device).wait_stream(stream)
-        torch.cuda.synchronize(device)
-        # Every rank finishes eager collective warmup before any rank records
-        # NCCL operations into a graph.
-        runner.tp_group.barrier()
-        graph = torch.cuda.CUDAGraph()
-        with model_capture_mode(), torch.cuda.graph(graph, pool=self.pool, stream=stream):
-            logits, seed = forward()
-        torch.cuda.synchronize(device)
+        state = None
+        if self.backend == "flashinfer":
+            from fluxserve.backend.layers.attention.flashinfer_token import (
+                FlashInferTokenPagedGraphState,
+            )
+
+            state = FlashInferTokenPagedGraphState(
+                device,
+                batch_size=batch_size,
+                pages_per_sequence=cache.pages_per_sequence,
+            )
+            # Plan the warmup at the widest KV this bucket can ever see, so the
+            # recorded schedule is the largest one a replay can ask for.
+            metadata.kv_lens.fill_(int(cache.max_length))
+
+        with self._attention_state(device, state):
+            stream = torch.cuda.Stream(device=device)
+            stream.wait_stream(torch.cuda.current_stream(device))
+            with model_capture_mode(), torch.cuda.stream(stream):
+                for _ in range(3):
+                    forward()
+            torch.cuda.current_stream(device).wait_stream(stream)
+            torch.cuda.synchronize(device)
+            if state is not None:
+                # The single plan is now in place; from here a replay only
+                # rewrites the buffers it reads.
+                state.freeze()
+            # Every rank finishes eager collective warmup before any rank records
+            # NCCL operations into a graph.
+            runner.tp_group.barrier()
+            graph = torch.cuda.CUDAGraph()
+            with model_capture_mode(), torch.cuda.graph(
+                graph, pool=self.pool, stream=stream
+            ):
+                logits, seed = forward()
+            torch.cuda.synchronize(device)
+
+        if state is not None:
+            metadata.kv_lens.fill_(length)
         return SimpleNamespace(
             graph=graph, input_ids=ids, position_ids=positions, metadata=metadata,
             dummy_pages=dummy_pages, logits=logits, seed=seed, causal=causal,
+            state=state,
         )
+
+    @staticmethod
+    def _attention_state(device, state):
+        """Serve one forward from ``state``, or leave the eager path alone."""
+        if state is None:
+            from contextlib import nullcontext
+
+            return nullcontext()
+        from fluxserve.backend.layers.attention.flashinfer_token import (
+            override_token_paged_state,
+        )
+
+        return override_token_paged_state(device, state)
 
     def bucket_for(self, batch_size: int) -> int:
         index = bisect.bisect_left(self.batch_sizes, batch_size)
@@ -238,6 +291,9 @@ class NemotronCudaGraphRunner:
                 entry.dummy_pages[actual:, None].long() * length
                 + torch.arange(length, device=device)
             )
+        if entry.state is not None:
+            # The plan stands; only the page lists this step attends change.
+            entry.state.refresh(metadata)
         entry.graph.replay()
         self.replay_count += 1
         self.padded_rows += size - actual
@@ -254,7 +310,7 @@ class NemotronCudaGraphRunner:
             "denoise_capture_count": denoise,
             "commit_capture_count": commit,
             "decode_replay_count": self.replay_count,
-            "decode_fallback_count": 0,
+            "decode_fallback_count": self.fallback_count,
             "decode_padded_rows": self.padded_rows,
             "capture_time_s": self.capture_time_s,
             "capture_memory_bytes": self.capture_memory_bytes,

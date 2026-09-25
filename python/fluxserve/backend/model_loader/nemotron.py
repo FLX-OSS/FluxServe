@@ -408,10 +408,11 @@ def normalize_nemotron_args(args, model_config) -> bool:
     wants_graph = getattr(args, "use_cuda_graph", False) or getattr(
         args, "use_decode_cuda_graph", False
     )
-    if wants_graph and backend != "fa4":
+    if wants_graph and backend not in ("fa4", "flashinfer"):
         raise ValueError(
-            "Nemotron decode CUDA graphs exist only on the paged FA4 path; "
-            "use --attention-backend fa4 --kv-cache-layout paged."
+            "Nemotron decode CUDA graphs exist only on the paged FA4 or "
+            "FlashInfer paths; use --attention-backend fa4 or flashinfer with "
+            "--kv-cache-layout paged."
         )
     if getattr(args, "scheduler_policy", "") == "paged" and backend not in ("fa4", "flashinfer"):
         raise ValueError(

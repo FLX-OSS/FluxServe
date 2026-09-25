@@ -214,11 +214,13 @@ class NemotronFA4DiffusionRunner(NemotronSamplingMixin, FA4DiffusionRunner):
         if runner_config is None and len(args) >= 3:
             runner_config = args[2]
         self._init_paged_backend(*args, **kwargs)
-        if self.fa4_graph_runner is not None:
+        if self.runner_config.enable_decode_cuda_graph:
             # The base constructor builds a LLaDA graph runner; Nemotron needs
             # a denoise and a commit variant per bucket. Both names point at the
             # same object so the inherited capture/stats/dummy-page plumbing
-            # keeps working unchanged.
+            # keeps working unchanged. The FlashInfer subclass reaches here too,
+            # where the base constructor never ran, so the runner is built from
+            # the config rather than from whatever the base left behind.
             from fluxserve.backend.execution.nemotron_cuda_graph_runner import (
                 NemotronCudaGraphRunner,
             )
@@ -227,7 +229,9 @@ class NemotronFA4DiffusionRunner(NemotronSamplingMixin, FA4DiffusionRunner):
                 self.runner_config.cuda_graph_capture_batch_sizes
                 or self.runner_config.supported_batch_sizes
             )
-            self.fa4_graph_runner = NemotronCudaGraphRunner(buckets)
+            self.fa4_graph_runner = NemotronCudaGraphRunner(
+                buckets, backend=self.paged_attention_backend
+            )
         self.nemotron_graph_runner = self.fa4_graph_runner
         steps = int(getattr(self.runner_config, "steps", 0) or 0)
         self.max_denoise_steps = steps if steps > 0 else int(self.block_length)

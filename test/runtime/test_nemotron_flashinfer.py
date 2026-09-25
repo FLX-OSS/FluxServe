@@ -167,14 +167,23 @@ def test_normalization_and_shared_dispatch(decoding, cls):
     ({"kv_cache_layout": "dense"}, "kv-cache-layout paged"),
     ({"flashinfer_cache_mode": "dense"}, "flashinfer-cache-mode paged"),
     ({"flashinfer_prefill_mode": "ragged"}, "flashinfer-prefill-mode paged"),
-    ({"use_decode_cuda_graph": True}, "paged FA4 path"),
-    ({"use_cuda_graph": True}, "paged FA4 path"),
+    ({"use_prefill_cuda_graph": True}, "not captured"),
 ])
 def test_unsupported_flashinfer_combinations_fail_early(overrides, match):
     values = dict(attention_backend="flashinfer", kv_cache_layout="paged")
     values.update(overrides)
     with pytest.raises(ValueError, match=match):
         normalize_nemotron_args(serve_args(**values), checkpoint_config())
+
+
+@pytest.mark.parametrize("flag", ["use_decode_cuda_graph", "use_cuda_graph"])
+def test_decode_graphs_are_accepted_on_the_flashinfer_path(flag):
+    # Decode graphs used to be FA4's alone. The runner now captures them here
+    # too, re-planning FlashInfer outside each replay.
+    args = serve_args(**{
+        "attention_backend": "flashinfer", "kv_cache_layout": "paged", flag: True,
+    })
+    assert normalize_nemotron_args(args, checkpoint_config())
 
 
 @pytest.mark.parametrize("cls", [NemotronFlashInferDiffusionRunner, NemotronFlashInferSelfSpecRunner])
@@ -194,6 +203,7 @@ def test_runner_initialization_does_not_require_fa4_or_dllm(monkeypatch, cls):
         block_length=32, flashinfer_cache_mode="paged", flashinfer_prefill_mode="paged",
     ))
     assert runner.paged_attention_backend == "flashinfer"
+    # No graph runner without the decode-graph flag in the config above.
     assert runner.nemotron_graph_runner is None
     assert runner._request_seeds == {}
     if cls is NemotronFlashInferSelfSpecRunner:
