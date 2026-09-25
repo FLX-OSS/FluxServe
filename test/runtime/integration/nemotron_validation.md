@@ -53,11 +53,9 @@ harness accepts `--backend flashinfer`, `--decoding self_speculation`,
 `--thinking-budget`, and `--extension-fixtures`; use its `--help` for lane labels
 and matching offline baselines.
 
-Each size has seven GSM8K CI recipes under `test/ci/1N1G/eval/` and
-`test/ci/1N4G/eval/`: dense, FA4 graphs, FlashInfer, three self-speculation
-backends, and TP4 FA4 graphs. The 3B, 8B and 14B FA4 graph recipes run together
-with runtime regressions when a PR targeting `main` gets the `ci:run-1N1G`
-label, and on subsequent PR updates while that label remains. Other recipes
-are manual or nightly tasks. Score thresholds remain provisional until measured
-runs establish a baseline. A push to `nemotron` without a labeled PR does not
-trigger these GPU jobs.
+Each size has one GSM8K CI recipe under `test/ci/1N1G/eval/`: threshold
+decoding on FA4 with decode CUDA graphs at TP=1, the configuration whose
+accuracy has been measured. The three recipes run when a PR targeting `main`
+gets the `ci:run-1N1G` label, and on subsequent PR updates while that label
+remains. A push to `nemotron` without a labeled PR does not trigger these GPU
+jobs.

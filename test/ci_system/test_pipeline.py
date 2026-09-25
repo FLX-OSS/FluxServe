@@ -543,10 +543,10 @@ def test_runtime_regressions_are_discovered_for_pr_ci():
     from pipeline import get_stage_commands, load_yaml
 
     root = Path(__file__).resolve().parents[2]
-    config = root / "test/ci/1N1G/ut/runtime.yaml"
+    config = root / "test/ci/ut/runtime.yaml"
     task = load_yaml(config)
     validate_task(task, config)
-    matrix = build_matrix(root / "test/ci/1N1G", root, trigger="per-commit")
+    matrix = build_matrix(root / "test/ci", root, trigger="per-commit")
     entries = [entry for entry in matrix["include"] if entry["name"] == "ut-runtime"]
     assert len(entries) == 1
     assert entries[0]["runtime"] == "gh200-apptainer"
@@ -555,3 +555,4 @@ def test_runtime_regressions_are_discovered_for_pr_ci():
     assert task["env"]["CUDA_VISIBLE_DEVICES"] == ""
     assert any("snapshot_download" in command for command in stages["install"])
     assert task["env"]["FLUXSERVE_LLADA22_REF_DIR"] == ".ci-artifacts/llada22-reference"
+

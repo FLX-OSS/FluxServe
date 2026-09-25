@@ -71,7 +71,7 @@ def test_every_task_matches_the_upstream_resource_layout(index):
     assert args.tp_size == args.ep_size, (
         "attention and expert parallelism share ranks in this stack"
     )
-    assert args.tp_size in (1, 4)
+    assert args.tp_size == 1, "only single-GPU serving has been verified"
 
 
 def test_tasks_use_current_runtime_and_isolated_evaluation_environment():
@@ -82,20 +82,6 @@ def test_tasks_use_current_runtime_and_isolated_evaluation_environment():
         assert "fluxserve launch" in data["server"]["command"]
         assert data["eval"]["command"].startswith("/tmp/evalscope-venv/bin/python ")
         assert "acd09b44384d53174768bb1063f675420f76fae9" in data["eval"]["install"][0]
-
-
-def test_sharding_coverage_exists_and_is_not_the_per_commit_gate():
-    by_name = {data["name"]: (path, data) for path, data in nemotron_tasks()}
-    sharded = [
-        data for _, data in by_name.values()
-        if server_args_for(data).tp_size > 1
-    ]
-    assert sharded, "nothing would exercise the parallel linear layers"
-    for data in sharded:
-        assert "per-commit" not in data["triggers"], (
-            "the single-card paged task is the gate; a four-way shard on every "
-            "push buys little when nothing about the model is parallelism-specific"
-        )
 
 
 @pytest.mark.parametrize("index", range(len(nemotron_tasks())), ids=task_ids())
@@ -126,7 +112,9 @@ def test_graph_tasks_satisfy_the_capture_preconditions(index):
     args = server_args_for(data)
     if not args.use_decode_cuda_graph:
         return
-    assert args.attention_backend == "fa4", "graphs exist only on the paged path"
+    assert args.attention_backend in ("fa4", "flashinfer"), (
+        "graphs exist only on the paged path"
+    )
     assert args.cuda_graph_decode_mode == "padded"
     page_size = args.page_size or args.block_length
     assert page_size == args.block_length, (
@@ -141,33 +129,9 @@ def test_graph_tasks_satisfy_the_capture_preconditions(index):
     )
 
 
-@pytest.mark.parametrize("index", range(len(nemotron_tasks())), ids=task_ids())
-def test_self_speculation_tasks_match_what_their_runner_supports(index):
-    _, data = nemotron_tasks()[index]
-    args = server_args_for(data)
-    if args.parallel_decoding != "self_speculation":
-        return
-    assert data["triggers"] == ["manual"], "too slow for a per-commit gate"
-    if args.attention_backend in ("fa4", "flashinfer"):
-        # The paged runner batches: each row carries its own query offset, so a
-        # launch covers rows whose prefixes drifted apart by different
-        # accepted lengths.
-        assert args.max_num_seqs > 1
-        assert args.scheduler_policy == "paged", (
-            "exercise continuous scheduling with variable acceptance lengths; "
-            "rejected tails stay in pages owned by the request"
-        )
-    else:
-        assert args.max_num_seqs == 1, (
-            "the dense runner refuses to batch self-speculation rather than "
-            "silently serialising, so a larger value would fail every request"
-        )
-        assert "--eval-batch-size 1" in data["eval"]["command"]
-
-
 def test_every_model_size_has_a_gpu_gate_in_the_pr_matrix():
     expected = {
-        f"eval-nemotron-diffusion-{size.lower()}-fa4-graph-gsm8k"
+        f"eval-nemotron-diffusion-{size.lower()}-gsm8k"
         for size in MODEL_SIZES
     }
     per_commit = {
@@ -180,47 +144,16 @@ def test_every_model_size_has_a_gpu_gate_in_the_pr_matrix():
     )
     discovered = {entry["name"] for entry in matrix["include"]}
     assert expected <= discovered
-    assert "ut-runtime" in discovered
 
 
-def test_the_paged_and_dense_lanes_share_a_threshold_and_decoding_recipe():
-    """Otherwise a divergence between them would be unreadable."""
-    by_name = {data["name"]: data for _, data in nemotron_tasks()}
-    paged = server_args_for(by_name["eval-nemotron-diffusion-14b-fa4-graph-gsm8k"])
-    dense = server_args_for(by_name["eval-nemotron-diffusion-14b-dense-gsm8k"])
-    assert paged.threshold == dense.threshold
-    assert paged.parallel_decoding == dense.parallel_decoding
-    assert paged.block_length == dense.block_length
-    assert (
-        by_name["eval-nemotron-diffusion-14b-fa4-graph-gsm8k"]["score_threshold"]
-        == by_name["eval-nemotron-diffusion-14b-dense-gsm8k"]["score_threshold"]
-    )
-
-
-@pytest.mark.parametrize("size", MODEL_SIZES)
-def test_every_size_has_all_backends_and_decoding_modes(size):
-    tasks = [data for _, data in nemotron_tasks()
-             if server_args_for(data).model_name == f"nvidia/Nemotron-Labs-Diffusion-{size}"]
-    coverage = {
-        (args.attention_backend, args.parallel_decoding, args.tp_size)
-        for args in map(server_args_for, tasks)
-    }
-    assert coverage == {
-        (backend, mode, 1)
-        for backend in ("sdpa", "fa4", "flashinfer")
-        for mode in ("threshold", "self_speculation")
-    } | {("fa4", "threshold", 4)}
-    for data in tasks:
-        args = server_args_for(data)
-        tokens = shlex.split(data["eval"]["command"])
-        assert tokens[tokens.index("--model") + 1] == args.model_name
-    by_backend = {server_args_for(data).attention_backend: data for data in tasks
-                  if server_args_for(data).parallel_decoding == "threshold"
-                  and server_args_for(data).tp_size == 1}
-    for field in ("threshold", "block_length", "max_model_len"):
-        assert len({getattr(server_args_for(data), field)
-                    for data in by_backend.values()}) == 1
-    assert len({data["score_threshold"] for data in by_backend.values()}) == 1
+@pytest.mark.parametrize("index", range(len(nemotron_tasks())), ids=task_ids())
+def test_gates_prefer_a_graph_captured_paged_backend(index):
+    _, data = nemotron_tasks()[index]
+    args = server_args_for(data)
+    assert args.attention_backend in ("fa4", "flashinfer")
+    assert args.use_decode_cuda_graph
+    tokens = shlex.split(data["eval"]["command"])
+    assert tokens[tokens.index("--model") + 1] == args.model_name
 
 
 def test_evaluation_outputs_are_unique_across_model_sizes():
@@ -229,12 +162,3 @@ def test_evaluation_outputs_are_unique_across_model_sizes():
         tokens = shlex.split(data["eval"]["command"])
         outputs.append(tokens[tokens.index("--work-dir") + 1])
     assert len(outputs) == len(set(outputs))
-
-
-def test_score_thresholds_are_marked_provisional():
-    """No GSM8K score has been measured for this model on any GPU yet."""
-    for path, data in nemotron_tasks():
-        assert "score_threshold" in data, path
-        assert 0.0 < data["score_threshold"] <= 0.6, (
-            f"{path.name}: raise this only once a measured score exists"
-        )
