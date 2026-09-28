@@ -2,7 +2,7 @@
 
 The reference enforces this differently per mode -- block diffusion injects the
 marker into the block that carries the budget past its limit, self-speculation
-forces the next seed -- so the policy is tested on its own and then at each
+places it right after the next seed -- so the policy is tested on its own and then at each
 runner's boundary. The arithmetic is the part most likely to be wrong by one.
 """
 
@@ -51,7 +51,7 @@ def test_a_disabled_budget_forces_nothing():
     disabled = ThinkingBudget()
     assert disabled.satisfied([]) is True
     assert disabled.block_injection_offset(0, BLOCK) is None
-    assert disabled.force_next_seed(10**6) is False
+    assert disabled.force_next_token(10**6) is False
 
 
 def test_the_marker_lands_in_the_block_that_crosses_the_limit():
@@ -84,7 +84,7 @@ def test_the_offset_always_lands_inside_the_block():
 
 def test_a_budget_larger_than_the_output_never_fires():
     assert budget(10**6).block_injection_offset(0, 32) is None
-    assert budget(10**6).force_next_seed(100) is False
+    assert budget(10**6).force_next_token(100) is False
 
 
 def test_an_existing_marker_satisfies_the_budget():
@@ -98,8 +98,8 @@ def test_an_existing_marker_satisfies_the_budget():
 
 def test_the_next_seed_is_forced_strictly_past_the_limit():
     """Self-speculation's rule: `total_generated > limit`, not `>=`."""
-    assert budget(8).force_next_seed(8) is False
-    assert budget(8).force_next_seed(9) is True
+    assert budget(8).force_next_token(8) is False
+    assert budget(8).force_next_token(9) is True
 
 
 def test_the_factory_reads_runner_config_fields():
@@ -189,6 +189,22 @@ def test_a_spent_budget_replaces_the_seed_of_the_next_block():
     assert first_denoise["tokens"][0] == END_THINK, "offset 0 is the seed"
 
 
+def test_diffusion_does_not_inject_when_the_seed_is_the_marker():
+    # Limit 2 puts the marker at offset 2 of block 0, but the prefill seed is
+    # already the marker, which is output too.
+    def script(index, input_ids):
+        if index == 0:
+            return logits_for([(9, 0.99), (END_THINK, 0.99)])
+        return logits_for([(10, 0.9), (11, 0.9), (12, 0.9), (14, 0.9)])
+
+    runner = diffusion_runner(script, limit=2)
+    output = runner.generate(torch.tensor([[9, 9]]), prompt_lengths=[2],
+                             generation_lengths=[2 * BLOCK])
+    generated = output[0, 2:].tolist()
+    assert generated[0] == END_THINK
+    assert generated.count(END_THINK) == 1
+
+
 # --------------------------------------------------------------------------
 # Self-speculation runner
 # --------------------------------------------------------------------------
@@ -212,7 +228,7 @@ def spec_script(index, input_ids):
     return logits_for([(10, 0.9), (11, 0.9), (12, 0.9), (14, 0.9)])
 
 
-def test_self_speculation_forces_the_next_seed():
+def test_self_speculation_places_the_marker_after_the_next_seed():
     # Each iteration accepts the whole block, so after one iteration five
     # tokens exist (the prefill seed plus four) and 5 > 4.
     runner = selfspec_runner(spec_script, limit=4)
@@ -223,8 +239,29 @@ def test_self_speculation_forces_the_next_seed():
         call["tokens"] for call in runner.model.calls
         if call["kind"] == "bidirectional"
     ]
-    assert drafts[0][0] != END_THINK, "the first block is inside the allowance"
-    assert drafts[1][0] == END_THINK, "the second block's seed is forced"
+    assert END_THINK not in drafts[0], "the first block is inside the allowance"
+    # The seed was already emitted by the first verify, so it stays; the
+    # marker takes the next position.
+    assert drafts[1][0] != END_THINK
+    assert drafts[1][1] == END_THINK
+
+
+def test_self_speculation_emits_the_marker_once():
+    # Replacing the already-emitted seed put the marker in the KV but never in
+    # the output, so the "already produced" check never fired and every later
+    # block was forced again.
+    runner = selfspec_runner(spec_script, limit=4)
+    output = runner.generate(torch.tensor([[9, 9]]), prompt_lengths=[2],
+                             generation_lengths=[3 * BLOCK])
+
+    generated = output[0, 2:].tolist()
+    assert generated.count(END_THINK) == 1
+    assert generated.index(END_THINK) == 5, "right after the first iteration"
+    drafts = [
+        call["tokens"] for call in runner.model.calls
+        if call["kind"] == "bidirectional"
+    ]
+    assert all(END_THINK not in tokens for tokens in drafts[2:])
 
 
 def test_self_speculation_leaves_the_seed_alone_within_the_allowance():
@@ -321,3 +358,14 @@ def test_a_prediction_at_the_seed_position_is_discarded():
     generated = output[0, 2:].tolist()[:BLOCK]
     assert generated[0] == 1, "the seed survives the model's own prediction"
     assert END_THINK not in generated
+
+
+def test_self_speculation_forces_a_zero_budget_in_the_first_block():
+    # The prefill seed already exceeds a zero allowance, so the marker follows
+    # it in the first block instead of after a whole verified block.
+    runner = selfspec_runner(spec_script, limit=0)
+    output = runner.generate(torch.tensor([[9, 9]]), prompt_lengths=[2],
+                             generation_lengths=[BLOCK])
+    generated = output[0, 2:].tolist()
+    assert generated[1] == END_THINK
+    assert generated.count(END_THINK) == 1

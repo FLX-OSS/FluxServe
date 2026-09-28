@@ -360,7 +360,9 @@ class NemotronDiffusionRunner(NemotronSamplingMixin, BlockDiffusionRunner):
         if not budget.enabled:
             return
         produced = [int(value) for item in emitted for value in item[0].tolist()]
-        if budget.satisfied(produced):
+        # The seed is output too: a seed that is already the marker needs no
+        # second one.
+        if budget.satisfied(produced) or budget.satisfied(block):
             return
         offset = budget.block_injection_offset(len(produced), block.shape[1])
         if offset is None:

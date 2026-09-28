@@ -91,6 +91,9 @@ class SpecRow:
     stats: SelfSpecStats = field(default_factory=SelfSpecStats)
     sampling: object = None
     stop_on_eos: bool = True
+    # Positions after the seed that hold a placed token (the thinking-budget
+    # marker) and are emitted without verification.
+    forced: int = 0
 
 
 class NemotronSelfSpecPagedRunner(NemotronFA4DiffusionRunner):
@@ -240,11 +243,18 @@ class NemotronSelfSpecPagedRunner(NemotronFA4DiffusionRunner):
                 dtype=torch.long, device=self.device,
             )
             block[0] = seed
+            # The seed was published by the previous plan call, so the marker
+            # goes after it rather than over it. The prefill seed is emitted by
+            # this call instead, but it counts all the same: a budget of zero
+            # forces the marker into the first block.
             budget = self.thinking_budget
-            if budget.force_next_seed(len(state.output_ids)) and not budget.satisfied(
-                list(state.output_ids)
-            ):
-                block[0] = budget.end_think_token_id
+            produced = list(state.output_ids)
+            if prefix == len(state.input_ids) and not produced:
+                produced = [seed]
+            forced = 0
+            if budget.force_next_token(len(produced)) and not budget.satisfied(produced):
+                block[1] = budget.end_think_token_id
+                forced = 1
             rows.append(
                 SpecRow(
                     index=row,
@@ -259,6 +269,7 @@ class NemotronSelfSpecPagedRunner(NemotronFA4DiffusionRunner):
                     seed=int(block[0]),
                     max_iterations=1,
                     stop_on_eos=not state.ignore_eos,
+                    forced=forced,
                 )
             )
             candidate = rows[-1]
@@ -398,10 +409,11 @@ class NemotronSelfSpecPagedRunner(NemotronFA4DiffusionRunner):
                 for position, row in enumerate(verifying):
                     verified = sample_tokens(logits[position], row.sampling)
                     row.stats.verify_calls += 1
-                    accepted = NemotronSelfSpecRunner.accepted_length(
-                        verified, row.block
+                    tokens = NemotronSelfSpecRunner.accepted_tokens(
+                        verified, row.block, row.forced
                     )
-                    tokens = [int(v) for v in verified[:accepted]]
+                    accepted = len(tokens)
+                    row.forced = 0
                     row.stats.iterations += 1
                     row.stats.accepted_per_iteration.append(accepted)
                     row.stats.draft_calls_per_iteration.append(row.draft_steps)
@@ -428,16 +440,17 @@ class NemotronSelfSpecPagedRunner(NemotronFA4DiffusionRunner):
                     ):
                         row.state = DONE
                         continue
-                    budget = self.thinking_budget
-                    if budget.force_next_seed(
-                        len(row.emitted)
-                    ) and not budget.satisfied(row.emitted):
-                        row.seed = budget.end_think_token_id
                     row.block = torch.full(
                         (block_length,), self.decoder.mask_id,
                         dtype=row.block.dtype, device=self.device,
                     )
                     row.block[0] = row.seed
+                    budget = self.thinking_budget
+                    if budget.force_next_token(
+                        len(row.emitted)
+                    ) and not budget.satisfied(row.emitted):
+                        row.block[1] = budget.end_think_token_id
+                        row.forced = 1
                     row.state = DRAFT
 
     # -- entry point -------------------------------------------------------

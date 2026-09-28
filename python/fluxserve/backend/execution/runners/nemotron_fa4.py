@@ -267,7 +267,9 @@ class NemotronFA4DiffusionRunner(NemotronSamplingMixin, FA4DiffusionRunner):
             produced_tokens = [
                 int(value) for item in (emitted or []) for value in item.tolist()
             ]
-        if budget.satisfied(produced_tokens):
+        # The seed is output too: a seed that is already the marker needs no
+        # second one.
+        if budget.satisfied(produced_tokens) or budget.satisfied(block):
             return
         offset = budget.block_injection_offset(
             len(produced_tokens), int(block.shape[-1])

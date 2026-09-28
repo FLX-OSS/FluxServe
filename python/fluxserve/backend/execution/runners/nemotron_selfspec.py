@@ -185,6 +185,27 @@ class NemotronSelfSpecRunner(NemotronDiffusionRunner):
             accepted += 1
         return accepted + 1
 
+    @staticmethod
+    def accepted_tokens(verified: torch.Tensor, drafted: torch.Tensor,
+                        forced: int = 0) -> list[int]:
+        """Tokens one verify emits after the seed.
+
+        The first ``forced`` positions after the seed hold tokens the caller
+        placed there, such as the thinking budget's end marker. They are
+        emitted as placed, whatever the verifier predicted, and matching
+        resumes after them; with ``forced=0`` this is ``verified[:accepted]``.
+        Every emitted token but the last sits at a block position whose KV the
+        verify wrote, so the committed prefix advances by ``len(tokens)``.
+        """
+        length = int(drafted.shape[-1])
+        tokens = [int(drafted[index + 1]) for index in range(forced)]
+        index = forced
+        while index < length - 1 and int(verified[index]) == int(drafted[index + 1]):
+            tokens.append(int(verified[index]))
+            index += 1
+        tokens.append(int(verified[index]))
+        return tokens
+
     # -- generation --------------------------------------------------------
 
     @torch.no_grad()
@@ -212,6 +233,12 @@ class NemotronSelfSpecRunner(NemotronDiffusionRunner):
         prefix_len = prompt_len
         emitted: list[int] = [next_token]
         terminal = self.early_stop and next_token in self.decoder.eos_ids
+        # The prefill seed already counts, so a budget of zero forces the
+        # marker into the first block.
+        budget = self.thinking_budget
+        force_marker = budget.force_next_token(len(emitted)) and not budget.satisfied(
+            emitted
+        )
 
         while len(emitted) < generation_length and not terminal:
             block = torch.full(
@@ -219,6 +246,10 @@ class NemotronSelfSpecRunner(NemotronDiffusionRunner):
                 dtype=prompt.dtype, device=device,
             )
             block[0, 0] = next_token
+            forced = 0
+            if force_marker:
+                block[0, 1] = self.thinking_budget.end_think_token_id
+                forced = 1
 
             with self._adapters(enabled=True):
                 draft_calls = self._draft_block(block, prefix_len, cache, stats)
@@ -228,8 +259,8 @@ class NemotronSelfSpecRunner(NemotronDiffusionRunner):
                 verify_logits = self._commit(block, prefix_len, cache)
             verified = sample_tokens(verify_logits[0], getattr(self, "_sampling", None))
 
-            accepted = self.accepted_length(verified, block[0])
-            accepted_tokens = [int(value) for value in verified[:accepted]]
+            accepted_tokens = self.accepted_tokens(verified, block[0], forced)
+            accepted = len(accepted_tokens)
 
             stats.iterations += 1
             stats.accepted_per_iteration.append(accepted)
@@ -248,13 +279,11 @@ class NemotronSelfSpecRunner(NemotronDiffusionRunner):
                     break
             if len(emitted) >= generation_length:
                 break
-            # A speculative block is drafted and verified whole, so the budget
-            # is enforced on the next seed rather than inside a block.
-            budget = self.thinking_budget
-            if budget.force_next_seed(len(emitted)) and not budget.satisfied(
+            # The seed is already emitted, so the marker goes right after it in
+            # the next block, where it is both emitted and written to the KV.
+            force_marker = budget.force_next_token(len(emitted)) and not budget.satisfied(
                 emitted
-            ):
-                next_token = budget.end_think_token_id
+            )
 
         generated = torch.tensor(
             [emitted], dtype=prompt.dtype, device=device

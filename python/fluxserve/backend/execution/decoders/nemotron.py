@@ -178,8 +178,10 @@ class ThinkingBudget:
       budget past its limit, at the position where the limit falls, *before*
       denoising. The position then holds a resolved token, so the decoder never
       writes over it.
-    * **Self-speculation** forces the next block's seed instead, because a
-      speculative block is drafted and verified as a whole.
+    * **Self-speculation** places the marker right after the next block's
+      seed and emits it without verification. The seed itself was already
+      emitted by the previous verify, so replacing it would put the marker in
+      the KV but never in the output.
 
     Both are no-ops once the model has produced the marker on its own, and the
     whole thing is disabled unless both settings are given.
@@ -231,8 +233,8 @@ class ThinkingBudget:
             return None
         return max(0, self.max_thinking_tokens - int(tokens_before))
 
-    def force_next_seed(self, generated_count: int) -> bool:
-        """Should the next seed be the marker rather than a sampled token?"""
+    def force_next_token(self, generated_count: int) -> bool:
+        """Should the next emitted token be the marker rather than a verified one?"""
         return self.enabled and int(generated_count) > self.max_thinking_tokens
 
 

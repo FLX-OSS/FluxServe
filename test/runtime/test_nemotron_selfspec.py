@@ -61,6 +61,25 @@ def test_acceptance_never_exceeds_the_block():
     assert accepted([2, 3, 4, 5], [1, 2, 3, 4]) == BLOCK
 
 
+def accepted_tokens(verified, drafted, forced=0):
+    return NemotronSelfSpecRunner.accepted_tokens(
+        torch.tensor(verified), torch.tensor(drafted), forced
+    )
+
+
+def test_accepted_tokens_without_forcing_is_the_verified_prefix():
+    for verified in ([9, 9, 9, 9], [2, 9, 9, 9], [2, 3, 9, 9], [2, 3, 4, 5]):
+        length = accepted(verified, [1, 2, 3, 4])
+        assert accepted_tokens(verified, [1, 2, 3, 4]) == verified[:length]
+
+
+def test_a_forced_position_is_emitted_whatever_the_verifier_predicted():
+    # verified[0] disagrees with the placed 7, which is emitted anyway; matching
+    # resumes at verified[1] against drafted[2].
+    assert accepted_tokens([9, 3, 4, 5], [1, 7, 3, 4], forced=1) == [7, 3, 4, 5]
+    assert accepted_tokens([9, 8, 4, 5], [1, 7, 3, 4], forced=1) == [7, 8]
+
+
 # --------------------------------------------------------------------------
 # Draft selection
 # --------------------------------------------------------------------------

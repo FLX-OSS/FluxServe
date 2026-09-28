@@ -333,6 +333,36 @@ def test_one_plan_call_is_one_speculation_iteration():
     assert result.token_ids == [1, 10, 11, 12, 13]
 
 
+def test_a_zero_thinking_budget_forces_the_marker_into_the_first_block():
+    """The prefill seed is only emitted by the first call, but it still counts."""
+    from fluxserve.backend.execution.decoders.nemotron import ThinkingBudget
+    from test_nemotron_fa4 import FakePlanOp, FakeState
+
+    marker = 14
+
+    def script(index, seq_ids, tokens, length):
+        if index % 2 == 0:  # draft
+            return logits_for([(9, 0.9), (10, 0.9), (11, 0.9), (12, 0.9)],
+                              batch=len(seq_ids))
+        return logits_for([(10, 0.9), (11, 0.9), (12, 0.9), (13, 0.9)],
+                          batch=len(seq_ids))
+
+    runner = make_plan_runner(script)
+    runner.thinking_budget = ThinkingBudget(
+        max_thinking_tokens=0, end_think_token_id=marker
+    )
+    states = {"r0": FakeState("r0", [5] * 34, max_new_tokens=3 * BLOCK)}
+    runner._paged_request_slots["r0"] = 0
+    runner._request_seeds["r0"] = 1
+    runner._request_prefix["r0"] = 34  # nothing emitted yet
+    op = FakePlanOp(["r0"], [], [], [], [[0, 1, 2, 3]], 0)
+    results = run_plan(runner, op, states)
+
+    tokens = results[0].token_ids
+    assert tokens[:2] == [1, marker]
+    assert tokens.count(marker) == 1
+
+
 def test_the_prefix_advances_by_the_accepted_length_across_plan_calls():
     """The reason this runner keeps its own prefix rather than a block counter."""
     from test_nemotron_fa4 import FakePlanOp, FakeState
