@@ -281,7 +281,7 @@ def test_self_speculation_leaves_the_seed_alone_within_the_allowance():
 
 
 def test_the_end_think_id_resolves_from_the_checkpoint():
-    from fluxserve.backend.model_loader.nemotron import resolve_end_think_token_id
+    from fluxserve.backend.model_loader.loader import resolve_end_think_token_id
     from test_nemotron_model import checkpoint_config
 
     resolved = resolve_end_think_token_id(checkpoint_config())
@@ -291,7 +291,7 @@ def test_the_end_think_id_resolves_from_the_checkpoint():
 
 
 def test_normalization_resolves_and_validates_the_budget():
-    from fluxserve.backend.model_loader.nemotron import normalize_nemotron_args
+    from fluxserve.cli.bench_offline import normalize_nemotron_args
     from test_nemotron_model import checkpoint_config, serve_args
 
     args = serve_args(max_thinking_tokens=64)
@@ -319,9 +319,7 @@ def test_normalization_resolves_and_validates_the_budget():
 
 def test_the_settings_reach_the_runner_config():
     from fluxserve.backend.execution.forward_batch_info import RunnerConfig
-    from fluxserve.backend.model_loader.nemotron import (
-        apply_nemotron_runner_config,
-    )
+    from fluxserve.cli.bench_offline import apply_nemotron_runner_config
     from test_nemotron_model import checkpoint_config
 
     config = RunnerConfig()

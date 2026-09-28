@@ -47,7 +47,7 @@ class InputProcessor:
         defaults = getattr(self.server_args, "sampling_defaults", None)
         if defaults is not None:
             import secrets
-            from fluxserve.backend.execution.nemotron_sampling import validate_sampling_params
+            from fluxserve.backend.execution.decoders.nemotron import validate_sampling_params
 
             params = dict(defaults) | params
             validate_sampling_params(params)

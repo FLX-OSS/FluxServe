@@ -171,6 +171,39 @@ def nemotron_weight_plan(config) -> dict[str, tuple[str, object, tuple[int, ...]
     return plan
 
 
+# Checkpoint architectural ceiling. Hardware/quality validation is recorded
+# separately; request buffers must also respect the configured serving limit.
+MAX_SUPPORTED_POSITIONS = 262144
+
+
+def nemotron_block_length(model_config, requested: int | None = None) -> int:
+    """Serving block length; the checkpoint's ``block_size`` is the default."""
+    block_size = int(getattr(model_config, "block_size", 0) or 0)
+    if requested is None:
+        if block_size <= 0:
+            raise ValueError("Nemotron checkpoint declares no block_size")
+        return block_size
+    requested = int(requested)
+    if requested <= 0:
+        raise ValueError(f"--block-length must be positive, got {requested}")
+    return requested
+
+
+def check_nemotron_context_limit(max_positions: int, model_config=None, *, serving_limit=None) -> None:
+    """Check absolute positions, including provisional generation slots."""
+    limit = min(MAX_SUPPORTED_POSITIONS, int(
+        getattr(model_config, "max_position_embeddings", MAX_SUPPORTED_POSITIONS)
+    ))
+    if serving_limit is not None:
+        limit = min(limit, int(serving_limit))
+    if not 0 <= int(max_positions) <= limit:
+        raise ValueError(
+            "Nemotron-Labs-Diffusion support is currently limited to "
+            f"{limit} total positions; requested {int(max_positions)}. "
+            "This includes provisional block slots."
+        )
+
+
 class NemotronDiffusionMLP(nn.Module):
     def __init__(self, config, prefix: str = ""):
         super().__init__()

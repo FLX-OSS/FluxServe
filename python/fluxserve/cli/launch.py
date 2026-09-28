@@ -30,7 +30,11 @@ import torch
 from transformers import AutoConfig, AutoTokenizer
 
 from fluxserve.cli.bench import add_bench_subparser
-from fluxserve.cli.bench_offline import add_bench_offline_subparser
+from fluxserve.cli.bench_offline import (
+    add_bench_offline_subparser,
+    apply_nemotron_runner_config,
+    normalize_nemotron_args,
+)
 from fluxserve.cli.common import (
     StoreExplicit,
     check_block_routing_alignment,
@@ -61,17 +65,9 @@ from fluxserve.backend.execution.runners import (
     DiffusionGemmaRunner,
     FA4DiffusionRunner,
     FlashInferDiffusionRunner,
-)
-from fluxserve.backend.execution.runners.nemotron import get_nemotron_runner
-from fluxserve.backend.execution.runners.nemotron_selfspec import (
-    NemotronSelfSpecRunner,
-)
-from fluxserve.backend.execution.runners.nemotron_selfspec_paged import (
     NemotronSelfSpecPagedRunner,
-)
-from fluxserve.backend.model_loader.nemotron import (
-    apply_nemotron_runner_config,
-    normalize_nemotron_args,
+    NemotronSelfSpecRunner,
+    get_nemotron_runner,
 )
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
 from fluxserve.backend.layers.moe.utils import initialize_moe_config

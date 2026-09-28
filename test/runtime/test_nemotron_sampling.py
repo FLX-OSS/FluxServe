@@ -9,9 +9,8 @@ import numpy as np
 import pytest
 import torch
 
-from fluxserve.backend.execution.decoders.nemotron import NemotronThresholdDecoder
-from fluxserve.backend.execution.nemotron_sampling import (
-    NemotronSampling, make_sampling, validate_sampling_params,
+from fluxserve.backend.execution.decoders.nemotron import (
+    NemotronSampling, NemotronThresholdDecoder, make_sampling, validate_sampling_params,
 )
 
 
@@ -103,7 +102,7 @@ def stochastic_logits(batch, length):
 def test_seeded_request_is_independent_of_batch_neighbors(monkeypatch, speculative, backend):
     import test_nemotron_fa4 as diffusion_tests
     import test_nemotron_selfspec_paged as spec_tests
-    from fluxserve.backend.execution.runners.nemotron import get_nemotron_runner
+    from fluxserve.backend.execution.runners import get_nemotron_runner
 
     module = spec_tests if speculative else diffusion_tests
     monkeypatch.setattr(module, "_paged_runner_cls", get_nemotron_runner(

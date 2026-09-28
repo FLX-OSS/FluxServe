@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 
 import torch
 
-from fluxserve.backend.execution.nemotron_sampling import sample_tokens
+from fluxserve.backend.execution.decoders.nemotron import sample_tokens
 
 from fluxserve.backend.execution.decoders.nemotron import (
     NemotronThresholdDecoder,
@@ -315,7 +315,7 @@ class NemotronSelfSpecRunner(NemotronDiffusionRunner):
 
     def load_draft_adapter(self, path=None) -> None:
         """Attach the ``linear_spec_lora`` draft adapter, if present."""
-        from fluxserve.backend.model_loader.nemotron import load_nemotron_lora
+        from fluxserve.backend.model_loader.loader import load_nemotron_lora
 
         self.lora = load_nemotron_lora(self.model, self.model_config, path)
         if self.lora is not None:

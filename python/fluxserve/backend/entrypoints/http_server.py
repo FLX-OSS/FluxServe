@@ -265,7 +265,7 @@ def create_app(engine: AsyncLLM):
     def sampling_error(params):
         defaults = getattr(engine.server_args, "sampling_defaults", None)
         if defaults is not None:
-            from fluxserve.backend.execution.nemotron_sampling import validate_sampling_params
+            from fluxserve.backend.execution.decoders.nemotron import validate_sampling_params
 
             try:
                 validate_sampling_params({**defaults, **params})

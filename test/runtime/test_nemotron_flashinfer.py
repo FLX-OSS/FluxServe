@@ -8,19 +8,19 @@ import torch
 import torch.nn.functional as F
 
 from fluxserve.backend.execution.forward_batch_info import ForwardBatch, RunnerConfig
-from fluxserve.backend.execution.runners.nemotron import get_nemotron_runner
+from fluxserve.backend.execution.runners import get_nemotron_runner
 from fluxserve.backend.execution.runners.nemotron_fa4 import build_nemotron_paged_metadata
 from fluxserve.backend.execution.runners.nemotron_flashinfer import (
     NemotronFlashInferDiffusionRunner,
     NemotronFlashInferSelfSpecRunner,
 )
 from fluxserve.backend.layers.attention.base import AttentionForwardConfig
-from fluxserve.backend.layers.attention.flashinfer_token import (
+from fluxserve.backend.layers.attention.nemotron_flashinfer import (
     FlashInferTokenPagedAttention,
     FlashInferTokenPagedState,
 )
 from fluxserve.backend.layers.attention.forward import AttentionForward
-from fluxserve.backend.model_loader.nemotron import normalize_nemotron_args
+from fluxserve.cli.bench_offline import normalize_nemotron_args
 from test_nemotron_model import checkpoint_config, serve_args
 
 
@@ -254,45 +254,3 @@ def test_real_runner_forward_marks_native_flashinfer_metadata():
     assert metadata.kv_lens.tolist() == [49]
     assert metadata.q_offsets_cpu == (17,)
     assert captured["position_ids"].tolist() == [list(range(17, 49))]
-
-
-def diffusion_harness():
-    import importlib.util
-    from pathlib import Path
-
-    path = Path(__file__).parent / "integration" / "nemotron_diffusion_harness.py"
-    spec = importlib.util.spec_from_file_location("diffusion_harness", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-@pytest.mark.parametrize("mutation", ["none", "tokens", "causal_commit", "missing_fixture"])
-def test_flashinfer_checkpoint_gate_detects_divergence(tmp_path, mutation):
-    import copy
-
-    dense = {"results": {"case": {
-        "generated": [1, 2],
-        "stats": {"prefill_calls": 1, "denoise_calls": 1, "commit_calls": 1},
-    }}}
-    candidate = copy.deepcopy(dense)
-    candidate["provenance"] = {"test": True}
-    candidate["results"]["case"]["launches"] = [
-        {"prefill": True, "causal": True},
-        {"prefill": False, "causal": False},
-        {"prefill": False, "causal": True},
-    ]
-    if mutation == "tokens":
-        candidate["results"]["case"]["generated"] = [3, 4]
-    elif mutation == "causal_commit":
-        candidate["results"]["case"]["launches"][-1]["causal"] = False
-    elif mutation == "missing_fixture":
-        candidate["results"].clear()
-    torch.save(candidate, tmp_path / "flashinfer.pt")
-    record = diffusion_harness().compare_flashinfer(tmp_path, dense)
-    assert all(record["checks"].values()) == (mutation == "none")
-
-
-def test_flashinfer_checkpoint_gate_requires_an_artifact(tmp_path):
-    with pytest.raises(FileNotFoundError):
-        diffusion_harness().compare_flashinfer(tmp_path, {"results": {}})

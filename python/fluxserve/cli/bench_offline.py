@@ -48,17 +48,18 @@ from fluxserve.backend.execution.runners import (
     DiffusionGemmaRunner,
     FA4DiffusionRunner,
     FlashInferDiffusionRunner,
-)
-from fluxserve.backend.execution.runners.nemotron import get_nemotron_runner
-from fluxserve.backend.execution.runners.nemotron_selfspec import (
-    NemotronSelfSpecRunner,
-)
-from fluxserve.backend.execution.runners.nemotron_selfspec_paged import (
     NemotronSelfSpecPagedRunner,
+    NemotronSelfSpecRunner,
+    get_nemotron_runner,
 )
-from fluxserve.backend.model_loader.nemotron import (
-    apply_nemotron_runner_config,
-    normalize_nemotron_args,
+from fluxserve.backend.model_loader.loader import (
+    nemotron_decoding_ids,
+    resolve_end_think_token_id,
+)
+from fluxserve.backend.models.nemotron_diffusion import (
+    check_nemotron_context_limit,
+    is_nemotron_diffusion_config,
+    nemotron_block_length,
 )
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
 from fluxserve.backend.layers.moe import initialize_moe_config
@@ -352,6 +353,149 @@ def normalize_diffusion_gemma_args(args, model_config) -> bool:
         raise ValueError(
             "Diffusion-Gemma supports decode CUDA graphs only; use "
             "--use-decode-cuda-graph."
+        )
+    return True
+
+
+# Selected through the existing --parallel-decoding flag rather than a new
+# one; Nemotron overrides init_decoder, so the shared decoder factory never
+# sees these values.
+SELF_SPECULATION = "self_speculation"
+NEMOTRON_DECODING_MODES = ("threshold", SELF_SPECULATION)
+
+
+def apply_nemotron_runner_config(runner_config, model_config, args=None) -> None:
+    """Point a ``RunnerConfig`` at this checkpoint's ids and options.
+
+    ``RunnerConfig`` defaults to LLaDA's mask and EOS ids, which are outside
+    this model's 131072-entry vocabulary. Both the primary id and the tuple are
+    set so the shared decoder factory's ordering rule stays untouched.
+
+    Thinking-budget settings are attached here rather than added to the shared
+    schema; runners read them with ``getattr`` defaults, so a config built
+    without them behaves exactly as before.
+    """
+    ids = nemotron_decoding_ids(model_config)
+    runner_config.mask_id = ids["mask_id"]
+    runner_config.eos_id = ids["eos_id"]
+    runner_config.eos_ids = ids["eos_ids"]
+    runner_config.max_thinking_tokens = getattr(args, "max_thinking_tokens", None)
+    runner_config.end_think_token_id = getattr(args, "end_think_token_id", None)
+    runner_config.temperature = getattr(args, "temperature", 0.0)
+    runner_config.seed = getattr(args, "seed", None)
+    runner_config.nemotron_prefill_chunk_size = getattr(args, "nemotron_prefill_chunk_size", 1024)
+
+
+def normalize_nemotron_args(args, model_config) -> bool:
+    """Validate and default Nemotron-only serving arguments.
+
+    Returns ``True`` when the checkpoint is a Nemotron one, so callers can use
+    it as the dispatch predicate. Shared by the server and the offline bench so
+    the two cannot drift apart.
+    """
+    if not is_nemotron_diffusion_config(model_config):
+        return False
+
+    from fluxserve.backend.execution.decoders.nemotron import validate_sampling_params
+
+    validate_sampling_params({"temperature": getattr(args, "temperature", 0.0),
+                              "seed": getattr(args, "seed", None)})
+    if int(getattr(args, "nemotron_prefill_chunk_size", 1024)) <= 0:
+        raise ValueError("--nemotron-prefill-chunk-size must be positive")
+
+    backend = getattr(args, "attention_backend", "sdpa")
+    if backend not in ("sdpa", "fa4", "flashinfer"):
+        raise ValueError(
+            "Nemotron-Labs-Diffusion supports attention_backend 'sdpa' "
+            f"(dense), 'fa4' or 'flashinfer' (paged); got {backend!r}."
+        )
+    if backend in ("fa4", "flashinfer"):
+        if getattr(args, "kv_cache_layout", "dense") != "paged":
+            raise ValueError(f"Nemotron {backend.upper()} serving requires --kv-cache-layout paged")
+        if backend == "flashinfer":
+            for name in ("flashinfer_cache_mode", "flashinfer_prefill_mode"):
+                if getattr(args, name, "paged") != "paged":
+                    raise ValueError(f"Nemotron FlashInfer requires --{name.replace('_', '-')} paged")
+    elif hasattr(args, "kv_cache_layout"):
+        # `--kv-cache-layout` defaults to paged, but the dense runner owns a
+        # preallocated buffer and ignores the paged manager entirely. Normalize
+        # it so the resolved configuration describes what actually runs instead
+        # of advertising a cache the model never touches.
+        args.kv_cache_layout = "dense"
+    if getattr(args, "use_prefill_cuda_graph", False):
+        raise ValueError(
+            "Nemotron prefill is a single variable-length causal forward and "
+            "is not captured; use --use-decode-cuda-graph."
+        )
+    wants_graph = getattr(args, "use_cuda_graph", False) or getattr(
+        args, "use_decode_cuda_graph", False
+    )
+    if wants_graph and backend not in ("fa4", "flashinfer"):
+        raise ValueError(
+            "Nemotron decode CUDA graphs exist only on the paged FA4 or "
+            "FlashInfer paths; use --attention-backend fa4 or flashinfer with "
+            "--kv-cache-layout paged."
+        )
+    if getattr(args, "scheduler_policy", "") == "paged" and backend not in ("fa4", "flashinfer"):
+        raise ValueError(
+            "Nemotron continuously scheduled paged serving requires "
+            "--attention-backend fa4 or flashinfer with --kv-cache-layout paged."
+        )
+    decoding = getattr(args, "parallel_decoding", "threshold")
+    if decoding not in NEMOTRON_DECODING_MODES:
+        raise ValueError(
+            "Nemotron supports --parallel-decoding "
+            f"{' or '.join(sorted(NEMOTRON_DECODING_MODES))}; got {decoding!r}."
+        )
+    if (
+        decoding == SELF_SPECULATION
+        and getattr(args, "scheduler_policy", "") == "paged"
+        and backend not in ("fa4", "flashinfer")
+    ):
+        raise ValueError(
+            "Continuously scheduled self-speculation requires paged FA4 or FlashInfer; "
+            "the dense runner serves one request at a time."
+        )
+
+    block_length = nemotron_block_length(
+        model_config, getattr(args, "block_length", None)
+    )
+    model_block = int(getattr(model_config, "block_size", 0) or 0)
+    if model_block and block_length % model_block:
+        raise ValueError(
+            f"--block-length ({block_length}) must be a multiple of the "
+            f"checkpoint's block_size ({model_block})"
+        )
+    args.block_length = block_length
+
+    max_length = int(getattr(args, "max_model_len", 0) or 0)
+    if max_length:
+        check_nemotron_context_limit(max_length, model_config)
+
+    budget = getattr(args, "max_thinking_tokens", None)
+    if budget is not None:
+        if int(budget) < 0:
+            raise ValueError(
+                f"--max-thinking-tokens must be non-negative, got {budget}"
+            )
+        marker = getattr(args, "end_think_token_id", None)
+        if marker is None:
+            marker = resolve_end_think_token_id(model_config)
+        if marker is None:
+            raise ValueError(
+                "--max-thinking-tokens needs an end-of-thinking token; this "
+                "checkpoint declares no '</think>', so pass "
+                "--end-think-token-id explicitly"
+            )
+        if not 0 <= int(marker) < int(model_config.vocab_size):
+            raise ValueError(
+                f"--end-think-token-id {marker} is outside vocab_size="
+                f"{int(model_config.vocab_size)}"
+            )
+        args.end_think_token_id = int(marker)
+    elif getattr(args, "end_think_token_id", None) is not None:
+        raise ValueError(
+            "--end-think-token-id has no effect without --max-thinking-tokens"
         )
     return True
 

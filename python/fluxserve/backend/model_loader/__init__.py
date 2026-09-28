@@ -41,7 +41,7 @@ def get_model(
         or getattr(model_config, "model_type", None) == "diffusion_gemma"
     )
     if is_nemotron_diffusion_config(model_config):
-        from fluxserve.backend.model_loader.nemotron import NemotronModelLoader
+        from fluxserve.backend.model_loader.loader import NemotronModelLoader
 
         loader = NemotronModelLoader()
     elif is_diffusion_gemma:

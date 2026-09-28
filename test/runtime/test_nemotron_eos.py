@@ -9,7 +9,7 @@ from test_nemotron_diffusion import (
 from test_nemotron_selfspec import make_selfspec_runner
 import test_nemotron_fa4 as paged
 import test_nemotron_selfspec_paged as spec
-from fluxserve.backend.execution.runners.nemotron import get_nemotron_runner
+from fluxserve.backend.execution.runners import get_nemotron_runner
 
 
 @pytest.mark.parametrize("backend", ["sdpa", "fa4", "flashinfer"])

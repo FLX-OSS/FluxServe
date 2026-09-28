@@ -5,12 +5,14 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from fluxserve.backend.model_loader.nemotron import (
-    MAX_SUPPORTED_POSITIONS, check_nemotron_context_limit, normalize_nemotron_args,
+from fluxserve.backend.models.nemotron_diffusion import (
+    MAX_SUPPORTED_POSITIONS,
+    check_nemotron_context_limit,
 )
+from fluxserve.cli.bench_offline import normalize_nemotron_args
 from fluxserve.backend.execution.runners.nemotron_fa4 import build_nemotron_paged_metadata
 from fluxserve.backend.models.nemotron_diffusion import nemotron_query_scale
-from test_nemotron_model import checkpoint_config, serve_args
+from test_nemotron_model import checkpoint_config, native_silu_on_cpu, serve_args  # noqa: F401
 
 
 @pytest.mark.parametrize("length", [16384, 16385, 32768, 65536, 131072, 262144])
@@ -44,6 +46,7 @@ def test_paged_slots_retain_absolute_positions_across_long_context_boundaries(of
     torch.testing.assert_close(nemotron_query_scale(positions, 0.1, 16384).squeeze(-1), expected)
 
 
+@pytest.mark.usefixtures("native_silu_on_cpu")
 def test_chunked_dense_prefill_matches_full_causal_logits_and_kv():
     from test_nemotron_model import initialized_tiny_model
     from test_nemotron_diffusion import make_runner

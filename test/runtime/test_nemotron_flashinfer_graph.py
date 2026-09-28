@@ -12,10 +12,10 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from fluxserve.backend.execution.nemotron_cuda_graph_runner import (
+from fluxserve.backend.execution.fa4_cuda_graph_runner import (
     NemotronCudaGraphRunner,
 )
-from fluxserve.backend.layers.attention.flashinfer_token import (
+from fluxserve.backend.layers.attention.nemotron_flashinfer import (
     FlashInferTokenPagedGraphState,
 )
 from fluxserve.backend.layers.attention.metadata import PagedAttentionMetadata

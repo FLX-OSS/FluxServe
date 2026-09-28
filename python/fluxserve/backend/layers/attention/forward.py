@@ -36,7 +36,7 @@ from fluxserve.backend.layers.attention.flashinfer import (
     FlashInferRaggedPrefillAttention,
 )
 from fluxserve.backend.layers.attention.fa4 import FA4PagedAttention
-from fluxserve.backend.layers.attention.flashinfer_token import FlashInferTokenPagedAttention
+from fluxserve.backend.layers.attention.nemotron_flashinfer import FlashInferTokenPagedAttention
 
 
 class AttentionForward:

@@ -11,8 +11,6 @@ that happens, and the three official Nemotron sizes bracket the case: one where
 the division is too small, one where it agrees, one where it is too large.
 """
 
-import json
-import pathlib
 from types import SimpleNamespace
 
 import pytest
@@ -22,11 +20,19 @@ from fluxserve.backend.utils.runtime_utils import (
     paged_kv_bytes_per_page,
 )
 
-CHECKPOINTS = pathlib.Path(__file__).parent / "data" / "nemotron_checkpoints"
+# Cache geometry from each official checkpoint's config.json.
+CHECKPOINT_GEOMETRY = {
+    "3B": dict(hidden_size=3072, num_hidden_layers=26),
+    "8B": dict(hidden_size=4096, num_hidden_layers=34),
+    "14B": dict(hidden_size=5120, num_hidden_layers=40),
+}
 
 
 def pinned_config(size):
-    return SimpleNamespace(**json.loads((CHECKPOINTS / size / "config.json").read_text()))
+    return SimpleNamespace(
+        **CHECKPOINT_GEOMETRY[size],
+        num_attention_heads=32, num_key_value_heads=8, head_dim=128,
+    )
 
 
 @pytest.mark.parametrize("size", ["3B", "8B", "14B"])

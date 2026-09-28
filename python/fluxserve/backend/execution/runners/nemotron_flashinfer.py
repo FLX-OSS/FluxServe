@@ -19,7 +19,7 @@ from fluxserve.backend.execution.runners.nemotron_fa4 import NemotronFA4Diffusio
 from fluxserve.backend.execution.runners.nemotron_selfspec_paged import (
     NemotronSelfSpecPagedRunner,
 )
-from fluxserve.backend.layers.attention.flashinfer_token import (
+from fluxserve.backend.layers.attention.nemotron_flashinfer import (
     require_flashinfer_token_paged,
 )
 

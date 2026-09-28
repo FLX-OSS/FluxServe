@@ -708,7 +708,7 @@ def test_scheduler_prefills_the_whole_prompt_only_when_asked():
 
 
 def graph_runner(buckets=(1, 2, 4)):
-    from fluxserve.backend.execution.nemotron_cuda_graph_runner import (
+    from fluxserve.backend.execution.fa4_cuda_graph_runner import (
         NemotronCudaGraphRunner,
     )
 

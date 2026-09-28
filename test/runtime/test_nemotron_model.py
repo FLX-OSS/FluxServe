@@ -6,19 +6,19 @@ the Hugging Face cache is not visible; set ``HF_HOME`` to a cache containing
 the checkpoint to exercise them.
 """
 
-import functools
 import math
-import pathlib
 from types import SimpleNamespace
 
 import pytest
 import torch
 
-from fluxserve.backend.model_loader.nemotron import (
+from fluxserve.backend.models.nemotron_diffusion import (
     MAX_SUPPORTED_POSITIONS,
-    NemotronModelLoader,
     check_nemotron_context_limit,
     nemotron_block_length,
+)
+from fluxserve.backend.model_loader.loader import (
+    NemotronModelLoader,
     nemotron_decoding_ids,
     read_safetensors_header,
     resolve_nemotron_eos_ids,
@@ -130,6 +130,12 @@ def checkpoint_header():
     except Exception as error:  # noqa: BLE001 - any resolution failure skips
         pytest.skip(f"Nemotron checkpoint unavailable: {error}")
     return read_safetensors_header(snapshot / "model.safetensors")
+
+
+@pytest.fixture(autouse=True)
+def native_silu_on_cpu(monkeypatch):
+    """The tiny model runs on CPU; the fused kernel only takes CUDA tensors."""
+    monkeypatch.setattr("fluxserve.backend.layers.activation._is_cuda", False)
 
 
 # --------------------------------------------------------------------------
@@ -506,110 +512,6 @@ def test_query_scale_breaks_rope_shift_invariance_beyond_the_window():
 
 
 # --------------------------------------------------------------------------
-# AR execution contract (Phase 1 harness plumbing, exercised on CPU)
-# --------------------------------------------------------------------------
-
-
-@functools.lru_cache(maxsize=1)
-def ar_harness_module():
-    """Import the Phase 1 harness, which lives outside the test namespace."""
-    import importlib.util
-    import sys
-
-    path = (
-        pathlib.Path(__file__).resolve().parent
-        / "integration"
-        / "nemotron_ar_harness.py"
-    )
-    spec = importlib.util.spec_from_file_location("nemotron_ar_harness", path)
-    module = importlib.util.module_from_spec(spec)
-    # `@dataclass` resolves annotations through sys.modules during exec.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def ar_harness(model, config):
-    """The Phase 1 harness's FluxServe side, wrapped around a small model."""
-    module = ar_harness_module()
-    return module, module.FluxServeAR(model, config, "cpu", max_length=64)
-
-
-def test_teacher_forced_decode_matches_full_sequence_prefill():
-    """The KV cache window convention must reproduce a single causal prefill.
-
-    A decode step writes its K/V into the final slot of the window it is
-    handed, so the window has to be sized to include the new token. If that
-    convention is wrong the cached path silently attends to stale or shifted
-    keys, which this catches without a GPU or a reference model.
-    """
-    config = tiny_config()
-    model = initialized_tiny_model()
-    _, harness = ar_harness(model, config)
-
-    ids = torch.randint(0, config.vocab_size, (1, 12))
-    full, _, _ = harness.prefill(ids)
-
-    split = 5
-    _, cache, cache_length = harness.prefill(ids[:, :split])
-    for offset in range(split, ids.shape[1]):
-        step_logits, cache_length = harness.decode_step(
-            ids[:, offset : offset + 1], offset, cache, cache_length
-        )
-        expected = full[:, offset]
-        assert cache_length == offset + 1
-        assert max_abs_difference(step_logits, expected) < 2e-3
-        assert torch.equal(step_logits.argmax(-1), expected.argmax(-1))
-
-
-def test_ar_prefill_is_causal():
-    """Changing a later token must not move an earlier position's logits."""
-    config = tiny_config()
-    model = initialized_tiny_model()
-    _, harness = ar_harness(model, config)
-
-    ids = torch.randint(0, config.vocab_size, (1, 8))
-    baseline, _, _ = harness.prefill(ids)
-
-    edited = ids.clone()
-    edited[0, -1] = (int(edited[0, -1]) + 1) % config.vocab_size
-    changed, _, _ = harness.prefill(edited)
-
-    assert max_abs_difference(baseline[:, :-1], changed[:, :-1]) < 1e-5
-    assert max_abs_difference(baseline[:, -1], changed[:, -1]) > POSITION_SIGNAL
-
-
-def test_teacher_forced_split_leaves_requested_steps():
-    module, _ = ar_harness(initialized_tiny_model(), tiny_config())
-    assert module.teacher_forced_split(32, 8) == 24
-    assert module.teacher_forced_split(1, 8) == 1
-    assert module.teacher_forced_split(4, 8) == 1
-
-
-def test_metrics_report_the_protocol_quantities():
-    module, _ = ar_harness(initialized_tiny_model(), tiny_config())
-    reference = torch.tensor([[[0.0, 2.0, 1.0], [3.0, 0.0, 0.0]]])
-    identical = module.tensor_metrics(reference.clone(), reference)
-    assert identical["max_abs"] == 0.0
-    assert identical["nrms"] == 0.0
-    assert identical["top1_agreement"] == 1.0
-    assert identical["disagreement_positions"] == []
-    # Reference top1/top2 margins: 2-1 = 1 and 3-0 = 3.
-    assert identical["reference_margin_min"] == pytest.approx(1.0)
-
-    flipped = reference.clone()
-    flipped[0, 0] = torch.tensor([0.0, 1.0, 2.0])
-    changed = module.tensor_metrics(flipped, reference)
-    assert changed["top1_agreement"] == pytest.approx(0.5)
-    assert changed["disagreement_positions"] == [0]
-    assert changed["disagreement_margins"] == [pytest.approx(1.0)]
-
-    assert not module.tensor_metrics(
-        torch.tensor([[[float("nan"), 0.0]]]), torch.tensor([[[0.0, 1.0]]])
-    )["finite"]
-
-
-# --------------------------------------------------------------------------
 # Entry-point normalization (shared by the server and the offline bench)
 # --------------------------------------------------------------------------
 
@@ -633,7 +535,7 @@ def serve_args(**overrides):
 
 
 def test_normalization_is_the_dispatch_predicate():
-    from fluxserve.backend.model_loader.nemotron import normalize_nemotron_args
+    from fluxserve.cli.bench_offline import normalize_nemotron_args
 
     assert normalize_nemotron_args(serve_args(), checkpoint_config()) is True
     assert (
@@ -646,7 +548,7 @@ def test_normalization_is_the_dispatch_predicate():
 
 
 def test_normalization_defaults_block_length_to_the_checkpoint_block_size():
-    from fluxserve.backend.model_loader.nemotron import normalize_nemotron_args
+    from fluxserve.cli.bench_offline import normalize_nemotron_args
 
     args = serve_args()
     normalize_nemotron_args(args, checkpoint_config())
@@ -679,14 +581,14 @@ def test_normalization_defaults_block_length_to_the_checkpoint_block_size():
     ],
 )
 def test_normalization_rejects_unsupported_combinations(overrides, message):
-    from fluxserve.backend.model_loader.nemotron import normalize_nemotron_args
+    from fluxserve.cli.bench_offline import normalize_nemotron_args
 
     with pytest.raises(ValueError, match=message):
         normalize_nemotron_args(serve_args(**overrides), checkpoint_config())
 
 
 def test_paged_fa4_combination_is_accepted():
-    from fluxserve.backend.model_loader.nemotron import normalize_nemotron_args
+    from fluxserve.cli.bench_offline import normalize_nemotron_args
 
     args = serve_args(attention_backend="fa4", kv_cache_layout="paged")
     assert normalize_nemotron_args(args, checkpoint_config()) is True
@@ -694,9 +596,7 @@ def test_paged_fa4_combination_is_accepted():
 
 def test_runner_config_ids_are_replaced_with_the_checkpoints():
     from fluxserve.backend.execution.forward_batch_info import RunnerConfig
-    from fluxserve.backend.model_loader.nemotron import (
-        apply_nemotron_runner_config,
-    )
+    from fluxserve.cli.bench_offline import apply_nemotron_runner_config
 
     runner_config = RunnerConfig()
     assert runner_config.mask_id == 156895  # LLaDA's, outside this vocabulary
@@ -706,7 +606,7 @@ def test_runner_config_ids_are_replaced_with_the_checkpoints():
 
 
 def test_self_speculation_is_selected_through_the_existing_flag():
-    from fluxserve.backend.model_loader.nemotron import (
+    from fluxserve.cli.bench_offline import (
         NEMOTRON_DECODING_MODES,
         SELF_SPECULATION,
         normalize_nemotron_args,
@@ -719,7 +619,7 @@ def test_self_speculation_is_selected_through_the_existing_flag():
 
 
 def test_decode_graphs_are_accepted_on_the_paged_path():
-    from fluxserve.backend.model_loader.nemotron import normalize_nemotron_args
+    from fluxserve.cli.bench_offline import normalize_nemotron_args
 
     args = serve_args(
         attention_backend="fa4", kv_cache_layout="paged",
@@ -729,7 +629,7 @@ def test_decode_graphs_are_accepted_on_the_paged_path():
 
 
 def test_paged_scheduling_is_accepted_on_the_paged_path():
-    from fluxserve.backend.model_loader.nemotron import normalize_nemotron_args
+    from fluxserve.cli.bench_offline import normalize_nemotron_args
 
     args = serve_args(
         attention_backend="fa4", kv_cache_layout="paged",
@@ -742,7 +642,7 @@ def test_snapshot_resolution_can_refuse_to_download(monkeypatch):
     """A cache lookup must not become a 27 GB transfer inside a unit test."""
     import huggingface_hub
 
-    from fluxserve.backend.model_loader import nemotron as loader
+    from fluxserve.backend.model_loader import loader
 
     seen = {}
 
@@ -763,7 +663,7 @@ def test_snapshot_resolution_can_refuse_to_download(monkeypatch):
 
 def test_dense_serving_does_not_advertise_a_paged_cache():
     """`--kv-cache-layout` defaults to paged; the dense runner ignores it."""
-    from fluxserve.backend.model_loader.nemotron import normalize_nemotron_args
+    from fluxserve.cli.bench_offline import normalize_nemotron_args
 
     args = serve_args(attention_backend="sdpa", kv_cache_layout="paged")
     assert normalize_nemotron_args(args, checkpoint_config()) is True
@@ -777,7 +677,7 @@ def test_dense_serving_does_not_advertise_a_paged_cache():
 def test_paged_self_speculation_is_supported():
     """Stage 4c: the offline paged path preallocates a page table per sequence,
     so rollback is a prefix length there, not page accounting."""
-    from fluxserve.backend.model_loader.nemotron import normalize_nemotron_args
+    from fluxserve.cli.bench_offline import normalize_nemotron_args
 
     args = serve_args(
         parallel_decoding="self_speculation",

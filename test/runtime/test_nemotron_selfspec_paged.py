@@ -231,7 +231,7 @@ def test_decode_graphs_initialize_for_both_backends(monkeypatch):
 
 
 def test_normalization_routes_self_speculation_by_backend():
-    from fluxserve.backend.model_loader.nemotron import normalize_nemotron_args
+    from fluxserve.cli.bench_offline import normalize_nemotron_args
     from test_nemotron_model import checkpoint_config, serve_args
 
     dense = serve_args(parallel_decoding="self_speculation")
@@ -435,7 +435,7 @@ def test_a_finished_request_releases_its_seed_and_prefix():
 
 
 def test_paged_scheduling_is_now_accepted_for_self_speculation():
-    from fluxserve.backend.model_loader.nemotron import normalize_nemotron_args
+    from fluxserve.cli.bench_offline import normalize_nemotron_args
     from test_nemotron_model import checkpoint_config, serve_args
 
     args = serve_args(

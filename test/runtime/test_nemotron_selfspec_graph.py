@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from fluxserve.backend.execution.nemotron_cuda_graph_runner import NemotronCudaGraphRunner
-from fluxserve.backend.execution.runners.nemotron import get_nemotron_runner
-from fluxserve.backend.model_loader.nemotron import NemotronDraftAdapter
+from fluxserve.backend.execution.fa4_cuda_graph_runner import NemotronCudaGraphRunner
+from fluxserve.backend.execution.runners import get_nemotron_runner
+from fluxserve.backend.model_loader.loader import NemotronDraftAdapter
 from test_nemotron_flashinfer_graph import BLOCK, replay_fixture
 
 
@@ -101,14 +101,14 @@ def test_spec_launch_uses_graph_logits_and_eager_fallback(backend):
 
 
 def test_reloading_adapter_invalidates_graphs_before_replacing_weights(monkeypatch):
-    from fluxserve.backend.model_loader import nemotron
+    from fluxserve.backend.model_loader import loader
 
     runner = object.__new__(get_nemotron_runner("fa4", "self_speculation"))
     seen = []
     runner.nemotron_graph_runner = SimpleNamespace(invalidate=lambda: seen.append("invalidate"))
     runner.lora = SimpleNamespace(apply=lambda enabled: seen.append(enabled))
     runner.model = runner.model_config = None
-    monkeypatch.setattr(nemotron, "load_nemotron_lora", lambda *args: seen.append("load"))
+    monkeypatch.setattr(loader, "load_nemotron_lora", lambda *args: seen.append("load"))
     runner.load_draft_adapter()
     assert seen == ["invalidate", False, "load"]
 
@@ -124,15 +124,15 @@ def isolated_token_paged_state():
     That made the suite order-dependent: this file before
     ``test_nemotron_flashinfer.py`` broke ``test_live_flashinfer_matches_dense``.
     """
-    from fluxserve.backend.layers.attention import flashinfer_token
+    from fluxserve.backend.layers.attention import nemotron_flashinfer
 
-    saved = dict(flashinfer_token._STATES)
-    flashinfer_token._STATES.clear()
+    saved = dict(nemotron_flashinfer._STATES)
+    nemotron_flashinfer._STATES.clear()
     try:
         yield
     finally:
-        flashinfer_token._STATES.clear()
-        flashinfer_token._STATES.update(saved)
+        nemotron_flashinfer._STATES.clear()
+        nemotron_flashinfer._STATES.update(saved)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA and paged attention kernels")

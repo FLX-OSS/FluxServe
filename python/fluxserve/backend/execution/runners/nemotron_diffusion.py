@@ -58,15 +58,44 @@ import torch
 from fluxserve.backend.execution.decoders.nemotron import (
     NemotronThresholdDecoder,
     load_thinking_budget,
+    make_sampling,
+    sample_tokens,
 )
 from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner
 from fluxserve.backend.layers.dp_attention import get_attention_tp_size
 from fluxserve.backend.models.nemotron_diffusion import nemotron_head_dim
-from fluxserve.backend.execution.nemotron_sampling import (
-    NemotronSamplingMixin, sample_tokens,
-)
 
 logger = logging.getLogger(__name__)
+
+
+class NemotronSamplingMixin:
+    supports_request_sampling = True
+
+    def _stop_on_eos_batch(self, batch_size, sampling_params=None):
+        if sampling_params is None or isinstance(sampling_params, dict):
+            sampling_params = [sampling_params] * batch_size
+        return [
+            not params["ignore_eos"] if params and "ignore_eos" in params
+            else self.early_stop
+            for params in sampling_params
+        ]
+
+    def _sampling_batch(self, batch_size, sampling_params=None):
+        if sampling_params is None or isinstance(sampling_params, dict):
+            sampling_params = [sampling_params] * batch_size
+        if len(sampling_params) != batch_size:
+            raise ValueError("sampling_params must contain one entry per request")
+        return [make_sampling(self.runner_config, params) for params in sampling_params]
+
+    def _sampling_for_request(self, request):
+        if not hasattr(self, "_request_sampling"):
+            self._request_sampling = {}
+        rid = str(request.rid)
+        if rid not in self._request_sampling:
+            self._request_sampling[rid] = make_sampling(
+                self.runner_config, getattr(request, "sampling_params", {})
+            )
+        return self._request_sampling[rid]
 
 
 class NemotronBlockBudgetExceeded(RuntimeError):
@@ -370,7 +399,7 @@ class NemotronDiffusionRunner(NemotronSamplingMixin, BlockDiffusionRunner):
         block[0, offset] = budget.end_think_token_id
 
     def _check_context(self, total_length: int) -> None:
-        from fluxserve.backend.model_loader.nemotron import (
+        from fluxserve.backend.models.nemotron_diffusion import (
             check_nemotron_context_limit,
         )
 

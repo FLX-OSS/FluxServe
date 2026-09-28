@@ -25,5 +25,8 @@ from fluxserve.backend.configs.diffusion_gemma import (  # noqa: E402,F401
     DiffusionGemmaConfig,
     DiffusionGemmaTextConfig,
 )
+from fluxserve.backend.configs.nemotron_diffusion import (  # noqa: E402,F401
+    NemotronLabsDiffusionConfig,
+)
 
 __all__ = ["__version__"]

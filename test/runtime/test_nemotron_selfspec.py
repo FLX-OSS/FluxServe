@@ -304,7 +304,7 @@ def test_stats_report_acceptance_and_tokens_per_forward():
 def test_fused_adapter_swaps_o_proj_and_restores_it(tmp_path):
     from safetensors.torch import save_file
 
-    from fluxserve.backend.model_loader.nemotron import load_nemotron_lora
+    from fluxserve.backend.model_loader.loader import load_nemotron_lora
     from test_nemotron_model import initialized_tiny_model, tiny_config
 
     config = tiny_config()
@@ -344,7 +344,7 @@ def test_fused_adapter_swaps_o_proj_and_restores_it(tmp_path):
 
 
 def test_a_missing_adapter_is_a_configuration_not_an_error(tmp_path):
-    from fluxserve.backend.model_loader.nemotron import load_nemotron_lora
+    from fluxserve.backend.model_loader.loader import load_nemotron_lora
     from test_nemotron_model import initialized_tiny_model, tiny_config
 
     assert load_nemotron_lora(
@@ -355,7 +355,7 @@ def test_a_missing_adapter_is_a_configuration_not_an_error(tmp_path):
 def test_an_adapter_targeting_other_modules_is_refused(tmp_path):
     from safetensors.torch import save_file
 
-    from fluxserve.backend.model_loader.nemotron import load_nemotron_lora
+    from fluxserve.backend.model_loader.loader import load_nemotron_lora
     from test_nemotron_model import initialized_tiny_model, tiny_config
 
     path = tmp_path / "adapter_model.safetensors"

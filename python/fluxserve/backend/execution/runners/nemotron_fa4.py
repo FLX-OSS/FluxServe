@@ -55,18 +55,17 @@ import torch
 from fluxserve.backend.execution.decoders.nemotron import (
     NemotronThresholdDecoder,
     load_thinking_budget,
+    sample_tokens,
 )
 from fluxserve.backend.execution.forward_batch_info import ForwardBatch, ForwardMode
 from fluxserve.backend.execution.runners.fa4_diffusion import FA4DiffusionRunner
 from fluxserve.backend.execution.runners.nemotron_diffusion import (
     BlockStats,
     NemotronBlockBudgetExceeded,
+    NemotronSamplingMixin,
 )
 from fluxserve.backend.layers.attention.metadata import PagedAttentionMetadata
 from fluxserve.backend.managers.kvcache import PagedKVCache
-from fluxserve.backend.execution.nemotron_sampling import (
-    NemotronSamplingMixin, sample_tokens,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +220,7 @@ class NemotronFA4DiffusionRunner(NemotronSamplingMixin, FA4DiffusionRunner):
             # keeps working unchanged. The FlashInfer subclass reaches here too,
             # where the base constructor never ran, so the runner is built from
             # the config rather than from whatever the base left behind.
-            from fluxserve.backend.execution.nemotron_cuda_graph_runner import (
+            from fluxserve.backend.execution.fa4_cuda_graph_runner import (
                 NemotronCudaGraphRunner,
             )
 
@@ -579,7 +578,7 @@ class NemotronFA4DiffusionRunner(NemotronSamplingMixin, FA4DiffusionRunner):
 
     @torch.no_grad()
     def generate(self, prompts, prompt_lengths=None, generation_lengths=None, sampling_params=None):
-        from fluxserve.backend.model_loader.nemotron import (
+        from fluxserve.backend.models.nemotron_diffusion import (
             check_nemotron_context_limit,
         )
 
