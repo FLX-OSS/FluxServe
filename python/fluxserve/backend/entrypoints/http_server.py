@@ -137,13 +137,14 @@ def _server_timing_payload(
     return payload
 
 
-def _messages_to_prompt(messages, tokenizer, *, apply_template: bool = False) -> str:
+def _messages_to_prompt(messages, tokenizer, *, apply_template: bool = False,
+                        template_kwargs: dict | None = None) -> str:
     if apply_template:
-        return tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
+        # Request kwargs may override the defaults, but the prompt must stay
+        # text.
+        kwargs = {"add_generation_prompt": True, **(template_kwargs or {}),
+                  "tokenize": False}
+        return tokenizer.apply_chat_template(messages, **kwargs)
     # This default keeps online chat requests byte-for-byte equivalent to
     # bench_offline's LLaDA-compatible prompt format.
     return render_openai_messages(messages)
@@ -314,10 +315,22 @@ def create_app(engine: AsyncLLM):
         messages = body.get("messages")
         if not isinstance(messages, list):
             return JSONResponse({"error": "messages must be a list"}, status_code=400)
+        # e.g. {"enable_thinking": true}; only the chat template reads these.
+        template_kwargs = body.get("chat_template_kwargs") or {}
+        if not isinstance(template_kwargs, dict):
+            return JSONResponse(
+                {"error": "chat_template_kwargs must be an object"}, status_code=400
+            )
+        if "conversation" in template_kwargs or template_kwargs.get("tokenize", False):
+            return JSONResponse(
+                {"error": "chat_template_kwargs may not set conversation or tokenize"},
+                status_code=400,
+            )
         prompt = _messages_to_prompt(
             messages,
             engine.tokenizer,
             apply_template=bool(engine.server_args.apply_template),
+            template_kwargs=template_kwargs,
         )
         stream = bool(body.get("stream", False))
         model = body.get("model", engine.server_args.model_name)
