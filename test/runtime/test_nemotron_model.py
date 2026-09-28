@@ -166,6 +166,19 @@ def test_rope_parameters_read_theta_from_the_nested_dict():
     assert scaling["original_max_position_embeddings"] == 16384
 
 
+def test_yarn_magnitude_scale_matches_the_reference():
+    # mscale == mscale_all_dim, so HF's attention_factor is 1.0. The default
+    # 0.1 * ln(16) + 1 would scale q.k by ~1.63 and sharpen every attention.
+    from fluxserve.backend.layers.rotary_embedding import get_rope
+
+    base, scaling = nemotron_rope_parameters(checkpoint_config())
+    rope = get_rope(
+        128, rotary_dim=128, max_position=262144, base=base,
+        rope_scaling=scaling, dtype=torch.float32,
+    )
+    assert rope.mscale == 1.0
+
+
 def test_decoding_ids_come_from_the_checkpoint_not_llada_defaults():
     ids = nemotron_decoding_ids(checkpoint_config())
     assert ids["mask_id"] == 100
