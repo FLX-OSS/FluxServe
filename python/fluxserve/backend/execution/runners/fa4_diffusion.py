@@ -18,6 +18,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    FA4 block-diffusion runner.
+"""
+
 from __future__ import annotations
 
 import torch

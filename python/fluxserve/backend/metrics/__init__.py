@@ -18,7 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from .performance import (
+from fluxserve.backend.metrics.performance import (
     BatchPerformanceMetrics,
     DecodeBlockMetric,
     count_completion_tokens,

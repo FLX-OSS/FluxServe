@@ -18,6 +18,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Request metadata.
+"""
+
+
 from __future__ import annotations
 
 import asyncio
@@ -25,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from .io_struct import GenerateReqOutput
+from fluxserve.backend.engine.io_struct import GenerateReqOutput
 
 
 @dataclass

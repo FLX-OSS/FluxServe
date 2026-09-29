@@ -18,28 +18,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Paged, batched linear self-speculation.
-
-Offline `PagedKVCache` preallocates ``batch_size x pages_per_sequence`` pages.
-Continuous scheduling reserves each provisional block before its forward.
-Rolling back a rejected speculative tail uses the same rule in both: leave the
-committed prefix length where it was. The verify forward's keys past the
-accepted end stay in slots this request already owns, and the next iteration
-overwrites them.
-
-Batching is what actually makes this different from the dense runner. Rows
-accept different numbers of tokens per iteration, so their committed prefixes
-diverge immediately and a block-synchronous loop would be wrong. Each row
-carries its own state and each iteration issues at most one draft launch and one
-verify launch over the rows ready for each -- the same shape as the paged
-diffusion runner, with DRAFT and VERIFY in place of DENOISE and COMMIT.
-
-The one-task-per-request metadata is what allows it: every row brings its own
-``q_offset``, so a single launch can cover rows whose prefixes have drifted
-apart.
-
-Continuous scheduling reports only accepted tokens; reserved tail pages remain
-owned by the request until they are reused or the request finishes.
+"""
+    Nemotron FA4 self-speculation runner.
 """
 
 from __future__ import annotations

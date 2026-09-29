@@ -18,31 +18,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Paged FlashAttention-4 runner for Nemotron-Labs-Diffusion.
-
-Reuses ``FA4DiffusionRunner``'s paging, slot bookkeeping and metadata, and
-replaces only the block contract. Two things make FA4 a natural fit:
-
-* The kernel takes ``causal`` as a first-class argument next to ``page_table``,
-  and aligns its causal mask bottom-right. A block appended at the end of a
-  request's visible keys therefore gets full prefix visibility plus causality
-  inside the block -- exactly the commit forward's semantics -- with no mask
-  tensor. The same metadata under ``causal=False`` is the denoising forward.
-* Every forward writes its keys and values into the request's own pages before
-  reading them, per layer. A denoising forward's provisional keys therefore
-  live only in slots this request owns, and the commit forward overwrites them
-  before anything can read them back, because the committed prefix length does
-  not advance until the commit completes.
-
-Rows in a batch resolve at different denoising steps, so this runner does not
-run a block synchronously across the batch. Each row carries its own state and
-each iteration issues at most one denoise launch and one commit launch over the
-rows that are ready for each. A resolved row never pays for another denoising
-forward just because a neighbour is still working.
-
-Decode CUDA graphs capture a denoise and a commit variant per batch bucket;
-see ``NemotronCudaGraphRunner``. Configuration is documented in
-``docs/serving/nemotron/nemotron-labs-diffusion.md``.
+"""
+    Nemotron FA4 block-diffusion runner.
 """
 
 from __future__ import annotations

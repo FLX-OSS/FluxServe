@@ -1,10 +1,10 @@
 # Development planning notes
 
 ### Model Support
-- [ ] [Nemotron-Labs-Diffusion](https://huggingface.co/collections/nvidia/nemotron-labs-diffusion)
+- [x] [Nemotron-Labs-Diffusion](https://huggingface.co/collections/nvidia/nemotron-labs-diffusion)
 
 ### Kernel Support
-- [ ] Flash-Attn-4
+- [ ] FA4 for Diffusion-Gemma
 
 ### Quantization Support
 - [ ] FP8

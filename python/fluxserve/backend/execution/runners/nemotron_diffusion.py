@@ -18,34 +18,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Dense block-diffusion runner for Nemotron-Labs-Diffusion.
-
-The LLaDA loop commits a block's KV opportunistically: whichever denoising
-forward happens to see the block's final tokens is the forward whose keys and
-values are kept, under the block-diffusion attention pattern. Nemotron cannot
-reuse that. Its committed prefix has to be produced by a *causal* forward,
-because every layer above the first consumes hidden states that depend on the
-attention pattern, so bidirectional-forward KV is not the KV the model expects
-to read back. That causal forward also produces the next block's seed token.
-
-One block therefore costs ``D + 1`` forwards, where ``D`` counts denoising
-forwards that actually had masked positions to resolve:
-
-======== ============================== ====================================
-State    Input and attention            Cache
-======== ============================== ====================================
-PREFILL  prompt, strictly causal        commit prompt KV; last logit seeds
-DENOISE  block, bidirectional over      ``use_cache=False`` -- the dense path
-         committed prefix plus block    splices out of place, so the
-                                        committed prefix cannot be touched
-COMMIT   block, causal within block     write the block's KV; last logit
-                                        seeds the next block
-======== ============================== ====================================
-
-Transition to COMMIT is decided on the block *after* the decoder update, so a
-resolved block does not pay for an extra no-op denoising forward.
-
-See ``docs/serving/nemotron/nemotron-labs-diffusion.md`` for configuration.
+"""
+    Nemotron block-diffusion runner.
 """
 
 from __future__ import annotations

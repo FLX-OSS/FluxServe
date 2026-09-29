@@ -18,6 +18,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Base executor.
+"""
+
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -25,7 +30,7 @@ from typing import Protocol
 
 import torch
 
-from .request import RequestState
+from fluxserve.backend.engine.request import RequestState
 
 
 @dataclass

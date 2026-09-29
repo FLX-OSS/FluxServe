@@ -18,19 +18,19 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from .base import ModelRunner
-from .block_diffusion import BlockDiffusionRunner
-from .flashinfer_diffusion import FlashInferDiffusionRunner
-from .fa4_diffusion import FA4DiffusionRunner
-from .diffusion_gemma import DiffusionGemmaRunner
-from .nemotron_diffusion import NemotronDiffusionRunner
-from .nemotron_fa4 import NemotronFA4DiffusionRunner
-from .nemotron_flashinfer import (
+from fluxserve.backend.execution.runners.base import ModelRunner
+from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner
+from fluxserve.backend.execution.runners.flashinfer_diffusion import FlashInferDiffusionRunner
+from fluxserve.backend.execution.runners.fa4_diffusion import FA4DiffusionRunner
+from fluxserve.backend.execution.runners.diffusion_gemma import DiffusionGemmaRunner
+from fluxserve.backend.execution.runners.nemotron_diffusion import NemotronDiffusionRunner
+from fluxserve.backend.execution.runners.nemotron_fa4 import NemotronFA4DiffusionRunner
+from fluxserve.backend.execution.runners.nemotron_flashinfer import (
     NemotronFlashInferDiffusionRunner,
     NemotronFlashInferSelfSpecRunner,
 )
-from .nemotron_selfspec import NemotronSelfSpecRunner
-from .nemotron_selfspec_paged import NemotronSelfSpecPagedRunner
+from fluxserve.backend.execution.runners.nemotron_selfspec import NemotronSelfSpecRunner
+from fluxserve.backend.execution.runners.nemotron_selfspec_paged import NemotronSelfSpecPagedRunner
 
 
 def get_nemotron_runner(backend: str, decoding: str):

@@ -18,9 +18,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from .llada2 import LLaDA2LLM
-from .diffusion_gemma import DiffusionGemmaForConditionalGeneration
-from .nemotron_diffusion import NemotronLabsDiffusionLLM
+from fluxserve.backend.models.llada2 import LLaDA2LLM
+from fluxserve.backend.models.diffusion_gemma import DiffusionGemmaForConditionalGeneration
+from fluxserve.backend.models.nemotron_diffusion import NemotronLabsDiffusionLLM
 
 __all__ = [
     "DiffusionGemmaForConditionalGeneration",

@@ -18,26 +18,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Linear self-speculation for Nemotron-Labs-Diffusion (dense path).
-
-One set of weights plays both roles against one KV cache: the diffusion mode
-drafts a block under bidirectional attention, the autoregressive mode verifies
-it under causal attention, and the longest matching prefix plus one bonus token
-is accepted. See
-``docs/serving/nemotron/nemotron-labs-diffusion.md`` for configuration.
-
-Two properties carry over from diffusion mode rather than fighting it. The
-committed KV always comes from the causal verify forward, which is the rule G1
-imposes everywhere in this model. And the emitted tokens are the *verifier's*,
-never the draft's. At temperature zero, accepting `k` tokens is exactly what
-`k` greedy autoregressive steps would have produced. Positive temperatures use
-the checkpoint's categorical draft/verify rule, with request-owned randomness.
-
-What is new is the rollback. The verify forward writes a whole block's keys and
-values, and only the accepted prefix is kept. On this dense path that is a
-prefix length: the cache buffer is preallocated and the next iteration
-overwrites from the accepted end. The paged runner retains reserved pages and
-uses the same logical-prefix rule under continuous scheduling.
+"""
+    Nemotron self-speculation runner.
 """
 
 from __future__ import annotations

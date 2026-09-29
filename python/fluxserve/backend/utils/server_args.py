@@ -22,7 +22,6 @@
     FluxServe server arguments.
 """
 
-
 from dataclasses import dataclass
 from fluxserve.backend.configs.model_config import ModelConfig
 
