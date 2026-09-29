@@ -463,14 +463,25 @@ class YaRNScalingRotaryEmbedding(RotaryEmbedding):
         attn_factor: float = 1,
         beta_fast: int = 32,
         beta_slow: int = 1,
+        mscale: Optional[float] = None,
+        mscale_all_dim: Optional[float] = None,
     ) -> None:
         self.scaling_factor = scaling_factor
         self.extrapolation_factor = extrapolation_factor
         self.attn_factor = attn_factor
         self.beta_fast = beta_fast
         self.beta_slow = beta_slow
-        # Get n-d magnitude scaling corrected for interpolation
-        self.mscale = float(_yarn_get_mscale(self.scaling_factor) * attn_factor)
+        # Get n-d magnitude scaling corrected for interpolation. Match Hugging
+        # Face: when the config gives both mscale and mscale_all_dim, their
+        # ratio replaces the default 0.1 * ln(factor) + 1 (1.0 when they match).
+        if mscale and mscale_all_dim:
+            self.mscale = float(
+                yarn_get_mscale(self.scaling_factor, float(mscale))
+                / yarn_get_mscale(self.scaling_factor, float(mscale_all_dim))
+                * attn_factor
+            )
+        else:
+            self.mscale = float(_yarn_get_mscale(self.scaling_factor) * attn_factor)
         super().__init__(
             head_size, rotary_dim, max_position_embeddings, base, is_neox_style, dtype
         )
@@ -1803,7 +1814,14 @@ def get_rope(
                 k: v
                 for k, v in rope_scaling.items()
                 if k
-                in ("extrapolation_factor", "attn_factor", "beta_fast", "beta_slow")
+                in (
+                    "extrapolation_factor",
+                    "attn_factor",
+                    "beta_fast",
+                    "beta_slow",
+                    "mscale",
+                    "mscale_all_dim",
+                )
             }
             rotary_emb = YaRNScalingRotaryEmbedding(
                 head_size,

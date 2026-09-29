@@ -24,6 +24,7 @@ from .diffusion_gemma import DiffusionGemmaDecoder, DiffusionGemmaSamplingConfig
 from .hierarchy import HierarchyDecoder
 from .joint_threshold import JointThresholdDecoder
 from .levenshtein import LevenshteinJointDecoder
+from .nemotron import NemotronSampling, NemotronThresholdDecoder, ThinkingBudget
 from .static import StaticParallelDecoder
 from .threshold import CreditThresholdParallelDecoder, ThresholdParallelDecoder
 
@@ -34,8 +35,11 @@ __all__ = [
     "HierarchyDecoder",
     "JointThresholdDecoder",
     "LevenshteinJointDecoder",
+    "NemotronSampling",
+    "NemotronThresholdDecoder",
     "ParallelDecoder",
     "StaticParallelDecoder",
+    "ThinkingBudget",
     "ThresholdParallelDecoder",
     "load_decoder",
 ]

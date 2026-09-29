@@ -184,18 +184,45 @@ def get_available_gpu_memory(device: str = "cuda", gpu_id: int = 0, empty_cache:
     return free / (1024**3)
 
 
+def config_head_dim(config) -> int:
+    """Attention head width: what the checkpoint declares, or the division.
+
+    ``hidden_size // num_attention_heads`` only holds when the projections span
+    the hidden size exactly. Checkpoints that size their heads independently
+    declare ``head_dim``, and for those the division is not an approximation but
+    a different number -- 96 against a real 128 on Nemotron-Labs-Diffusion-3B,
+    for instance, which understates a KV page by a quarter and so overstates how
+    many pages fit by a third.
+    """
+    declared = getattr(config, "head_dim", None)
+    if declared:
+        return int(declared)
+    return int(config.hidden_size) // int(config.num_attention_heads)
+
+
+def paged_kv_bytes_per_page(config, page_size: int, tp_size: int = 1,
+                            dtype=torch.bfloat16) -> int:
+    """Bytes one KV page occupies: keys and values, every layer, this rank.
+
+    Separate from the profiling because it is pure arithmetic over a config,
+    which is the part worth testing without a GPU.
+    """
+    layers = int(config.num_hidden_layers)
+    local_heads = max(1, int(config.num_key_value_heads) // max(1, int(tp_size)))
+    element = torch.tensor([], dtype=dtype).element_size()
+    return 2 * layers * local_heads * config_head_dim(config) * int(page_size) * element
+
+
 def profile_paged_kv_pages(*, runner, page_size: int, utilization: float, safety_reserve: float) -> int:
     if not (0.0 <= utilization < 1.0 and 0.0 <= safety_reserve < 1.0):
         raise ValueError("GPU memory utilization and safety reserve must be in [0, 1).")
     if utilization <= safety_reserve:
         raise ValueError("gpu_memory_utilization must exceed gpu_memory_safety_reserve")
     config = runner.model.model.config
-    layers = int(config.num_hidden_layers)
     from fluxserve.backend.layers.dp_attention import get_attention_tp_size
-    local_heads = max(1, int(config.num_key_value_heads) // get_attention_tp_size())
-    head_dim = int(config.hidden_size) // int(config.num_attention_heads)
-    dtype = torch.bfloat16
-    bytes_per_page = 2 * layers * local_heads * head_dim * int(page_size) * torch.tensor([], dtype=dtype).element_size()
+    bytes_per_page = paged_kv_bytes_per_page(
+        config, page_size, get_attention_tp_size()
+    )
     total = int(torch.cuda.get_device_properties(runner.device).total_memory)
     available = int(get_available_gpu_memory(runner.device, runner.gpu_id) * (1024**3))
     budget = available - int(total * (1.0 - utilization)) - int(total * safety_reserve)

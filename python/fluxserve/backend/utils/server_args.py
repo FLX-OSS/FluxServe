@@ -62,6 +62,8 @@ class ServerArgs:
     max_scheduled_tokens: int = 512
     max_model_len: int = 2048
     generation_block_size: int = 1
+    sampling_defaults: dict | None = None
+    speculative_context_margin: int = 0
     stream_interval: int = 1
     enable_prefix_caching: bool = False
     scheduler_policy: str = "default"

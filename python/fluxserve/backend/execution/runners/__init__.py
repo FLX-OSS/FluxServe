@@ -23,6 +23,36 @@ from .block_diffusion import BlockDiffusionRunner
 from .flashinfer_diffusion import FlashInferDiffusionRunner
 from .fa4_diffusion import FA4DiffusionRunner
 from .diffusion_gemma import DiffusionGemmaRunner
+from .nemotron_diffusion import NemotronDiffusionRunner
+from .nemotron_fa4 import NemotronFA4DiffusionRunner
+from .nemotron_flashinfer import (
+    NemotronFlashInferDiffusionRunner,
+    NemotronFlashInferSelfSpecRunner,
+)
+from .nemotron_selfspec import NemotronSelfSpecRunner
+from .nemotron_selfspec_paged import NemotronSelfSpecPagedRunner
+
+
+def get_nemotron_runner(backend: str, decoding: str):
+    runners = {
+        "threshold": {
+            "sdpa": NemotronDiffusionRunner,
+            "fa4": NemotronFA4DiffusionRunner,
+            "flashinfer": NemotronFlashInferDiffusionRunner,
+        },
+        "self_speculation": {
+            "sdpa": NemotronSelfSpecRunner,
+            "fa4": NemotronSelfSpecPagedRunner,
+            "flashinfer": NemotronFlashInferSelfSpecRunner,
+        },
+    }
+    try:
+        return runners[decoding][backend]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unsupported Nemotron backend/decoding: {backend!r}/{decoding!r}"
+        ) from exc
+
 
 __all__ = [
     "BlockDiffusionRunner",
@@ -30,4 +60,11 @@ __all__ = [
     "FA4DiffusionRunner",
     "FlashInferDiffusionRunner",
     "ModelRunner",
+    "NemotronDiffusionRunner",
+    "NemotronFA4DiffusionRunner",
+    "NemotronFlashInferDiffusionRunner",
+    "NemotronFlashInferSelfSpecRunner",
+    "NemotronSelfSpecPagedRunner",
+    "NemotronSelfSpecRunner",
+    "get_nemotron_runner",
 ]
