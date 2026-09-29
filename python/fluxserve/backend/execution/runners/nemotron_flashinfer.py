@@ -18,17 +18,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Nemotron paging on the standard FlashInfer prefill API.
-
-Reuse the tested Nemotron block and speculation loops, including per-request
-prefix/seed ownership. Only backend initialization and attention dispatch differ
-from FA4; LLaDA's block-extend runner is never involved.
-
-Decode CUDA graphs are supported through the same ``NemotronCudaGraphRunner``
-FA4 uses, with a fixed FlashInfer plan and refreshed page buffers per replay.
-Both diffusion and self-speculation use separate causal/non-causal captures.
-Prefill graphs are not supported:
-prefill shapes vary per request, as on FA4.
+"""
+    Nemotron Flashinfer block-diffusion runner.
 """
 
 from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner

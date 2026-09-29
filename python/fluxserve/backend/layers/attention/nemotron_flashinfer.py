@@ -18,11 +18,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Token-causal / bidirectional paged attention using public FlashInfer APIs.
-
-Unlike the LLaDA block-extend adapters, this path has one task per request.
-Queries must be the suffix of the visible KV sequence. Native bottom-right
-causality then needs neither absolute offsets nor a quadratic custom mask.
+"""
+    Nemotron Flashinfer attention.
 """
 
 from __future__ import annotations

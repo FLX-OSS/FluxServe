@@ -18,8 +18,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    FA4 graph runner.
+"""
 
-"""Native FluxServe full-model FA4 decode graphs with mutable paged KV inputs."""
 from __future__ import annotations
 
 import bisect

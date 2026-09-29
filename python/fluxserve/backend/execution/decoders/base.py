@@ -18,6 +18,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Base parallel decoder.
+"""
+
 class ParallelDecoder:
     """
         Decode masked tokens in a block from model logits.

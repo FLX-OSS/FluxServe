@@ -18,32 +18,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Threshold denoising for Nemotron-Labs-Diffusion.
-
-This is deliberately a separate decoder rather than a configuration of
-:class:`ThresholdParallelDecoder`. The two implement the same broad strategy,
-but differ in three places that change which positions get committed, and the
-LLaDA defaults must not move:
-
-======================  =========================  ========================
-Behaviour               LLaDA threshold decoder    Reference / here
-======================  =========================  ========================
-Confidence dtype        float32 softmax            softmax in the logits'
-                                                   own dtype (bfloat16)
-Guaranteed progress     every position within      exactly one position,
-                        1e-5 of the maximum        the highest-confidence
-Mask-token prediction   refused (``rm_mask``)      allowed
-======================  =========================  ========================
-
-The reference helper is ``_get_transfer_index`` in
-``modeling_nemotron_labs_diffusion.py``: it ranks every masked position by
-confidence, always commits the top-ranked one, and commits the rest only where
-confidence reaches the threshold. Because ``topk`` returns a descending run,
-that is the same set as "the argmax, plus everything at or above the
-threshold", which is what this decoder computes without a per-row loop.
-
-Nonzero-temperature diffusion uses the reference's float64 Gumbel transform.
-Self-speculation drafts instead use categorical sampling and scaled confidence.
+"""
+    Nemotron threshold decoder.
 """
 
 from __future__ import annotations
@@ -129,6 +105,34 @@ def sample_tokens(logits, sampling=None):
 
 
 class NemotronThresholdDecoder:
+
+    """Threshold denoising for Nemotron-Labs-Diffusion.
+
+    This is deliberately a separate decoder rather than a configuration of
+    :class:`ThresholdParallelDecoder`. The two implement the same broad strategy,
+    but differ in three places that change which positions get committed, and the
+    LLaDA defaults must not move:
+
+    ======================  =========================  ========================
+    Behaviour               LLaDA threshold decoder    Reference / here
+    ======================  =========================  ========================
+    Confidence dtype        float32 softmax            softmax in the logits'
+                                                    own dtype (bfloat16)
+    Guaranteed progress     every position within      exactly one position,
+                            1e-5 of the maximum        the highest-confidence
+    Mask-token prediction   refused (``rm_mask``)      allowed
+    ======================  =========================  ========================
+
+    The reference helper is ``_get_transfer_index`` in
+    ``modeling_nemotron_labs_diffusion.py``: it ranks every masked position by
+    confidence, always commits the top-ranked one, and commits the rest only where
+    confidence reaches the threshold. Because ``topk`` returns a descending run,
+    that is the same set as "the argmax, plus everything at or above the
+    threshold", which is what this decoder computes without a per-row loop.
+
+    Nonzero-temperature diffusion uses the reference's float64 Gumbel transform.
+    Self-speculation drafts instead use categorical sampling and scaled confidence.
+    """
     """Commit masked positions whose confidence reaches ``threshold``.
 
     ``block`` tensors are ``[batch, block_length]`` token ids and are updated in

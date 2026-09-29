@@ -18,6 +18,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    FA4 attention.
+"""
+
 from __future__ import annotations
 
 from functools import lru_cache

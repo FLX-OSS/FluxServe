@@ -18,38 +18,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""LLaDA2.2 Levenshtein joint decoding (M2T + T2T + DELETE/SPLIT edit ops).
-
-Reference: ``LLaDA2MoeModelLM._joint_decode_block`` in the
-``inclusionAI/LLaDA2.2-flash`` checkpoint's ``modeling_llada2_moe.py``.
-Temperature 0 only. Documented deviations from the reference:
-
-- the ``mask_id`` logit is suppressed before every argmax (same deliberate
-  deviation as the 2.1 joint decoder; the reference does not enforce
-  no-remask on writes);
-- the anti-loop escape picks the *lowest-confidence* changed position instead
-  of a random one, so it is deterministic and rank-consistent (the reference
-  uses ``torch.randint``; at temperature 0 the replacement token itself is
-  the same greedy argmax in both);
-- a row that hits ``max_steps_per_block`` is force-resolved like a final
-  round instead of terminating with residual masks (the reference warns and
-  returns masks, which a serving engine cannot stream);
-- literal DELETE/SPLIT tokens inside the protected prompt prefix are kept
-  unchanged, while the reference warns and consumes them.
-
-The block stays fixed-length throughout (DELETE shifts left and pads masks;
-SPLIT expands in place and truncates), so the runner-visible sequence length,
-KV pages, and scheduling are untouched.
-
-The whole per-iteration tail is one fixed-shape tensor program
-(:func:`levenshtein_graph_step`) with no data-dependent control flow, no
-host synchronisation, and no collectives. Both entry points use it: eager
-``batch_decode`` and, via :meth:`LevenshteinJointDecoder.graph_step`, the
-decode CUDA graph, which captures it together with the model forward and the
-lm_head. Rank consistency comes from broadcasting the step's *outputs*
-(tokens plus every row-state field) before they are committed, which is
-strictly stronger than broadcasting intermediate decisions: whatever the
-ranks computed locally, the committed state is the source rank's.
+"""
+    Levenshtein joint-threshold decoder (LLaDA2.2).
 """
 
 import hashlib

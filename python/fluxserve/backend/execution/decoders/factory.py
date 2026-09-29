@@ -18,6 +18,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Decoder factory.
+"""
+
 from fluxserve.backend.execution.forward_batch_info import RunnerConfig
 from fluxserve.backend.utils.server_args import ServerArgs
 

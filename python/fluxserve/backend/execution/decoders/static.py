@@ -18,6 +18,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+    Static decoder.
+"""
+
+
 from fluxserve.backend.execution.decoders.base import ParallelDecoder
 from fluxserve.backend.execution.decoders.utils import broadcast_if_needed, get_num_transfer_tokens, get_transfer_index
 

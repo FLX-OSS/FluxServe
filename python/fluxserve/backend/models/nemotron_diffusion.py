@@ -18,16 +18,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Nemotron-Labs-Diffusion dense decoder.
-
-``nvidia/Nemotron-Labs-Diffusion-14B`` is a dense Ministral-shaped decoder used
-as a tri-mode language model: the same weights serve autoregressive, block
-diffusion and self-speculative decoding, selected purely by the attention
-pattern a forward runs under. This module owns only the architecture; causality
-belongs to the caller, which supplies either a dense ``attention_mask`` or paged
-attention metadata.
-
-See ``docs/serving/nemotron/nemotron-labs-diffusion.md``.
+"""
+    Nemotron-Labs-Diffusion model implementation.
 """
 
 from __future__ import annotations
