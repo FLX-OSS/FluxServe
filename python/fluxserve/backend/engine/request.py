@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from .io_struct import GenerateReqOutput
+from fluxserve.backend.engine.io_struct import GenerateReqOutput
 
 
 @dataclass

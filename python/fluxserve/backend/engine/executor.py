@@ -25,7 +25,7 @@ from typing import Protocol
 
 import torch
 
-from .request import RequestState
+from fluxserve.backend.engine.request import RequestState
 
 
 @dataclass

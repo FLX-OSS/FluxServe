@@ -42,9 +42,9 @@ from fluxserve.backend.utils.runtime_utils import (
     is_hip,
 )
 
-from .fused_moe_triton_config import get_config_dtype_str, try_get_optimal_moe_config
-from .fused_moe_triton_kernels import invoke_fused_moe_kernel, moe_sum_reduce_triton
-from .moe_align_block_size import moe_align_block_size
+from fluxserve.backend.layers.moe.fused_moe_triton.fused_moe_triton_config import get_config_dtype_str, try_get_optimal_moe_config
+from fluxserve.backend.layers.moe.fused_moe_triton.fused_moe_triton_kernels import invoke_fused_moe_kernel, moe_sum_reduce_triton
+from fluxserve.backend.layers.moe.fused_moe_triton.moe_align_block_size import moe_align_block_size
 
 if TYPE_CHECKING:
     from fluxserve.backend.layers.moe.topk import StandardTopKOutput

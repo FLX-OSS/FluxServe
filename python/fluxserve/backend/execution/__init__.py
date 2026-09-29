@@ -24,7 +24,7 @@ Import concrete runners from ``fluxserve.backend.execution.runners`` and
 decoders from ``fluxserve.backend.execution.decoders``.
 """
 
-from .forward_batch_info import (
+from fluxserve.backend.execution.forward_batch_info import (
     CaptureHiddenMode,
     ForwardBatch,
     ForwardMode,

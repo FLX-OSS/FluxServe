@@ -18,15 +18,15 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from .base import ParallelDecoder
-from .factory import load_decoder
-from .diffusion_gemma import DiffusionGemmaDecoder, DiffusionGemmaSamplingConfig
-from .hierarchy import HierarchyDecoder
-from .joint_threshold import JointThresholdDecoder
-from .levenshtein import LevenshteinJointDecoder
-from .nemotron import NemotronSampling, NemotronThresholdDecoder, ThinkingBudget
-from .static import StaticParallelDecoder
-from .threshold import CreditThresholdParallelDecoder, ThresholdParallelDecoder
+from fluxserve.backend.execution.decoders.base import ParallelDecoder
+from fluxserve.backend.execution.decoders.factory import load_decoder
+from fluxserve.backend.execution.decoders.diffusion_gemma import DiffusionGemmaDecoder, DiffusionGemmaSamplingConfig
+from fluxserve.backend.execution.decoders.hierarchy import HierarchyDecoder
+from fluxserve.backend.execution.decoders.joint_threshold import JointThresholdDecoder
+from fluxserve.backend.execution.decoders.levenshtein import LevenshteinJointDecoder
+from fluxserve.backend.execution.decoders.nemotron import NemotronSampling, NemotronThresholdDecoder, ThinkingBudget
+from fluxserve.backend.execution.decoders.static import StaticParallelDecoder
+from fluxserve.backend.execution.decoders.threshold import CreditThresholdParallelDecoder, ThresholdParallelDecoder
 
 __all__ = [
     "CreditThresholdParallelDecoder",

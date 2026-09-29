@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from .request import RequestState
+from fluxserve.backend.engine.request import RequestState
 
 
 @dataclass

@@ -19,7 +19,7 @@
 # SOFTWARE.
 
 
-from .async_llm import AsyncLLM
-from .io_struct import GenerateReqInput, GenerateReqOutput
+from fluxserve.backend.engine.async_llm import AsyncLLM
+from fluxserve.backend.engine.io_struct import GenerateReqInput, GenerateReqOutput
 
 __all__ = ["AsyncLLM", "GenerateReqInput", "GenerateReqOutput"]

@@ -21,11 +21,11 @@
 from fluxserve.backend.execution.forward_batch_info import RunnerConfig
 from fluxserve.backend.utils.server_args import ServerArgs
 
-from .hierarchy import HierarchyDecoder
-from .joint_threshold import JointThresholdDecoder
-from .levenshtein import LevenshteinJointDecoder
-from .threshold import CreditThresholdParallelDecoder, ThresholdParallelDecoder
-from .utils import normalize_eos_ids
+from fluxserve.backend.execution.decoders.hierarchy import HierarchyDecoder
+from fluxserve.backend.execution.decoders.joint_threshold import JointThresholdDecoder
+from fluxserve.backend.execution.decoders.levenshtein import LevenshteinJointDecoder
+from fluxserve.backend.execution.decoders.threshold import CreditThresholdParallelDecoder, ThresholdParallelDecoder
+from fluxserve.backend.execution.decoders.utils import normalize_eos_ids
 
 KNOWN_DECODERS = (
     "threshold",
