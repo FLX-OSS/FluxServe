@@ -22,3 +22,5 @@ fluxserve launch \
 
 ### Configuration Notes
 
+- Diffusion-Gemma currently only supports Flashinfer backend.
+
