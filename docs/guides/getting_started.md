@@ -9,7 +9,7 @@
 ### Steps
 Run Docker Environment 
 ```bash
-docker pull flxoss/fluxserve:v0.1-cu130-fa4
+docker pull flxoss/fluxserve:v0.1-cu130-fa4-nemotron
 
 docker run -itd \
   --shm-size 32g \
@@ -19,7 +19,7 @@ docker run -itd \
   --pid=host \
   --privileged \
   --name flux_workspace \
-  fluxserve:v0.1-cu130-fa4 \
+  flxoss/fluxserve:v0.1-cu130-fa4-nemotron \
   /bin/bash
 ```
 
