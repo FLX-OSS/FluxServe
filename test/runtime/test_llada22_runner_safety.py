@@ -5,7 +5,7 @@ import torch
 
 from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner
 from fluxserve.backend.execution.runners.utils import generated_eos_hit
-from fluxserve.backend.execution.decoders.levenshtein import LevenshteinJointDecoder
+from fluxserve.backend.execution.decoders.llada.levenshtein import LevenshteinJointDecoder
 
 
 @pytest.mark.parametrize('eos', [13, 16])

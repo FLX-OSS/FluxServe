@@ -24,8 +24,8 @@ tokens, [156892, 156900], in its generation_config.json)."""
 import json
 import unittest
 
-from fluxserve.backend.execution.decoders.factory import load_decoder
-from fluxserve.backend.execution.decoders.utils import (
+from fluxserve.backend.execution.decoders import load_decoder
+from fluxserve.backend.execution.decoders.common import (
     normalize_eos_ids,
     resolve_checkpoint_eos_ids,
 )

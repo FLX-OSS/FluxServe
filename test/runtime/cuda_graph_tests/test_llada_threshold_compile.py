@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from fluxserve.backend.execution.decoders.threshold import ThresholdParallelDecoder
+from fluxserve.backend.execution.decoders.llada.threshold import ThresholdParallelDecoder
 from threshold_tail_probe import threshold_tail
 
 

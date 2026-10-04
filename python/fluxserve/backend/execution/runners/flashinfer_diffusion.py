@@ -28,7 +28,7 @@ import time
 
 import torch
 
-from fluxserve.backend.execution.decoders.utils import broadcast_if_needed
+from fluxserve.backend.execution.decoders.common import broadcast_if_needed
 from fluxserve.backend.execution.forward_batch_info import ForwardBatch, ForwardMode
 from fluxserve.backend.engine.request import RequestState
 from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner

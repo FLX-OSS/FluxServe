@@ -27,7 +27,7 @@ from fluxserve.backend.execution.decoders import (
     JointThresholdDecoder,
     load_decoder,
 )
-from fluxserve.backend.execution.decoders.joint_threshold import (
+from fluxserve.backend.execution.decoders.llada.joint_threshold import (
     joint_threshold_graph_step,
     joint_threshold_update,
 )

@@ -7,7 +7,7 @@ rounding and mask-token rules.
 
 import torch
 
-from fluxserve.backend.execution.decoders.threshold import (
+from fluxserve.backend.execution.decoders.llada.threshold import (
     get_transfer_index_threshold,
 )
 

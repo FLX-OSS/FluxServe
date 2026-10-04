@@ -31,7 +31,7 @@ import torch
 import tqdm
 from transformers import AutoConfig, AutoTokenizer
 
-from fluxserve.backend.execution.decoders.utils import resolve_checkpoint_eos_ids
+from fluxserve.backend.execution.decoders.common import resolve_checkpoint_eos_ids
 from fluxserve.backend.distributed.launch import (
     destroy_distributed,
     initialize_distributed,

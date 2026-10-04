@@ -58,7 +58,7 @@ from fluxserve.backend.engine.distributed_executor import DistributedGenerationE
 from fluxserve.backend.engine.executor import BlockDiffusionExecutor
 from fluxserve.backend.engine.scheduler_adapter import PagedSchedulerAdapter
 from fluxserve.backend.entrypoints.http_server import run
-from fluxserve.backend.execution.decoders.utils import resolve_checkpoint_eos_ids
+from fluxserve.backend.execution.decoders.common import resolve_checkpoint_eos_ids
 from fluxserve.backend.execution.forward_batch_info import RunnerConfig
 from fluxserve.backend.execution.runners import (
     BlockDiffusionRunner,
