@@ -198,3 +198,71 @@ def test_metadata_rejects_invalid_visible_prefix_page():
             page_table=torch.tensor([[-1, 1]]), max_input_len=16,
             block_length=16, page_size=16,
         )
+
+
+@pytest.mark.parametrize("phase,causal", [
+    ("prefill", False), ("prefill", True),
+    ("decode", False), ("decode", True),
+])
+def test_sm120_dense_fa4_adapter_matches_paged_reference(phase, causal):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 12:
+        pytest.skip("requires an SM120 GPU")
+
+    torch.manual_seed(7)
+    device = "cuda"
+    page_size = 16
+    q_lens = torch.tensor([32, 16] if phase == "prefill" else [16, 16])
+    q_offsets = torch.tensor([0, 16] if phase == "prefill" else [32, 48])
+    page_table = torch.tensor([[5, 2, 7, 1], [4, 0, 3, 6]], device=device)
+    metadata = build_block_diffusion_paged_metadata(
+        phase=phase, q_offsets=q_offsets, q_lens=q_lens,
+        page_table=page_table, max_input_len=int(q_lens.max()),
+        block_length=16, page_size=page_size, causal=causal,
+    )
+    config = AttentionForwardConfig(
+        layer_id=0, num_heads=4, num_kv_heads=2, head_dim=64,
+        num_key_value_groups=2, scale=64**-0.5,
+    )
+    q = torch.randn(
+        2, 4, metadata.max_input_len, 64, device=device, dtype=torch.bfloat16
+    )
+    k = torch.randn(
+        2, 2, metadata.max_input_len, 64, device=device, dtype=torch.bfloat16
+    )
+    v = torch.randn_like(k)
+    cache = tuple(
+        torch.randn(8, page_size, 2, 64, device=device, dtype=torch.bfloat16)
+        for _ in range(2)
+    )
+    actual = FA4PagedAttention(config).forward(q, k, v, cache, metadata)
+    torch.cuda.synchronize()
+
+    packed_q = q.transpose(1, 2).contiguous().view(-1, 4, 64).index_select(
+        0, metadata.q_token_indices
+    )
+    expected_packed = []
+    for task in range(metadata.num_tasks):
+        q_start = int(metadata.qo_indptr[task])
+        q_end = int(metadata.qo_indptr[task + 1])
+        kv_len = int(metadata.kv_lens[task])
+        pages = metadata.page_table[task, : (kv_len + page_size - 1) // page_size]
+        keys = cache[0].index_select(0, pages.long()).reshape(-1, 2, 64)[:kv_len]
+        values = cache[1].index_select(0, pages.long()).reshape(-1, 2, 64)[:kv_len]
+        queries = packed_q[q_start:q_end].float().transpose(0, 1)
+        keys = keys.float().repeat_interleave(2, dim=1).transpose(0, 1)
+        values = values.float().repeat_interleave(2, dim=1).transpose(0, 1)
+        scores = queries @ keys.transpose(-1, -2) * config.scale
+        if causal:
+            q_pos = (
+                torch.arange(q_end - q_start, device=device)
+                + kv_len - (q_end - q_start)
+            )
+            k_pos = torch.arange(kv_len, device=device)
+            scores.masked_fill_(k_pos[None, None, :] > q_pos[None, :, None], -torch.inf)
+        expected_packed.append((scores.softmax(-1) @ values).transpose(0, 1))
+    expected = q.new_zeros(2 * metadata.max_input_len, 4, 64)
+    expected.index_copy_(
+        0, metadata.q_token_indices, torch.cat(expected_packed).to(q.dtype)
+    )
+    expected = expected.view(2, metadata.max_input_len, 4, 64).transpose(1, 2)
+    torch.testing.assert_close(actual, expected, atol=3e-2, rtol=3e-2)
