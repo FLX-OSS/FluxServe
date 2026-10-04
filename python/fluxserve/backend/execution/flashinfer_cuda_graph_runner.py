@@ -19,7 +19,7 @@
 # SOFTWARE.
 
 """
-    Flashinfer graph runner.
+    Flashinfer CUDA graph runner.
 """
 
 from __future__ import annotations

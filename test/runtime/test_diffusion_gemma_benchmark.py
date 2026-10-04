@@ -2,8 +2,11 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-
+from fluxserve.backend.execution.runners.diffusion_gemma.flashinfer import (
+    DiffusionGemmaFlashInferRunner,
+)
 from fluxserve.backend.metrics import count_completion_tokens
+from fluxserve.cli.app import build_parser
 from fluxserve.cli.bench_offline import (
     bucket_length,
     calc_padded_gen_lens,
@@ -13,9 +16,7 @@ from fluxserve.cli.bench_offline import (
     normalize_diffusion_gemma_args,
     warmup_runner,
 )
-from fluxserve.cli.app import build_parser
 from fluxserve.cli.launch import normalize_diffusion_gemma_serve_args
-from fluxserve.backend.execution.runners.diffusion_gemma import DiffusionGemmaRunner
 
 
 def test_generation_bucket_rounds_up_without_shortening_request():
@@ -209,7 +210,7 @@ def test_diffusion_gemma_online_graph_startup_preallocates_stable_cache(monkeypa
     )
     monkeypatch.setattr(torch.cuda, "synchronize", lambda *_: None)
 
-    stats = DiffusionGemmaRunner.prepare_online_cuda_graphs(runner)
+    stats = DiffusionGemmaFlashInferRunner.prepare_online_cuda_graphs(runner)
 
     assert calls == [(2048, 6)]
     assert runner.supported_batch_sizes == [1, 2, 4, 6]

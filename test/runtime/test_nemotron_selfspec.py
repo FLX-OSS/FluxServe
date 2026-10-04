@@ -16,7 +16,7 @@ from fluxserve.backend.execution.decoders.nemotron import (
     load_thinking_budget,
 )
 
-from fluxserve.backend.execution.runners.nemotron_selfspec import (
+from fluxserve.backend.execution.runners.nemotron.block_diffusion import (
     NemotronSelfSpecRunner,
     SelfSpecStats,
 )

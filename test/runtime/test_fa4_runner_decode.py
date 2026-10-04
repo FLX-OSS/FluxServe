@@ -7,7 +7,7 @@ import torch
 from fluxserve.backend.execution.decoders.llada.hierarchy import HierarchyDecoder
 from fluxserve.backend.execution.decoders.llada.threshold import ThresholdParallelDecoder
 from fluxserve.backend.execution.decoders.llada.joint_threshold import JointThresholdDecoder
-from fluxserve.backend.execution.runners.fa4_diffusion import FA4DiffusionRunner
+from fluxserve.backend.execution.runners.llada.fa4 import FA4DiffusionRunner
 from fluxserve.backend.managers.kvcache.dense import TokenArray
 
 
@@ -100,7 +100,7 @@ def test_decode_graph_parallel_topology(
     tp_size, ep_size, dp_size, pp_size, backend, error, monkeypatch
 ):
     from contextlib import nullcontext
-    import fluxserve.backend.execution.runners.fa4_diffusion as module
+    import fluxserve.backend.execution.runners.llada.fa4 as module
     from fluxserve.backend.distributed.launch import validate_local_launch_config
     from fluxserve.backend.layers.moe.utils import MoeA2ABackend
 
@@ -135,7 +135,7 @@ def test_decode_graph_parallel_topology(
 
 @pytest.mark.parametrize("with_state", [False, True])
 def test_fused_decode_synchronizes_tokens_and_progress_before_advancing(monkeypatch, with_state):
-    import fluxserve.backend.execution.runners.fa4_diffusion as module
+    import fluxserve.backend.execution.runners.llada.fa4 as module
 
     group = object()
     monkeypatch.setattr(module, "get_tp_group", lambda: SimpleNamespace(
@@ -209,7 +209,7 @@ def test_levenshtein_final_kv_row_state_and_per_request_limits(fused, eos, monke
     device graph capture is deliberately not claimed by this regression.
     """
     from fluxserve.backend.execution.decoders.llada.levenshtein import LevenshteinJointDecoder
-    import fluxserve.backend.execution.runners.fa4_diffusion as module
+    import fluxserve.backend.execution.runners.llada.fa4 as module
 
     monkeypatch.setattr(module, "get_tp_group", lambda: SimpleNamespace(world_size=1))
     runner = object.__new__(FA4DiffusionRunner)

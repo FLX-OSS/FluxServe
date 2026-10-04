@@ -300,7 +300,7 @@ def decode_graph_config(**overrides):
 
 
 def validate(config, **server):
-    from fluxserve.backend.execution.runners.nemotron_flashinfer import (
+    from fluxserve.backend.execution.runners.nemotron.flashinfer import (
         NemotronFlashInferDiffusionRunner,
     )
 

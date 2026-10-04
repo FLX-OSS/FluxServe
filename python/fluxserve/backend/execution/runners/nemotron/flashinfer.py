@@ -22,9 +22,9 @@
     Nemotron Flashinfer block-diffusion runner.
 """
 
-from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner
-from fluxserve.backend.execution.runners.nemotron_fa4 import NemotronFA4DiffusionRunner
-from fluxserve.backend.execution.runners.nemotron_selfspec_paged import (
+from fluxserve.backend.execution.runners.base import BlockDiffusionRunner
+from fluxserve.backend.execution.runners.nemotron.fa4 import (
+    NemotronFA4DiffusionRunner,
     NemotronSelfSpecPagedRunner,
 )
 from fluxserve.backend.layers.attention.nemotron_flashinfer import (
@@ -53,7 +53,7 @@ class NemotronFlashInferDiffusionRunner(NemotronFA4DiffusionRunner):
             self._validate_decode_graph_config(config, kwargs, args)
         self._validate_architecture(model_config)
         require_flashinfer_token_paged()
-        BlockDiffusionRunner.__init__(self, *args, _allow_flashinfer=True, **kwargs)
+        BlockDiffusionRunner.__init__(self, *args, **kwargs)
         self._paged_request_slots = {}
         # NemotronFA4DiffusionRunner.__init__ builds the graph runner from the
         # config after this returns; nothing to inherit from the FA4 base, whose

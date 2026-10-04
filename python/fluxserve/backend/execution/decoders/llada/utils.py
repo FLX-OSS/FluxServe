@@ -18,7 +18,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""LLaDA-specific token selection helpers."""
+"""
+    LLaDA-specific token selection helpers.
+"""
 
 import math
 import numpy as np

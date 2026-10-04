@@ -1,16 +1,17 @@
 from types import MethodType, SimpleNamespace
 
+import pytest
 import torch
-
-from fluxserve.backend.execution.runners.flashinfer_diffusion import (
+from fluxserve.backend.engine.request import RequestState
+from fluxserve.backend.execution.forward_batch_info import ForwardBatch
+from fluxserve.backend.execution.runners.llada.flashinfer import (
     FlashInferDiffusionRunner,
 )
-from fluxserve.backend.engine.request import RequestState
+from fluxserve.backend.layers.attention.flashinfer import (
+    FlashInferPagedPrefillAttention,
+)
 from fluxserve.backend.layers.attention.utils import FlashInferPagedBlockExtendState
-from fluxserve.backend.layers.attention.flashinfer import FlashInferPagedPrefillAttention
-from fluxserve.backend.execution.forward_batch_info import ForwardBatch
 from fluxserve.backend.managers.kvcache import PagedKVCache
-import pytest
 
 
 def test_flashinfer_unaligned_prompt_prefills_aligned_prefix_and_replays_partial_block():
@@ -194,8 +195,12 @@ def test_token_array_preserves_prompt_eos_and_batch_shape():
 @pytest.mark.parametrize("lengths", [[5, 3], [0, 3]])
 def test_offline_generation_limits_rows_and_preserves_prompt(kind, lengths):
     """Exercise real decode loops: cap both forwards and published tokens."""
-    from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner
-    from fluxserve.backend.execution.decoders.llada.joint_threshold import JointThresholdDecoder
+    from fluxserve.backend.execution.decoders.llada.joint_threshold import (
+        JointThresholdDecoder,
+    )
+    from fluxserve.backend.execution.runners.llada.block_diffusion import (
+        BlockDiffusionRunner,
+    )
     from fluxserve.backend.metrics.performance import count_completion_tokens
 
     cls = BlockDiffusionRunner if kind == "dense" else FlashInferDiffusionRunner

@@ -10,7 +10,7 @@ from fluxserve.backend.models.nemotron_diffusion import (
     check_nemotron_context_limit,
 )
 from fluxserve.cli.bench_offline import normalize_nemotron_args
-from fluxserve.backend.execution.runners.nemotron_fa4 import build_nemotron_paged_metadata
+from fluxserve.backend.execution.runners.nemotron.fa4 import build_nemotron_paged_metadata
 from fluxserve.backend.models.nemotron_diffusion import nemotron_query_scale
 from test_nemotron_model import checkpoint_config, native_silu_on_cpu, serve_args  # noqa: F401
 

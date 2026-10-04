@@ -2,10 +2,13 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-
-from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner
-from fluxserve.backend.execution.runners.utils import generated_eos_hit
-from fluxserve.backend.execution.decoders.llada.levenshtein import LevenshteinJointDecoder
+from fluxserve.backend.execution.decoders.llada.levenshtein import (
+    LevenshteinJointDecoder,
+)
+from fluxserve.backend.execution.runners.llada.block_diffusion import (
+    BlockDiffusionRunner,
+)
+from fluxserve.backend.execution.runners.llada.utils import generated_eos_hit
 
 
 @pytest.mark.parametrize('eos', [13, 16])
@@ -49,7 +52,9 @@ def test_runner_owns_global_row_state_and_levenshtein_iteration_cap():
 @pytest.mark.parametrize('eos', [13, 16])
 def test_runner_commits_final_input_and_ignores_prompt_eos(runner_kind, eos):
     """Exercise real runner iterations with a scripted model and KV sink."""
-    from fluxserve.backend.execution.runners.flashinfer_diffusion import FlashInferDiffusionRunner
+    from fluxserve.backend.execution.runners.llada.flashinfer import (
+        FlashInferDiffusionRunner,
+    )
 
     class Tokens:
         def __init__(self, data):
@@ -127,9 +132,11 @@ def test_runner_commits_final_input_and_ignores_prompt_eos(runner_kind, eos):
 @pytest.mark.parametrize('backend', ['flashinfer', 'fa4'])
 def test_online_publishes_only_stable_block(eos, ignore_eos, transient, backend):
     from fluxserve.backend.engine.request import RequestState
-    from fluxserve.backend.execution.runners.flashinfer_diffusion import FlashInferDiffusionRunner
-    from fluxserve.backend.execution.runners.fa4_diffusion import FA4DiffusionRunner
-    from fluxserve.backend.execution.runners.utils import gather_blocks
+    from fluxserve.backend.execution.runners.llada.fa4 import FA4DiffusionRunner
+    from fluxserve.backend.execution.runners.llada.flashinfer import (
+        FlashInferDiffusionRunner,
+    )
+    from fluxserve.backend.execution.runners.llada.utils import gather_blocks
 
     cls = FlashInferDiffusionRunner if backend == 'flashinfer' else FA4DiffusionRunner
     runner = cls.__new__(cls)

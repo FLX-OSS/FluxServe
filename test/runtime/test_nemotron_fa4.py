@@ -11,17 +11,15 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-
 from fluxserve.backend.execution.decoders.nemotron import (
     load_thinking_budget,
 )
-
 from fluxserve.backend.execution.forward_batch_info import ForwardBatch
-from fluxserve.backend.execution.runners.fa4_diffusion import FA4DiffusionRunner
-from fluxserve.backend.execution.runners.nemotron_diffusion import (
+from fluxserve.backend.execution.runners.llada.fa4 import FA4DiffusionRunner
+from fluxserve.backend.execution.runners.nemotron.block_diffusion import (
     NemotronBlockBudgetExceeded,
 )
-from fluxserve.backend.execution.runners.nemotron_fa4 import (
+from fluxserve.backend.execution.runners.nemotron.fa4 import (
     COMMIT,
     DENOISE,
     DONE,
@@ -142,8 +140,8 @@ def allocator_config(**overrides):
 def test_kv_cache_follows_the_config_head_dim_with_the_division_as_fallback(
     monkeypatch,
 ):
-    from fluxserve.backend.execution.runners import block_diffusion
-    from fluxserve.backend.execution.runners.block_diffusion import (
+    from fluxserve.backend.execution.runners.llada import block_diffusion
+    from fluxserve.backend.execution.runners.llada.block_diffusion import (
         BlockDiffusionRunner,
     )
 
@@ -191,7 +189,7 @@ _paged_runner_cls = NemotronFA4DiffusionRunner
 
 @pytest.fixture(autouse=True, params=["fa4", "flashinfer"])
 def paged_backend(request, monkeypatch):
-    from fluxserve.backend.execution.runners.nemotron_flashinfer import (
+    from fluxserve.backend.execution.runners.nemotron.flashinfer import (
         NemotronFlashInferDiffusionRunner,
     )
     monkeypatch.setattr(
@@ -414,7 +412,7 @@ def test_llada_builder_rejects_the_offsets_nemotron_actually_uses():
 
 
 def test_unaligned_causal_prefill_maps_one_task_across_pages():
-    from fluxserve.backend.execution.runners.nemotron_fa4 import (
+    from fluxserve.backend.execution.runners.nemotron.fa4 import (
         build_nemotron_paged_metadata,
     )
 
@@ -439,7 +437,7 @@ def test_unaligned_causal_prefill_maps_one_task_across_pages():
 
 
 def test_block_at_an_unaligned_offset_spans_two_pages():
-    from fluxserve.backend.execution.runners.nemotron_fa4 import (
+    from fluxserve.backend.execution.runners.nemotron.fa4 import (
         build_nemotron_paged_metadata,
     )
 
@@ -461,7 +459,7 @@ def test_block_at_an_unaligned_offset_spans_two_pages():
 
 
 def test_mixed_length_prefill_packs_each_request_once():
-    from fluxserve.backend.execution.runners.nemotron_fa4 import (
+    from fluxserve.backend.execution.runners.nemotron.fa4 import (
         build_nemotron_paged_metadata,
     )
 
@@ -486,7 +484,7 @@ def test_mixed_length_prefill_packs_each_request_once():
 
 
 def test_metadata_rejects_a_page_table_that_cannot_cover_the_request():
-    from fluxserve.backend.execution.runners.nemotron_fa4 import (
+    from fluxserve.backend.execution.runners.nemotron.fa4 import (
         build_nemotron_paged_metadata,
     )
 

@@ -17,7 +17,7 @@ from fluxserve.backend.execution.decoders.nemotron import (
     NemotronThresholdDecoder,
     load_nemotron_decoder,
 )
-from fluxserve.backend.execution.runners.nemotron_diffusion import (
+from fluxserve.backend.execution.runners.nemotron.block_diffusion import (
     NemotronBlockBudgetExceeded,
     NemotronDiffusionRunner,
 )

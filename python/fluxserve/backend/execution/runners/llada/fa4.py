@@ -19,7 +19,7 @@
 # SOFTWARE.
 
 """
-    FA4 block-diffusion runner.
+    LLaDA FA4 block-diffusion runner.
 """
 
 from __future__ import annotations
@@ -28,11 +28,12 @@ import torch
 import torch.distributed as dist
 
 from fluxserve.backend.distributed import get_tp_group
-
 from fluxserve.backend.engine.request import RequestState
 from fluxserve.backend.execution.forward_batch_info import ForwardBatch, ForwardMode
-from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner
-from fluxserve.backend.execution.runners.utils import (
+from fluxserve.backend.execution.runners.llada.block_diffusion import (
+    BlockDiffusionRunner,
+)
+from fluxserve.backend.execution.runners.llada.utils import (
     gather_blocks,
     generated_eos_hit,
     select_batch_sequences_by_mask_number,
@@ -106,7 +107,9 @@ class FA4DiffusionRunner(BlockDiffusionRunner):
         self._paged_request_slots: dict[str, int] = {}
         self.fa4_graph_runner = None
         if runner_config.enable_decode_cuda_graph:
-            from fluxserve.backend.execution.fa4_cuda_graph_runner import FA4CudaGraphRunner
+            from fluxserve.backend.execution.fa4_cuda_graph_runner import (
+                FA4CudaGraphRunner,
+            )
             self.fa4_graph_runner = FA4CudaGraphRunner(
                 runner_config.cuda_graph_capture_batch_sizes or runner_config.supported_batch_sizes
             )

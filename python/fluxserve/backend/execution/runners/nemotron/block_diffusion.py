@@ -35,7 +35,7 @@ from fluxserve.backend.execution.decoders.nemotron import (
     make_sampling,
     sample_tokens,
 )
-from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner
+from fluxserve.backend.execution.runners.base import BlockDiffusionRunner
 from fluxserve.backend.layers.dp_attention import get_attention_tp_size
 from fluxserve.backend.models.nemotron_diffusion import nemotron_head_dim
 
@@ -441,8 +441,291 @@ class NemotronDiffusionRunner(NemotronSamplingMixin, BlockDiffusionRunner):
         return torch.cat(rows, dim=0)
 
 
+@dataclass
+class SelfSpecStats:
+    """Per-request accounting.
+
+    Acceptance length is the number that decides whether self-speculation is
+    worth anything: at one accepted token per iteration it is strictly worse
+    than autoregressive decoding, because it pays for a draft forward too.
+    """
+
+    prefill_calls: int = 0
+    draft_calls: int = 0
+    verify_calls: int = 0
+    iterations: int = 0
+    accepted_per_iteration: list[int] = field(default_factory=list)
+    draft_calls_per_iteration: list[int] = field(default_factory=list)
+    returned_tokens: int = 0
+
+    @property
+    def total_calls(self) -> int:
+        return self.prefill_calls + self.draft_calls + self.verify_calls
+
+    @property
+    def mean_acceptance(self) -> float:
+        if not self.accepted_per_iteration:
+            return 0.0
+        return sum(self.accepted_per_iteration) / len(self.accepted_per_iteration)
+
+    def as_dict(self) -> dict:
+        return {
+            "prefill_calls": self.prefill_calls,
+            "draft_calls": self.draft_calls,
+            "verify_calls": self.verify_calls,
+            "total_calls": self.total_calls,
+            "iterations": self.iterations,
+            "accepted_per_iteration": list(self.accepted_per_iteration),
+            "draft_calls_per_iteration": list(self.draft_calls_per_iteration),
+            "mean_acceptance": self.mean_acceptance,
+            "returned_tokens": self.returned_tokens,
+            "tokens_per_forward": (
+                self.returned_tokens / self.total_calls if self.total_calls else 0.0
+            ),
+        }
+
+
+class NemotronSelfSpecRunner(NemotronDiffusionRunner):
+    """Diffusion draft, autoregressive verify, one KV cache."""
+
+    requires_prompt_lengths = True
+
+    def __init__(self, model_config, server_args, runner_config=None, device="cuda"):
+        super().__init__(model_config, server_args, runner_config, device)
+        # The reference's own default: fill every masked position in one
+        # forward. A positive threshold makes the draft iterate, which costs
+        # forwards for a possibly better acceptance length.
+        self.draft_threshold = float(
+            getattr(self.runner_config, "draft_threshold", 0.0) or 0.0
+        )
+        # A second decoder instance, because the draft's threshold is not the
+        # serving threshold: the reference drafts at 0 by default, filling every
+        # masked position in one forward.
+        self.draft_decoder = NemotronThresholdDecoder(
+            threshold=self.draft_threshold,
+            mask_id=self.decoder.mask_id,
+            eos_ids=self.decoder.eos_ids,
+            draft=True,
+        )
+        self.thinking_budget = load_thinking_budget(self.runner_config)
+        self.lora = None
+
+    # -- draft selection ---------------------------------------------------
+    #
+    # The draft reuses the diffusion decoder rather than reimplementing the
+    # inline rule in `linear_spec_generate`, because at batch size one the two
+    # are the same function. The reference commits every masked position at or
+    # above the threshold and falls back to the argmax only when nothing
+    # clears; the decoder commits the same set plus the argmax unconditionally.
+    # Whenever anything clears the threshold the argmax clears it too, being
+    # the maximum, so the extra term is a no-op; when nothing clears, both
+    # commit exactly the argmax. `threshold = 0` also coincides: every
+    # confidence is a probability, so the whole masked set is admitted, which
+    # is the reference's one-forward fill. A test checks this exhaustively over
+    # a confidence grid rather than resting on the argument.
+    #
+    # The one place they could diverge is the reference's flattened
+    # `conf.view(-1).argmax()`, which would pick a single position across an
+    # entire batch. Self-speculation is batch size one, so it cannot arise
+    # here; a batched implementation must not copy that line.
+
+    def _draft_block(self, block: torch.Tensor, prefix_len: int,
+                     cache: torch.Tensor, stats: SelfSpecStats) -> int:
+        calls = 0
+        for _ in range(self.max_denoise_steps):
+            if not bool(self.draft_decoder.has_masks(block).any()):
+                break
+            calls += 1
+            stats.draft_calls += 1
+            logits = self._denoise(block, prefix_len, cache)
+            self.draft_decoder.step(logits, block, sampling=getattr(self, "_sampling", None))
+        if bool(self.draft_decoder.has_masks(block).any()):
+            remaining = int((block == self.draft_decoder.mask_id).sum())
+            raise RuntimeError(
+                f"draft left {remaining} masked position(s) after {calls} "
+                f"forward(s) at prefix length {prefix_len}"
+            )
+        return calls
+
+    # -- acceptance --------------------------------------------------------
+
+    @staticmethod
+    def accepted_length(verified: torch.Tensor, drafted: torch.Tensor) -> int:
+        """Longest matching prefix plus the verifier's bonus token.
+
+        ``verified[i]`` is the autoregressive prediction made *from* position
+        ``i``, so it is compared against the draft at ``i + 1``. Even a total
+        mismatch accepts one token, because ``verified[0]`` is a correct
+        autoregressive step regardless of what the draft guessed.
+        """
+        length = int(drafted.shape[-1])
+        accepted = 0
+        for index in range(length - 1):
+            if int(verified[index]) != int(drafted[index + 1]):
+                break
+            accepted += 1
+        return accepted + 1
+
+    @staticmethod
+    def accepted_tokens(verified: torch.Tensor, drafted: torch.Tensor,
+                        forced: int = 0) -> list[int]:
+        """Tokens one verify emits after the seed.
+
+        The first ``forced`` positions after the seed hold tokens the caller
+        placed there, such as the thinking budget's end marker. They are
+        emitted as placed, whatever the verifier predicted, and matching
+        resumes after them; with ``forced=0`` this is ``verified[:accepted]``.
+        Every emitted token but the last sits at a block position whose KV the
+        verify wrote, so the committed prefix advances by ``len(tokens)``.
+        """
+        length = int(drafted.shape[-1])
+        tokens = [int(drafted[index + 1]) for index in range(forced)]
+        index = forced
+        while index < length - 1 and int(verified[index]) == int(drafted[index + 1]):
+            tokens.append(int(verified[index]))
+            index += 1
+        tokens.append(int(verified[index]))
+        return tokens
+
+    # -- generation --------------------------------------------------------
+
+    @torch.no_grad()
+    def _generate_one(self, prompt: torch.Tensor, generation_length: int):
+        device = self.device
+        prompt = prompt.unsqueeze(0)
+        prompt_len = prompt.shape[1]
+        block_length = self.block_length
+        stats = SelfSpecStats()
+        if generation_length <= 0:
+            return prompt.new_empty((1, 0)), stats
+
+        # Each iteration can extend the cache by a whole block before rolling
+        # back, so the buffer must hold one speculative block beyond the budget.
+        total_length = prompt_len + generation_length + block_length
+        self._check_context(total_length)
+        cache = self._allocate_prefix_cache(total_length)
+
+        with self._adapters(enabled=False):
+            stats.prefill_calls += 1
+            logits = self._prefill(prompt, cache)
+        next_token = self._seed_from(logits)
+        stats.prefill_calls = getattr(self, "_last_prefill_calls", 1)
+
+        prefix_len = prompt_len
+        emitted: list[int] = [next_token]
+        terminal = self.early_stop and next_token in self.decoder.eos_ids
+        # The prefill seed already counts, so a budget of zero forces the
+        # marker into the first block.
+        budget = self.thinking_budget
+        force_marker = budget.force_next_token(len(emitted)) and not budget.satisfied(
+            emitted
+        )
+
+        while len(emitted) < generation_length and not terminal:
+            block = torch.full(
+                (1, block_length), self.decoder.mask_id,
+                dtype=prompt.dtype, device=device,
+            )
+            block[0, 0] = next_token
+            forced = 0
+            if force_marker:
+                block[0, 1] = self.thinking_budget.end_think_token_id
+                forced = 1
+
+            with self._adapters(enabled=True):
+                draft_calls = self._draft_block(block, prefix_len, cache, stats)
+
+            with self._adapters(enabled=False):
+                stats.verify_calls += 1
+                verify_logits = self._commit(block, prefix_len, cache)
+            verified = sample_tokens(verify_logits[0], getattr(self, "_sampling", None))
+
+            accepted_tokens = self.accepted_tokens(verified, block[0], forced)
+            accepted = len(accepted_tokens)
+
+            stats.iterations += 1
+            stats.accepted_per_iteration.append(accepted)
+            stats.draft_calls_per_iteration.append(draft_calls)
+
+            # Roll back: the verify forward wrote a whole block, but only the
+            # accepted prefix is real. Advancing the prefix by `accepted` leaves
+            # the rest to be overwritten by the next iteration.
+            prefix_len += accepted
+            next_token = accepted_tokens[-1]
+
+            for token in accepted_tokens:
+                emitted.append(token)
+                if self.early_stop and token in self.decoder.eos_ids:
+                    terminal = True
+                    break
+            if len(emitted) >= generation_length:
+                break
+            # The seed is already emitted, so the marker goes right after it in
+            # the next block, where it is both emitted and written to the KV.
+            force_marker = budget.force_next_token(len(emitted)) and not budget.satisfied(
+                emitted
+            )
+
+        generated = torch.tensor(
+            [emitted], dtype=prompt.dtype, device=device
+        )[:, :generation_length]
+        if self.early_stop:
+            cut = int(self.decoder.first_eos_index(generated)[0])
+            generated = generated[:, : min(cut + 1, generated.shape[1])]
+        stats.returned_tokens = int(generated.shape[1])
+        return generated, stats
+
+    # -- LoRA --------------------------------------------------------------
+
+    def _adapters(self, *, enabled: bool):
+        """Context manager toggling the draft adapter, a no-op without one."""
+        runner = self
+
+        class _Toggle:
+            def __enter__(self):
+                if runner.lora is not None:
+                    runner.lora.apply(enabled)
+                return self
+
+            def __exit__(self, *exc):
+                if runner.lora is not None:
+                    runner.lora.apply(False)
+                return False
+
+        return _Toggle()
+
+    def load_draft_adapter(self, path=None) -> None:
+        """Attach the ``linear_spec_lora`` draft adapter, if present."""
+        from fluxserve.backend.model_loader.loader import load_nemotron_lora
+
+        self.lora = load_nemotron_lora(self.model, self.model_config, path)
+        if self.lora is not None:
+            logger.info(
+                "Nemotron draft adapter loaded for %d o_proj layers",
+                len(self.lora.layers),
+            )
+
+    # -- batch entry point -------------------------------------------------
+
+    @torch.no_grad()
+    def generate(self, prompts, prompt_lengths=None, generation_lengths=None, sampling_params=None):
+        if prompts.shape[0] != 1 and not getattr(
+            self.server_args, "allow_selfspec_batching", False
+        ):
+            # The reference is batch size one and acceptance lengths differ per
+            # row, so a batched implementation is a separate design question.
+            raise ValueError(
+                "Nemotron self-speculation runs one request at a time; got "
+                f"batch size {prompts.shape[0]}"
+            )
+        return super().generate(prompts, prompt_lengths, generation_lengths, sampling_params)
+
+
 __all__ = [
     "BlockStats",
     "NemotronBlockBudgetExceeded",
     "NemotronDiffusionRunner",
+    "NemotronSamplingMixin",
+    "NemotronSelfSpecRunner",
+    "SelfSpecStats",
 ]

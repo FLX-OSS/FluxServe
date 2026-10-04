@@ -144,7 +144,7 @@ def test_gpu_graph_matches_eager_logits_acceptance_and_rollback(
 ):
     """Real model/kernels with small weights; exercise the actual speculate loop."""
     from fluxserve.backend.execution.decoders.nemotron import NemotronThresholdDecoder, load_thinking_budget
-    from fluxserve.backend.execution.runners.nemotron_selfspec_paged import SpecRow
+    from fluxserve.backend.execution.runners.nemotron.fa4 import SpecRow
     from fluxserve.backend.managers.kvcache.paged import PagedKVCache
     from fluxserve.backend.models.nemotron_diffusion import NemotronLabsDiffusionLLM
     from test_nemotron_model import tiny_config
