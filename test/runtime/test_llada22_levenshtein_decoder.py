@@ -41,7 +41,7 @@ from fluxserve.backend.execution.decoders import (
     LevenshteinJointDecoder,
     load_decoder,
 )
-from fluxserve.backend.execution.decoders.levenshtein import (
+from fluxserve.backend.execution.decoders.llada.levenshtein import (
     apply_edit_operations,
     m2t_schedule_need,
 )
@@ -601,7 +601,7 @@ def test_reordered_subbatches_match_independent_rows_and_reset():
 
 def test_decisions_and_row_state_follow_source_rank(monkeypatch):
     """Replay rank-0 broadcasts into a rank with deliberately different logits."""
-    import fluxserve.backend.execution.decoders.levenshtein as lev
+    import fluxserve.backend.execution.decoders.llada.levenshtein as lev
 
     decoder = make_decoder(max_post_steps=4, max_steps_per_block=8)
     states = [decoder.make_row_state(1, 4, 'cpu') for _ in range(2)]

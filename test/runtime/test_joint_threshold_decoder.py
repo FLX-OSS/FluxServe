@@ -27,12 +27,12 @@ from fluxserve.backend.execution.decoders import (
     JointThresholdDecoder,
     load_decoder,
 )
-from fluxserve.backend.execution.decoders.joint_threshold import (
+from fluxserve.backend.execution.decoders.llada.joint_threshold import (
     joint_threshold_graph_step,
     joint_threshold_update,
 )
 from fluxserve.backend.execution.forward_batch_info import RunnerConfig
-from fluxserve.backend.execution.runners.utils import DecodeEditBudget
+from fluxserve.backend.execution.runners.llada.utils import DecodeEditBudget
 
 VOCAB = 16
 MASK_ID = 12

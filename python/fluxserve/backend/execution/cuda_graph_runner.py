@@ -19,7 +19,7 @@
 # SOFTWARE.
 
 """
-    CUDA graph runner.
+    Default CUDA graph runner.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ from fluxserve.backend.utils.runtime_utils import (
 )
 
 if TYPE_CHECKING:
-    from fluxserve.backend.execution.runners import ModelRunner
+    from fluxserve.backend.execution.runners.base import BlockDiffusionRunner
 
 _is_hip = is_hip()
 
@@ -169,7 +169,7 @@ def set_global_graph_memory_pool(val):
   
         
 class CudaGraphRunner:
-    def __init__(self, model_runner: ModelRunner):
+    def __init__(self, model_runner: BlockDiffusionRunner):
         self.model_runner = model_runner
         self.capture_bs, self.compile_bs = model_runner.supported_batch_sizes, model_runner.supported_batch_sizes
         self.device = model_runner.device

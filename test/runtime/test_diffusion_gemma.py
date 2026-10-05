@@ -2,27 +2,34 @@ from types import SimpleNamespace
 
 import torch
 import torch.nn.functional as F
-
 from fluxserve.backend.configs.diffusion_gemma import DiffusionGemmaConfig
-from fluxserve.backend.layers.attention.base import AttentionForwardConfig, DenseAttention
-from fluxserve.backend.layers.attention.diffusion_gemma_flashinfer import (
-    DiffusionGemmaLayerGeometry,
-    DiffusionGemmaPagedAttention,
-    DiffusionGemmaPagedKVCache,
-)
 from fluxserve.backend.execution.decoders.diffusion_gemma import (
     DiffusionGemmaDecoder,
     DiffusionGemmaSamplingConfig,
     normalize_eos_ids,
 )
-from fluxserve.backend.execution.runners.diffusion_gemma import DiffusionGemmaRunner
+from fluxserve.backend.execution.runners.diffusion_gemma.block_diffusion import (
+    DiffusionGemmaRunner,
+)
+from fluxserve.backend.execution.runners.diffusion_gemma.flashinfer import (
+    DiffusionGemmaFlashInferRunner,
+)
+from fluxserve.backend.layers.attention.base import (
+    AttentionForwardConfig,
+    DenseAttention,
+)
+from fluxserve.backend.layers.attention.diffusion_gemma_flashinfer import (
+    DiffusionGemmaLayerGeometry,
+    DiffusionGemmaPagedAttention,
+    DiffusionGemmaPagedKVCache,
+)
+from fluxserve.backend.layers.moe.fused_moe_triton.fused_moe import (
+    gelu_tanh_and_mul,
+)
 from fluxserve.backend.models.diffusion_gemma import (
     DiffusionGemmaAttention,
     DiffusionGemmaForConditionalGeneration,
     diffusion_gemma_layer_config,
-)
-from fluxserve.backend.layers.moe.fused_moe_triton.fused_moe import (
-    gelu_tanh_and_mul,
 )
 
 
@@ -93,7 +100,7 @@ def test_diffusion_masks_separate_denoise_and_commit():
 
 def test_diffusion_runner_accepts_matching_tp_ep(monkeypatch):
     monkeypatch.setattr(
-        "fluxserve.backend.execution.runners.block_diffusion.BlockDiffusionRunner.__init__",
+        "fluxserve.backend.execution.runners.base.BlockDiffusionRunner.__init__",
         lambda self, model_config, server_args, runner_config, device, **kwargs: None,
     )
     args = SimpleNamespace(
@@ -107,6 +114,48 @@ def test_diffusion_runner_accepts_matching_tp_ep(monkeypatch):
     runner = DiffusionGemmaRunner(SimpleNamespace(), args, device="cuda")
 
     assert runner.last_denoising_steps == []
+
+
+def test_flashinfer_runner_selects_paged_backend(monkeypatch):
+    def init_block(self, model_config, server_args, runner_config, device, **kwargs):
+        assert runner_config.attention_backend == "flashinfer"
+        self.runner_config = runner_config
+        self.device = device
+        layer = SimpleNamespace(
+            self_attn=SimpleNamespace(num_heads=4, num_kv_heads=2, head_dim=32)
+        )
+        self.model = SimpleNamespace(model=SimpleNamespace(layers=[layer]))
+
+    monkeypatch.setattr(
+        "fluxserve.backend.execution.runners.base.BlockDiffusionRunner.__init__",
+        init_block,
+    )
+    monkeypatch.setattr(
+        "fluxserve.backend.execution.runners.diffusion_gemma.flashinfer.require_diffusion_gemma_flashinfer",
+        lambda: None,
+    )
+    observed = []
+    monkeypatch.setattr(
+        "fluxserve.backend.execution.runners.diffusion_gemma.flashinfer.probe_diffusion_gemma_flashinfer",
+        lambda geometries, device: observed.append((geometries, device)),
+    )
+    config = SimpleNamespace(
+        attention_backend="flashinfer",
+        flashinfer_prefill_mode="paged",
+        flashinfer_cache_mode="paged",
+        kv_cache_layout="paged",
+        enable_prefill_cuda_graph=False,
+        enable_decode_cuda_graph=False,
+    )
+    args = SimpleNamespace(
+        tp_size=1, ep_size=1, dp_size=1, pp_size=1, enable_dp_attention=False
+    )
+
+    runner = DiffusionGemmaFlashInferRunner(SimpleNamespace(), args, config)
+
+    assert runner.use_flashinfer_paged
+    assert observed == [([(4, 2, 32)], "cuda")]
+    assert runner.flashinfer_graph_runner is None
 
 
 def test_diffusion_runner_rejects_mismatched_tp_ep():

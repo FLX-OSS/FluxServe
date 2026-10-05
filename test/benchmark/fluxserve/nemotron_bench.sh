@@ -10,41 +10,40 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 OUTPUTS_DIR="${SCRIPT_DIR}/outputs/$(date +%Y%m%d_%H%M%S)"
 SERVER_PID=
 SERVER_LOG=
-RATES=(16)
+NUMS=(64 128 256 512 1024)
+PARALLELS=(1 2 4 8 16)
 SELECTED_CONFIG=
 SELECTED_MODEL=
+TOKENIZER_PATH=
 SELECTED_DATASET=gsm8k.jsonl
 SELECTED_BENCHMARK=gsm8k
-NUM=1000
-PARALLEL=16
 while (( $# )); do
     case "$1" in
         --help|-h)
             echo "Usage: bash $0 [--config NAME --model MODEL] [--output-dir DIR]"
-            echo 'Options: --dataset PATH_RELATIVE_TO_DATA --benchmark NAME --rates 1,2,4,8,16 --num 1000 --parallel 16'
+            echo 'Options: --dataset PATH_RELATIVE_TO_DATA --benchmark NAME --num 64,128,256,512,1024 --parallel 1,2,4,8,16'
+            echo 'Tokenizer: --tokenizer-path LOCAL_DIR (default: resolve model from Hugging Face cache)'
             echo 'Default: original experiment matrix. --config selects a single experiment (GSM8K by default).'
             exit 0 ;;
-        --config|--model|--output-dir|--dataset|--benchmark|--rates|--num|--parallel)
+        --config|--model|--tokenizer-path|--output-dir|--dataset|--benchmark|--num|--parallel)
             (( $# >= 2 )) && [[ -n "$2" && "$2" != --* ]] || { echo "Missing value for $1" >&2; exit 2; }
             case "$1" in
                 --config) SELECTED_CONFIG=$2 ;;
                 --model) SELECTED_MODEL=$2 ;;
+                --tokenizer-path) TOKENIZER_PATH=$2 ;;
                 --output-dir) OUTPUTS_DIR=$2 ;;
                 --dataset) SELECTED_DATASET=$2 ;;
                 --benchmark) SELECTED_BENCHMARK=$2 ;;
-                --rates)
-                    [[ "$2" =~ ^[0-9]+([.][0-9]+)?(,[0-9]+([.][0-9]+)?)*$ ]] || { echo 'Use comma-separated positive rates' >&2; exit 2; }
-                    IFS=, read -r -a RATES <<< "$2" ;;
-                --num) NUM=$2 ;;
-                --parallel) PARALLEL=$2 ;;
+                --num)
+                    [[ "$2" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || { echo '--num requires comma-separated positive integers' >&2; exit 2; }
+                    IFS=, read -r -a NUMS <<< "$2" ;;
+                --parallel)
+                    [[ "$2" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || { echo '--parallel requires comma-separated positive integers' >&2; exit 2; }
+                    IFS=, read -r -a PARALLELS <<< "$2" ;;
             esac
             shift 2 ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
     esac
-done
-[[ "$NUM" =~ ^[1-9][0-9]*$ && "$PARALLEL" =~ ^[1-9][0-9]*$ ]] || { echo '--num and --parallel must be positive integers' >&2; exit 2; }
-for rate in "${RATES[@]}"; do
-    [[ "$rate" =~ [1-9] ]] || { echo '--rates must be positive' >&2; exit 2; }
 done
 if [[ -n "$SELECTED_CONFIG" || -n "$SELECTED_MODEL" ]]; then
     [[ "$SELECTED_CONFIG" =~ ^[a-zA-Z0-9_-]+$ && -n "$SELECTED_MODEL" ]] || { echo '--config and --model must be supplied together' >&2; exit 2; }
@@ -55,7 +54,7 @@ elif [[ "$SELECTED_DATASET" != gsm8k.jsonl || "$SELECTED_BENCHMARK" != gsm8k ]];
     echo '--dataset and --benchmark require --config and --model' >&2; exit 2
 fi
 
-EVALSCOPE_COMMIT=acd09b44384d53174768bb1063f675420f76fae9
+EVALSCOPE_COMMIT=6f1400f1bf0eea7ea31351597dc0bae0c1d8afe0
 EVALSCOPE_VENV="${EVALSCOPE_VENV:-/tmp/evalscope-venv}"
 python -m venv "${EVALSCOPE_VENV}"
 "${EVALSCOPE_VENV}/bin/python" -m pip install \
@@ -106,11 +105,44 @@ run_perf() {
     local number_arg=${6:-}
     local output_dir="${OUTPUTS_DIR}/${benchmark}/${config}"
     local dataset_path="${REPO_ROOT}/data/${dataset}"
+    local tokenizer_path
 
     if [[ ! -f "$dataset_path" ]]; then
         echo "Dataset not found: $dataset_path" >&2
         return 1
     fi
+
+    # This EvalScope revision uses modelscope.AutoTokenizer. Give it a local
+    # Hugging Face snapshot so it does not look up the model on ModelScope.
+    tokenizer_path=$("${EVALSCOPE_VENV}/bin/python" - "$model" "$TOKENIZER_PATH" <<'PY'
+import sys
+from pathlib import Path
+
+from huggingface_hub import snapshot_download
+from huggingface_hub.errors import LocalEntryNotFoundError
+
+model, override = sys.argv[1:]
+if override or Path(model).is_dir():
+    path = Path(override or model).expanduser().resolve()
+    if not path.is_dir():
+        raise SystemExit(f"Tokenizer directory not found: {path}")
+else:
+    tokenizer_files = [
+        "tokenizer*", "special_tokens_map.json", "added_tokens.json", "vocab.*",
+        "merges.txt", "*.model", "*.tiktoken", "chat_template*", "config.json",
+    ]
+    try:
+        path = snapshot_download(model, allow_patterns=tokenizer_files, local_files_only=True)
+    except LocalEntryNotFoundError:
+        # Fetch tokenizer/config files only; model weights are loaded by FluxServe.
+        path = snapshot_download(
+            model,
+            allow_patterns=tokenizer_files,
+        )
+print(path)
+PY
+    )
+    echo "Using tokenizer: $tokenizer_path"
 
     SERVER_LOG="${output_dir}_server.log"
     mkdir -p "$output_dir"
@@ -120,34 +152,28 @@ run_perf() {
     SERVER_PID=$!
     wait_for_ready
 
-    for rate in "${RATES[@]}"; do
-        local rate_output_dir="${output_dir}/rate_${rate}"
-        mkdir -p "$rate_output_dir"
+    perf_args=(
+        -m evalscope.cli.cli perf
+        --model "$model"
+        --url http://127.0.0.1:8000/v1/chat/completions
+        --api openai
+        --tokenizer-path "$tokenizer_path"
+        --dataset custom
+        --dataset-path "$dataset_path"
+        --max-tokens 2048
+        --no-stream
+        --number "${NUMS[@]}"
+        --parallel "${PARALLELS[@]}"
+        --name "${benchmark}_${config}"
+        --outputs-dir "$output_dir"
+        --no-timestamp
+    )
+    if [[ -n "$number_arg" ]]; then
+        perf_args+=("$number_flag" "$number_arg")
+    fi
 
-        perf_args=(
-            -m evalscope.cli.cli perf
-            --model "$model"
-            --url http://127.0.0.1:8000/v1/chat/completions
-            --api openai
-            --tokenizer-path "$model"
-            --dataset line_by_line
-            --dataset-path "$dataset_path"
-            --max-tokens 2048
-            --no-stream
-            --num "$NUM"
-            --parallel "$PARALLEL"
-            --rate "$rate"
-            --name "${benchmark}_${config}_rate_${rate}"
-            --outputs-dir "$rate_output_dir"
-            --no-timestamp
-        )
-        if [[ -n "$number_arg" ]]; then
-            perf_args+=("$number_flag" "$number_arg")
-        fi
-
-        echo "=== Running ${benchmark}/${config} at rate ${rate} ==="
-        "${EVALSCOPE_VENV}/bin/python" "${perf_args[@]}" 2>&1 | tee "${rate_output_dir}/perf.log"
-    done
+    echo "=== Running ${benchmark}/${config} at concurrency ${PARALLELS[*]} ==="
+    "${EVALSCOPE_VENV}/bin/python" "${perf_args[@]}" 2>&1 | tee "${output_dir}/perf.log"
     stop_server
     wait_for_port_free
 }
@@ -160,21 +186,7 @@ if [[ -n "$SELECTED_CONFIG" ]]; then
 fi
 
 
-# run_perf gsm8k tp1_ep1_gemma google/diffusiongemma-26B-A4B-it gsm8k.jsonl 
-# run_perf gsm8k tp1_ep1_mini inclusionAI/LLaDA2.0-mini gsm8k.jsonl 
-# run_perf gsm8k tp4_ep4_flash inclusionAI/LLaDA2.0-flash gsm8k.jsonl
-# run_perf gsm8k tp1_ep1_llada21_mini inclusionAI/LLaDA2.1-mini gsm8k.jsonl 
-# run_perf gsm8k tp4_ep4_llada21_flash inclusionAI/LLaDA2.1-flash gsm8k.jsonl
-# run_perf gsm8k tp4_ep4_llada22_flash inclusionAI/LLaDA2.2-flash gsm8k.jsonl
-
-
-# run_perf bigcodebench tp1_ep1_gemma google/diffusiongemma-26B-A4B-it bigcodebench.jsonl
-# run_perf bigcodebench tp1_ep1_mini inclusionAI/LLaDA2.0-mini bigcodebench.jsonl
-# run_perf bigcodebench tp4_ep4_flash inclusionAI/LLaDA2.0-flash bigcodebench.jsonl
-# run_perf bigcodebench tp1_ep1_llada21_mini inclusionAI/LLaDA2.1-mini bigcodebench.jsonl
-# run_perf bigcodebench tp4_ep4_llada21_flash inclusionAI/LLaDA2.1-flash bigcodebench.jsonl
-# run_perf bigcodebench tp4_ep4_llada22_flash inclusionAI/LLaDA2.2-flash bigcodebench.jsonl
-
+run_perf bigcodebench tp1_nemotron_3b nvidia/Nemotron-Labs-Diffusion-3B bigcodebench.jsonl
 
 
 exit 0

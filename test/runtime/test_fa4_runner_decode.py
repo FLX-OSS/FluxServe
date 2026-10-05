@@ -4,10 +4,10 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from fluxserve.backend.execution.decoders.hierarchy import HierarchyDecoder
-from fluxserve.backend.execution.decoders.threshold import ThresholdParallelDecoder
-from fluxserve.backend.execution.decoders.joint_threshold import JointThresholdDecoder
-from fluxserve.backend.execution.runners.fa4_diffusion import FA4DiffusionRunner
+from fluxserve.backend.execution.decoders.llada.hierarchy import HierarchyDecoder
+from fluxserve.backend.execution.decoders.llada.threshold import ThresholdParallelDecoder
+from fluxserve.backend.execution.decoders.llada.joint_threshold import JointThresholdDecoder
+from fluxserve.backend.execution.runners.llada.fa4 import FA4DiffusionRunner
 from fluxserve.backend.managers.kvcache.dense import TokenArray
 
 
@@ -24,8 +24,8 @@ def test_executor_shutdown_releases_fa4_graphs():
 
 @pytest.mark.parametrize("kind", ["threshold", "hierarchy"])
 def test_decode_refreshes_final_tokens_before_advancing(kind, monkeypatch):
-    monkeypatch.setattr("fluxserve.backend.execution.decoders.hierarchy.broadcast_if_needed", lambda _: None)
-    monkeypatch.setattr("fluxserve.backend.execution.decoders.threshold.broadcast_if_needed", lambda _: None)
+    monkeypatch.setattr("fluxserve.backend.execution.decoders.llada.hierarchy.broadcast_if_needed", lambda _: None)
+    monkeypatch.setattr("fluxserve.backend.execution.decoders.llada.threshold.broadcast_if_needed", lambda _: None)
     runner = object.__new__(FA4DiffusionRunner)
     runner.device, runner.block_length = "cpu", 2
     runner.early_stop, runner.num_forwards = False, 0
@@ -55,7 +55,7 @@ def test_decode_refreshes_final_tokens_before_advancing(kind, monkeypatch):
 @pytest.mark.parametrize("max_post_steps", [0, 1, 3])
 def test_joint_decode_loop_protects_prompt_and_commits_after_edit_budget(max_post_steps, monkeypatch):
     monkeypatch.setattr(
-        "fluxserve.backend.execution.decoders.joint_threshold.broadcast_if_needed",
+        "fluxserve.backend.execution.decoders.llada.joint_threshold.broadcast_if_needed",
         lambda _: None,
     )
     runner = object.__new__(FA4DiffusionRunner)
@@ -100,7 +100,7 @@ def test_decode_graph_parallel_topology(
     tp_size, ep_size, dp_size, pp_size, backend, error, monkeypatch
 ):
     from contextlib import nullcontext
-    import fluxserve.backend.execution.runners.fa4_diffusion as module
+    import fluxserve.backend.execution.runners.llada.fa4 as module
     from fluxserve.backend.distributed.launch import validate_local_launch_config
     from fluxserve.backend.layers.moe.utils import MoeA2ABackend
 
@@ -135,7 +135,7 @@ def test_decode_graph_parallel_topology(
 
 @pytest.mark.parametrize("with_state", [False, True])
 def test_fused_decode_synchronizes_tokens_and_progress_before_advancing(monkeypatch, with_state):
-    import fluxserve.backend.execution.runners.fa4_diffusion as module
+    import fluxserve.backend.execution.runners.llada.fa4 as module
 
     group = object()
     monkeypatch.setattr(module, "get_tp_group", lambda: SimpleNamespace(
@@ -208,8 +208,8 @@ def test_levenshtein_final_kv_row_state_and_per_request_limits(fused, eos, monke
     The fused variant runs the real decoder tail through a CPU replay adapter;
     device graph capture is deliberately not claimed by this regression.
     """
-    from fluxserve.backend.execution.decoders.levenshtein import LevenshteinJointDecoder
-    import fluxserve.backend.execution.runners.fa4_diffusion as module
+    from fluxserve.backend.execution.decoders.llada.levenshtein import LevenshteinJointDecoder
+    import fluxserve.backend.execution.runners.llada.fa4 as module
 
     monkeypatch.setattr(module, "get_tp_group", lambda: SimpleNamespace(world_size=1))
     runner = object.__new__(FA4DiffusionRunner)
@@ -251,7 +251,7 @@ def test_levenshtein_final_kv_row_state_and_per_request_limits(fused, eos, monke
 
 def test_fa4_replay_refreshes_row_state_and_resets_padding():
     from fluxserve.backend.execution.fa4_cuda_graph_runner import FA4CudaGraphRunner
-    from fluxserve.backend.execution.decoders.levenshtein import LevenshteinJointDecoder
+    from fluxserve.backend.execution.decoders.llada.levenshtein import LevenshteinJointDecoder
 
     decoder = LevenshteinJointDecoder(.5, .0, mask_id=12, eos_id=13,
                                      delete_token_id=14, split_token_id=15,
