@@ -158,11 +158,11 @@ PY
         --url http://127.0.0.1:8000/v1/chat/completions
         --api openai
         --tokenizer-path "$tokenizer_path"
-        --dataset line_by_line
+        --dataset custom
         --dataset-path "$dataset_path"
         --max-tokens 2048
         --no-stream
-        --num "${NUMS[@]}"
+        --number "${NUMS[@]}"
         --parallel "${PARALLELS[@]}"
         --name "${benchmark}_${config}"
         --outputs-dir "$output_dir"
