@@ -168,7 +168,7 @@ fi
 # run_perf gsm8k tp4_ep4_llada22_flash inclusionAI/LLaDA2.2-flash gsm8k.jsonl
 
 
-# run_perf bigcodebench tp1_ep1_gemma google/diffusiongemma-26B-A4B-it bigcodebench.jsonl
+run_perf bigcodebench tp1_ep1_gemma google/diffusiongemma-26B-A4B-it bigcodebench.jsonl
 # run_perf bigcodebench tp1_ep1_mini inclusionAI/LLaDA2.0-mini bigcodebench.jsonl
 # run_perf bigcodebench tp4_ep4_flash inclusionAI/LLaDA2.0-flash bigcodebench.jsonl
 # run_perf bigcodebench tp1_ep1_llada21_mini inclusionAI/LLaDA2.1-mini bigcodebench.jsonl

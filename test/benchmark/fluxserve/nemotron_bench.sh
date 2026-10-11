@@ -186,7 +186,9 @@ if [[ -n "$SELECTED_CONFIG" ]]; then
 fi
 
 
-run_perf bigcodebench tp1_nemotron_3b nvidia/Nemotron-Labs-Diffusion-3B bigcodebench.jsonl
+# run_perf bigcodebench tp1_nemotron_3b nvidia/Nemotron-Labs-Diffusion-3B bigcodebench.jsonl
+# run_perf bigcodebench tp1_nemotron_8b nvidia/Nemotron-Labs-Diffusion-8B bigcodebench.jsonl
+# run_perf bigcodebench tp1_nemotron_14b nvidia/Nemotron-Labs-Diffusion-14B bigcodebench.jsonl
 
 
 exit 0
