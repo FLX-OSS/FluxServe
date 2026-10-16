@@ -92,9 +92,5 @@ fluxserve launch \
   least `2N-1`.
 - Thinking traces run long, so keep `--max-model-len` large (40960 at most).
   A request that reaches it ends with `finish_reason="length"`.
-- Running out of KV currently hangs the server. Keep the tokens in flight
-  within the pool logged at startup (`Profiled paged KV cache: pages=N`,
-  `N × 32` tokens; about 438k for 8B, 78k for 32B), as the 32B command does
-  with 8 × 8192.
 - R-ISD applies the adapter at `[MASK]` positions only, so the output is
   Qwen3-8B's own. It supports TP=1 only.

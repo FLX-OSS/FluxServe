@@ -189,6 +189,21 @@ class PagedSchedulerAdapter:
     def next_plan(self):
         return self._scheduler.next_execution_plan()
 
+    def take_dropped(self) -> list[str]:
+        """Requests the native scheduler ended on its own; forget and return them.
+
+        With the host cache disabled, the request flux_scheduler would retract
+        when the device pool runs out is aborted inside the scheduler instead,
+        and nothing reports it. Such a request is still active here, but from
+        the next plan on it is no longer known there (its token size reads -1).
+        """
+        dropped = [
+            rid for rid in self._active
+            if self._scheduler.get_request_token_size(rid) < 0
+        ]
+        self._active.difference_update(dropped)
+        return dropped
+
     def advance_forward(
         self,
         *,
