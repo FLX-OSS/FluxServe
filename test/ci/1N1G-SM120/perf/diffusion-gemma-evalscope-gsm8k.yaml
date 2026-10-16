@@ -1,0 +1,68 @@
+api_version: ci.fluxserve.io/v1
+name: perf-diffusion-gemma-gsm8k
+type: perf
+triggers:
+  - per-commit
+  - manual
+runner:
+  labels:
+    - sm120-1gpu
+env:
+  CI: "true"
+# Port 18000 (not 8000) keeps CI away from interactive servers on the shared
+# SM120 node. $HOME is the CI-only home set by test/ci_system/env/sm120.sh.
+server:
+  command: >-
+    fluxserve launch
+    --model google/diffusiongemma-26B-A4B-it
+    --host 127.0.0.1
+    --port 18000
+    --tp-size 1
+    --dp-size 1
+    --ep-size 1
+    --gpu-memory-utilization 0.6
+    --max-num-seqs 4
+    --max-model-len 8192
+    --max-scheduled-tokens 2048
+    --block-length 256
+    --canvas-length 256
+    --page-size 256
+    --attention-backend flashinfer
+    --kv-cache-layout paged
+    --scheduler-policy default
+    --use-decode-cuda-graph
+    --cuda-graph-decode-mode padded
+    --cuda-graph-capture-bs 1 2 4
+  ready:
+    url: http://127.0.0.1:18000/health
+    timeout: 3600
+    interval: 10
+perf:
+  install:
+    - python3 -m venv "$HOME/evalscope-venv" && "$HOME/evalscope-venv/bin/python" -m pip install "evalscope[perf] @ git+https://github.com/modelscope/evalscope.git@acd09b44384d53174768bb1063f675420f76fae9"
+  # evalscope resolves a tokenizer repo id on ModelScope, where this model does
+  # not exist (404), so pass the local Hugging Face snapshot directory instead.
+  command: >-
+    "$HOME/evalscope-venv/bin/python" -m evalscope.cli.cli perf
+    --model google/diffusiongemma-26B-A4B-it
+    --url http://127.0.0.1:18000/v1/chat/completions
+    --api openai
+    --tokenizer-path "$(python3 -c 'from huggingface_hub import snapshot_download; print(snapshot_download("google/diffusiongemma-26B-A4B-it", allow_patterns=["tokenizer*", "special_tokens_map.json", "added_tokens.json", "vocab.*", "merges.txt", "*.model", "*.tiktoken", "chat_template*", "config.json"]))')"
+    --dataset line_by_line
+    --dataset-path ./data/gsm8k.jsonl
+    --max-tokens 2048
+    --no-stream
+    --num 1000
+    --parallel 16
+    --rate 16
+    --name diffusion-gemma-perf
+    --outputs-dir .ci-artifacts/perf-diffusion-gemma
+    --no-timestamp &&
+    python3 -c 'import glob,json; p=glob.glob("./.ci-artifacts/perf-diffusion-gemma/**/benchmark_summary.json", recursive=True)[0]; s=json.load(open(p)); print("config,Conc.,Total Throughput (tok/s),Output Throughput (tok/s),Approx Cache Hit,Decoded Tok/Iter"); print("diffusion-gemma,16,{:.4f},{:.4f},0,0".format(s["Total Throughput (tok/s)"], s["Output Throughput (tok/s)"]))'
+report:
+  github_step_summary: true
+perf_threshold: 0.9
+# SM120 (RTX PRO 6000) reference from running this spec on the runner node
+# (2026-10-16); the GH200 numbers do not apply here.
+perf_reference:
+  16: [996.51, 633.54]

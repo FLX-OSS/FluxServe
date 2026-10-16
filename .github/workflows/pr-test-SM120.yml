@@ -14,7 +14,10 @@ on:
           - manual
           - debug
 concurrency:
-  group: pr-test-1N1G-${{ github.ref }}
+  # Concurrency groups are repo-wide, so this needs its own prefix or it
+  # cancels (and is cancelled by) the GH200 1N1G workflow. `labeled` events
+  # for other labels get a unique group so they never cancel a running job.
+  group: pr-test-1N1G-SM120-${{ github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:run-1N1G-SM120' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 permissions:
   contents: read
@@ -25,7 +28,7 @@ jobs:
       (github.event_name == 'pull_request' &&
        (
          (github.event.action == 'labeled' && github.event.label.name == 'ci:run-1N1G-SM120') ||
-         (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ci:run-1N1G'))
+         (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ci:run-1N1G-SM120'))
        ))
     runs-on: ubuntu-latest
     outputs:
@@ -51,7 +54,7 @@ jobs:
           fi
 
           matrix=$(python3 test/ci_system/pipeline.py scan \
-            --root test/ci/1N1G \
+            --root test/ci/1N1G-SM120 \
             --trigger "$trigger")
 
           {
@@ -71,10 +74,8 @@ jobs:
     timeout-minutes: 240
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      # Wrapper that enters the runner's apptainer image. Selected from the
-      # task runtime so non-GH200 labels (b200-*/gb200-*, used by the 4gpu
-      # LLaDA2.2-flash eval) enter their own image instead of GH200's.
-      ENV_WRAPPER: ${{ matrix.runtime == 'gh200-apptainer' && 'test/ci_system/env/gh200.sh' || 'test/ci_system/env/b200.sh' }}
+      # Every task under test/ci/1N1G-SM120 runs in the SM120 Apptainer image.
+      ENV_WRAPPER: test/ci_system/env/sm120.sh
       WORK_DIR: ${{ github.workspace }}/run-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}-${{ matrix.runner }}
       CONFIG: ${{ matrix.config }}
       RUNNER_LABEL: ${{ matrix.runner }}
@@ -88,12 +89,14 @@ jobs:
       - name: Install FluxServe in runner container
         run: |
           set -euo pipefail
+          # The image venv is read-only, so install with --user; the wrapper
+          # points the user site at a per-run PYTHONUSERBASE in the work dir.
           bash "$WORK_DIR/$ENV_WRAPPER" bash -lc '
             cd "$PWD"
             export PIP_BREAK_SYSTEM_PACKAGES=1
-            python -m pip install -e flux-kernel/python/ --no-build-isolation
-            python -m pip install -e flux-scheduler
-            python -m pip install -e .
+            python -m pip install --user -e flux-kernel/python/ --no-build-isolation
+            python -m pip install --user -e flux-scheduler
+            python -m pip install --user -e .
           '
 
       - name: Install task
@@ -145,8 +148,8 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'pull_request' &&
         (
-          (github.event.action == 'labeled' && github.event.label.name == 'ci:run-1N1G') ||
-          (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ci:run-1N1G'))
+          (github.event.action == 'labeled' && github.event.label.name == 'ci:run-1N1G-SM120') ||
+          (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ci:run-1N1G-SM120'))
         )))
     needs:
       - scan
