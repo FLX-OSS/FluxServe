@@ -1119,7 +1119,11 @@ def write_result(path: str | None, payload: Dict[str, Any]) -> None:
     result_path.write_text(json.dumps(payload, indent=2) + "\n")
 
 
-def poll_readiness(ready: Dict[str, Any], dry_run: bool) -> None:
+def poll_readiness(
+    ready: Dict[str, Any],
+    dry_run: bool,
+    process: subprocess.Popen[str] | None = None,
+) -> None:
     url = str(ready["url"])
     timeout_seconds = int(ready.get("timeout", 600))
     interval_seconds = int(ready.get("interval", 10))
@@ -1131,6 +1135,13 @@ def poll_readiness(ready: Dict[str, Any], dry_run: bool) -> None:
 
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
+        # A server that dies during startup (e.g. an import error) would
+        # otherwise keep us polling until the full readiness timeout.
+        if process is not None and process.poll() is not None:
+            raise RuntimeError(
+                f"server exited (code {process.returncode}) before becoming "
+                f"ready: {url}; see .ci-artifacts/server.log"
+            )
         try:
             with urlopen(url, timeout=5) as response:
                 if response.status == expected_status:
@@ -1354,7 +1365,7 @@ def execute_task(
                         repo_root,
                         dry_run,
                     )
-                poll_readiness(stage_payload["ready"], dry_run)
+                poll_readiness(stage_payload["ready"], dry_run, server_process)
                 continue
             for command in stage_payload:
                 if pgm is not None:

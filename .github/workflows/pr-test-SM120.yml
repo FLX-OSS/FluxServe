@@ -92,6 +92,7 @@ jobs:
           # The image venv is read-only, so install with --user; the wrapper
           # points the user site at a per-run PYTHONUSERBASE in the work dir.
           bash "$WORK_DIR/$ENV_WRAPPER" bash -lc '
+            set -euo pipefail
             cd "$PWD"
             export PIP_BREAK_SYSTEM_PACKAGES=1
             python -m pip install --user -e flux-kernel/python/ --no-build-isolation

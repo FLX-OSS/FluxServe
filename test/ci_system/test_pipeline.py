@@ -1,6 +1,8 @@
 import re
 import socket
+import subprocess
 import textwrap
+import time
 from pathlib import Path
 
 import pipeline
@@ -21,6 +23,7 @@ from pipeline import (
     format_perf_reference_table,
     get_ready_port,
     load_yaml,
+    poll_readiness,
     resolve_score_threshold_for_runner,
     setup_runner,
     validate_task,
@@ -491,6 +494,16 @@ def test_ensure_ready_port_free_rejects_existing_listener():
             ensure_ready_port_free(ready, dry_run=False)
         ensure_ready_port_free(ready, dry_run=True)
     ensure_ready_port_free(ready, dry_run=False)
+
+
+def test_poll_readiness_fails_fast_when_server_exits():
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    ready = {"url": "http://127.0.0.1:9/health", "timeout": 600, "interval": 1}
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match=r"exited \(code 0\) before becoming ready"):
+        poll_readiness(ready, dry_run=False, process=proc)
+    assert time.monotonic() - start < 5
 
 
 def test_sm120_tasks_target_sm120_runner():
