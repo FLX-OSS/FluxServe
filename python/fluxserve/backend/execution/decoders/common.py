@@ -39,6 +39,21 @@ def normalize_eos_ids(value):
     return eos_ids
 
 
+def sampling_validator(server_args):
+    """The request-sampling validator for the served model.
+
+    Only models that set ``ServerArgs.sampling_defaults`` validate request
+    sampling; Nemotron's rules are the default, I-DLM's also allow top-k/top-p.
+    """
+    if getattr(server_args, "sampling_family", None) == "idlm":
+        from fluxserve.backend.execution.decoders.idlm import validate_sampling_params
+    else:
+        from fluxserve.backend.execution.decoders.nemotron import (
+            validate_sampling_params,
+        )
+    return validate_sampling_params
+
+
 def resolve_checkpoint_eos_ids(model_name, trust_remote_code=True):
     """EOS ids declared by the checkpoint's generation_config.json, as a
     deduplicated tuple; empty tuple when the checkpoint declares none (the

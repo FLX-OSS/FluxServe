@@ -31,6 +31,7 @@ def get_model(
         DefaultModelLoader,
         DiffusionGemmaModelLoader,
     )
+    from fluxserve.backend.models.idlm import is_idlm_config, is_qwen3_config
     from fluxserve.backend.models.nemotron_diffusion import (
         is_nemotron_diffusion_config,
     )
@@ -44,6 +45,11 @@ def get_model(
         from fluxserve.backend.model_loader.loader import NemotronModelLoader
 
         loader = NemotronModelLoader()
+    elif is_idlm_config(model_config) or is_qwen3_config(model_config):
+        # Qwen3 is served only as the AR base of an I-DLM gated LoRA (R-ISD).
+        from fluxserve.backend.model_loader.loader import IDLMModelLoader
+
+        loader = IDLMModelLoader()
     elif is_diffusion_gemma:
         loader = DiffusionGemmaModelLoader()
     else:

@@ -51,10 +51,10 @@ class InputProcessor:
         defaults = getattr(self.server_args, "sampling_defaults", None)
         if defaults is not None:
             import secrets
-            from fluxserve.backend.execution.decoders.nemotron import validate_sampling_params
+            from fluxserve.backend.execution.decoders.common import sampling_validator
 
             params = dict(defaults) | params
-            validate_sampling_params(params)
+            sampling_validator(self.server_args)(params)
             if params.get("seed") is None:
                 # Resolve once before the distributed executor broadcasts the
                 # request, so all TP ranks use the same private RNG stream.

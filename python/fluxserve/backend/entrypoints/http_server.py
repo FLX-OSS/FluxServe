@@ -269,10 +269,10 @@ def create_app(engine: AsyncLLM):
     def sampling_error(params):
         defaults = getattr(engine.server_args, "sampling_defaults", None)
         if defaults is not None:
-            from fluxserve.backend.execution.decoders.nemotron import validate_sampling_params
+            from fluxserve.backend.execution.decoders.common import sampling_validator
 
             try:
-                validate_sampling_params({**defaults, **params})
+                sampling_validator(engine.server_args)({**defaults, **params})
             except ValueError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=400)
         return None

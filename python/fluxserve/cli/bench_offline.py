@@ -52,6 +52,7 @@ from fluxserve.backend.execution.runners import (
     FlashInferDiffusionRunner,
     NemotronSelfSpecPagedRunner,
     NemotronSelfSpecRunner,
+    get_idlm_runner,
     get_nemotron_runner,
 )
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
@@ -60,6 +61,14 @@ from fluxserve.backend.metrics import record_batch_performance_metrics
 from fluxserve.backend.model_loader.loader import (
     nemotron_decoding_ids,
     resolve_end_think_token_id,
+)
+from fluxserve.backend.models.idlm import (
+    IDLM_DEFAULT_MASK_ID,
+    check_idlm_architecture,
+    check_idlm_config,
+    check_idlm_context_limit,
+    is_idlm_config,
+    is_qwen3_config,
 )
 from fluxserve.backend.models.nemotron_diffusion import (
     check_nemotron_context_limit,
@@ -501,6 +510,151 @@ def normalize_nemotron_args(args, model_config) -> bool:
     return True
 
 
+# I-DLM decodes with Introspective Strided Decoding only. The flag's parser
+# default belongs to LLaDA, so an I-DLM checkpoint treats it as unset.
+ISD = "isd"
+
+
+def apply_idlm_runner_config(runner_config, model_config, args=None) -> None:
+    """Point a ``RunnerConfig`` at this checkpoint's ids and ISD options.
+
+    As for Nemotron, the I-DLM settings are attached rather than added to the
+    shared schema, and runners read them with ``getattr`` defaults.
+    """
+    from fluxserve.backend.execution.runners.idlm.fa4 import DEFAULT_GEN_BLOCK_SIZE
+
+    mask_id = getattr(args, "idlm_mask_id", None)
+    runner_config.mask_id = int(model_config.mask_token_id if mask_id is None else mask_id)
+    eos_ids = tuple(getattr(runner_config, "eos_ids", ()) or ())
+    if not eos_ids:
+        raw = getattr(model_config, "eos_token_id", None)
+        eos_ids = (raw,) if isinstance(raw, int) else tuple(raw or ())
+    if not eos_ids:
+        raise ValueError("I-DLM checkpoint declares no EOS token id")
+    vocab_size = int(model_config.vocab_size)
+    for value in eos_ids:
+        if not 0 <= int(value) < vocab_size:
+            raise ValueError(f"I-DLM EOS id {value} is outside vocab_size={vocab_size}")
+    runner_config.eos_ids = tuple(int(value) for value in eos_ids)
+    runner_config.eos_id = runner_config.eos_ids[0]
+    gen_block_size = getattr(args, "idlm_gen_block_size", None)
+    runner_config.idlm_gen_block_size = int(
+        DEFAULT_GEN_BLOCK_SIZE if gen_block_size is None else gen_block_size
+    )
+    runner_config.temperature = getattr(args, "temperature", 0.0)
+    runner_config.seed = getattr(args, "seed", None)
+    runner_config.top_k = getattr(args, "top_k", -1)
+    runner_config.top_p = getattr(args, "top_p", 1.0)
+    runner_config.nemotron_prefill_chunk_size = getattr(args, "nemotron_prefill_chunk_size", 1024)
+
+
+def normalize_idlm_args(args, model_config) -> bool:
+    """Validate and default I-DLM-only serving arguments.
+
+    Returns ``True`` when the checkpoint is an I-DLM one, or a Qwen3 base for
+    the gated LoRA (``--idlm-lora``, R-ISD). Shared by the server and the
+    offline bench, like :func:`normalize_nemotron_args`.
+    """
+    lora = getattr(args, "idlm_lora", None)
+    if is_idlm_config(model_config):
+        check_idlm_config(model_config)
+    elif is_qwen3_config(model_config):
+        if not lora:
+            raise ValueError(
+                "FluxServe serves a Qwen3 checkpoint only as the AR base of an "
+                "I-DLM gated LoRA (R-ISD); pass --idlm-lora"
+            )
+        check_idlm_architecture(model_config)
+    else:
+        if lora:
+            raise ValueError("--idlm-lora needs an I-DLM or Qwen3 base checkpoint")
+        return False
+    vocab_size = int(model_config.vocab_size)
+    config_mask = getattr(model_config, "mask_token_id", None)
+    if lora:
+        from fluxserve.backend.model_loader.loader import idlm_lora_mask_id
+
+        if int(getattr(args, "tp_size", 1) or 1) != 1:
+            raise ValueError("--idlm-lora supports --tp-size 1 only")
+        mask_id = idlm_lora_mask_id(lora)
+        if mask_id is None:
+            mask_id = IDLM_DEFAULT_MASK_ID if config_mask is None else int(config_mask)
+        if config_mask is not None and int(config_mask) != int(mask_id):
+            raise ValueError(
+                f"the adapter's MASK id {mask_id} differs from the checkpoint's "
+                f"mask_token_id {config_mask}"
+            )
+        if not 0 <= int(mask_id) < vocab_size:
+            raise ValueError(f"MASK id {mask_id} is outside vocab_size={vocab_size}")
+        args.idlm_mask_id = int(mask_id)
+    else:
+        args.idlm_mask_id = int(config_mask)
+
+    from fluxserve.backend.execution.decoders.idlm import validate_sampling_params
+    from fluxserve.backend.execution.runners.idlm.fa4 import DEFAULT_GEN_BLOCK_SIZE
+
+    validate_sampling_params({
+        "temperature": getattr(args, "temperature", 0.0),
+        "seed": getattr(args, "seed", None),
+        "top_k": getattr(args, "top_k", -1),
+        "top_p": getattr(args, "top_p", 1.0),
+    })
+    if int(getattr(args, "nemotron_prefill_chunk_size", 1024)) <= 0:
+        raise ValueError("--nemotron-prefill-chunk-size must be positive")
+
+    backend = getattr(args, "attention_backend", "flashinfer")
+    if backend not in ("fa4", "flashinfer"):
+        raise ValueError(
+            "I-DLM serves on paged attention only: use --attention-backend fa4 "
+            f"or flashinfer with --kv-cache-layout paged; got {backend!r}."
+        )
+    if getattr(args, "kv_cache_layout", "paged") != "paged":
+        raise ValueError(f"I-DLM {backend.upper()} serving requires --kv-cache-layout paged")
+    if backend == "flashinfer":
+        for name in ("flashinfer_cache_mode", "flashinfer_prefill_mode"):
+            if getattr(args, name, "paged") != "paged":
+                raise ValueError(f"I-DLM FlashInfer requires --{name.replace('_', '-')} paged")
+    if getattr(args, "use_prefill_cuda_graph", False) or getattr(args, "use_cuda_graph", False):
+        raise ValueError(
+            "I-DLM prefill is a single variable-length causal forward and is "
+            "not captured; use --use-decode-cuda-graph."
+        )
+
+    decoding = getattr(args, "parallel_decoding", ISD)
+    if not getattr(args, "parallel_decoding_explicit", False):
+        decoding = ISD
+    if decoding != ISD:
+        raise ValueError(
+            f"I-DLM supports --parallel-decoding {ISD}; got {decoding!r}."
+        )
+    args.parallel_decoding = ISD
+
+    gen_block_size = getattr(args, "idlm_gen_block_size", None)
+    gen_block_size = DEFAULT_GEN_BLOCK_SIZE if gen_block_size is None else int(gen_block_size)
+    if gen_block_size < 1:
+        raise ValueError(f"--idlm-gen-block-size must be >= 1, got {gen_block_size}")
+    args.idlm_gen_block_size = gen_block_size
+    width = 2 * gen_block_size - 1
+    page_size = int(getattr(args, "page_size", None) or args.block_length)
+    if page_size % 16:
+        raise ValueError(f"I-DLM paged page_size must be a multiple of 16, got {page_size}")
+    if width > page_size:
+        raise ValueError(
+            f"--idlm-gen-block-size {gen_block_size} needs a {width}-token "
+            f"forward, wider than page_size={page_size}"
+        )
+
+    if getattr(args, "max_thinking_tokens", None) is not None or getattr(
+        args, "end_think_token_id", None
+    ) is not None:
+        raise ValueError("I-DLM does not support --max-thinking-tokens yet")
+
+    max_length = int(getattr(args, "max_model_len", 0) or 0)
+    if max_length:
+        check_idlm_context_limit(max_length, model_config)
+    return True
+
+
 def pad_batch(input_ids, device, mask_id):
     max_length = max(sample.shape[1] for sample in input_ids)
     batch = torch.full(
@@ -700,6 +854,7 @@ def run_worker(args, *, init_method: str = "env://"):
     )
     is_diffusion_gemma = normalize_diffusion_gemma_args(args, model_config)
     is_nemotron = normalize_nemotron_args(args, model_config)
+    is_idlm = normalize_idlm_args(args, model_config)
     if is_diffusion_gemma:
         logger.info(
             "[Info] Diffusion-Gemma attention backend: "
@@ -764,6 +919,9 @@ def run_worker(args, *, init_method: str = "env://"):
         if is_nemotron:
             apply_nemotron_runner_config(runner_config, model_config, args)
             runner_cls = get_nemotron_runner(args.attention_backend, args.parallel_decoding)
+        elif is_idlm:
+            apply_idlm_runner_config(runner_config, model_config, args)
+            runner_cls = get_idlm_runner(args.attention_backend)
         elif is_diffusion_gemma:
             runner_cls = (
                 DiffusionGemmaFlashInferRunner
@@ -787,6 +945,8 @@ def run_worker(args, *, init_method: str = "env://"):
             runner, (NemotronSelfSpecRunner, NemotronSelfSpecPagedRunner)
         ):
             runner.load_draft_adapter()
+        if is_idlm and getattr(args, "idlm_lora", None):
+            runner.load_lora(args.idlm_lora)
         eos_ids = getattr(runner.decoder, "eos_ids", (runner.decoder.eos_id,))
         logger.info(
             "[Info] Runner configuration: "
@@ -842,9 +1002,10 @@ def run_worker(args, *, init_method: str = "env://"):
                     prompt_lengths=[sample.shape[1] for sample in input_ids],
                     generation_lengths=[args.gen_len] * len(input_ids),
                 )
-                if is_nemotron:
-                    # Nemotron returns generations after the padded prompt;
-                    # metrics and saved outputs use each original prompt length.
+                if is_nemotron or is_idlm:
+                    # Nemotron and I-DLM return generations after the padded
+                    # prompt; metrics and saved outputs use each original
+                    # prompt length.
                     out = compact_batch_output(
                         out, input_ids, [args.gen_len] * len(input_ids),
                         runner.decoder.mask_id,
@@ -1022,8 +1183,19 @@ def add_bench_offline_subparser(subparsers) -> None:
     parser.add_argument("--page-size", "--page_size", dest="page_size", type=int)
     parser.add_argument("--gen-len", "--gen_len", dest="gen_len", type=int, default=1024)
     parser.add_argument("--block-length", "--block_length", dest="block_length", type=int, default=64)
-    parser.add_argument("--temperature", type=float, default=0.0, help="Nemotron sampling temperature")
-    parser.add_argument("--seed", type=int, default=None, help="Nemotron sampling seed (offline default: 0)")
+    parser.add_argument("--temperature", type=float, default=0.0, help="Nemotron / I-DLM sampling temperature")
+    parser.add_argument("--seed", type=int, default=None, help="Nemotron / I-DLM sampling seed (offline default: 0)")
+    parser.add_argument("--top-k", type=int, default=-1, help="I-DLM top-k (-1 disables)")
+    parser.add_argument("--top-p", type=float, default=1.0, help="I-DLM top-p")
+    parser.add_argument(
+        "--idlm-gen-block-size", type=int, default=None,
+        help="I-DLM ISD stride N: at most N tokens per forward of width 2N-1 (default 4).",
+    )
+    parser.add_argument(
+        "--idlm-lora", default=None,
+        help="I-DLM gated LoRA adapter (R-ISD), e.g. yifanyu/I-DLM-8B-lora-r128 "
+        "on --model Qwen/Qwen3-8B. Output is lossless w.r.t. the base model.",
+    )
     parser.add_argument("--nemotron-prefill-chunk-size", type=int, default=1024)
     parser.add_argument(
         "--canvas-length", "--canvas_length", dest="canvas_length", type=int
@@ -1036,7 +1208,8 @@ def add_bench_offline_subparser(subparsers) -> None:
     )
     parser.add_argument("--threshold", type=float, default=0.9)
     parser.add_argument("--low-threshold", "--low_threshold", dest="low_threshold", type=float, default=0.3)
-    parser.add_argument("--parallel-decoding", "--parallel_decoding", dest="parallel_decoding", default="threshold")
+    parser.add_argument("--parallel-decoding", "--parallel_decoding", dest="parallel_decoding", default="threshold", action=StoreExplicit)
+    parser.set_defaults(parallel_decoding_explicit=False)
     parser.add_argument(
         "--editing-threshold",
         "--editing_threshold",
