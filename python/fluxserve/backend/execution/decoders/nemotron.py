@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn.functional as F
 
-from fluxserve.backend.execution.decoders.utils import normalize_eos_ids
+from fluxserve.backend.execution.decoders.common import normalize_eos_ids
 
 
 def validate_sampling_params(params):

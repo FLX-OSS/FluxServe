@@ -280,23 +280,27 @@ def test_self_speculation_leaves_the_seed_alone_within_the_allowance():
 # --------------------------------------------------------------------------
 
 
-def test_the_end_think_id_resolves_from_the_checkpoint():
+def test_the_end_think_id_resolves_from_the_cached_3b_checkpoint():
     from fluxserve.backend.model_loader.loader import resolve_end_think_token_id
-    from test_nemotron_model import checkpoint_config
 
-    resolved = resolve_end_think_token_id(checkpoint_config())
+    config = SimpleNamespace(_name_or_path="nvidia/Nemotron-Labs-Diffusion-3B")
+    resolved = resolve_end_think_token_id(config)
     if resolved is None:
-        pytest.skip("Nemotron tokenizer_config.json is not in the local cache")
+        pytest.skip("Nemotron 3B checkpoint is not in the local cache")
     assert resolved == END_THINK
 
 
-def test_normalization_resolves_and_validates_the_budget():
+def test_normalization_resolves_and_validates_the_budget(monkeypatch):
     from fluxserve.cli.bench_offline import normalize_nemotron_args
     from test_nemotron_model import checkpoint_config, serve_args
 
+    monkeypatch.setattr(
+        "fluxserve.cli.bench_offline.resolve_end_think_token_id",
+        lambda _config: END_THINK,
+    )
     args = serve_args(max_thinking_tokens=64)
-    if normalize_nemotron_args(args, checkpoint_config()) and args.end_think_token_id:
-        assert args.end_think_token_id == END_THINK
+    assert normalize_nemotron_args(args, checkpoint_config())
+    assert args.end_think_token_id == END_THINK
 
     explicit = serve_args(max_thinking_tokens=64, end_think_token_id=12)
     normalize_nemotron_args(explicit, checkpoint_config())

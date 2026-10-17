@@ -19,7 +19,7 @@
 # SOFTWARE.
 
 """
-    Base model runner.
+    Shared runner setup and model forwarding.
 """
 
 import logging
@@ -36,9 +36,13 @@ from fluxserve.backend.distributed import (
 )
 from fluxserve.backend.execution.cuda_graph_runner import CudaGraphRunner
 from fluxserve.backend.execution.decoders import load_decoder
-from fluxserve.backend.execution.forward_batch_info import RunnerConfig
-from fluxserve.backend.execution.forward_batch_info import ForwardBatch
-from fluxserve.backend.layers.dp_attention import get_attention_tp_size
+from fluxserve.backend.execution.forward_batch_info import (
+    ForwardBatch,
+    RunnerConfig,
+)
+from fluxserve.backend.layers.dp_attention import (
+    get_attention_tp_size,
+)
 from fluxserve.backend.managers.kvcache import KVCache
 from fluxserve.backend.model_loader import get_model
 from fluxserve.backend.utils.runtime_utils import (
@@ -54,7 +58,9 @@ def _is_flex_block_mask(attention_mask) -> bool:
     return attention_mask is not None and attention_mask.__class__.__name__ == "BlockMask"
 
 
-class ModelRunner:
+class BlockDiffusionRunner:
+    """Shared model setup and model forwarding."""
+
     def __init__(
         self,
         model_config: ModelConfig,
@@ -303,10 +309,6 @@ class ModelRunner:
 
     @torch.no_grad()
     def decode(self, *args, **kwargs):
-        raise NotImplementedError
-
-    @torch.no_grad()
-    def generate(self, *args, **kwargs):
         raise NotImplementedError
 
     def __call__(self, *args, **kwargs):

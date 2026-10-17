@@ -9,8 +9,8 @@ import torch.nn.functional as F
 
 from fluxserve.backend.execution.forward_batch_info import ForwardBatch, RunnerConfig
 from fluxserve.backend.execution.runners import get_nemotron_runner
-from fluxserve.backend.execution.runners.nemotron_fa4 import build_nemotron_paged_metadata
-from fluxserve.backend.execution.runners.nemotron_flashinfer import (
+from fluxserve.backend.execution.runners.nemotron.fa4 import build_nemotron_paged_metadata
+from fluxserve.backend.execution.runners.nemotron.flashinfer import (
     NemotronFlashInferDiffusionRunner,
     NemotronFlashInferSelfSpecRunner,
 )
@@ -188,10 +188,10 @@ def test_decode_graphs_are_accepted_on_the_flashinfer_path(flag):
 
 @pytest.mark.parametrize("cls", [NemotronFlashInferDiffusionRunner, NemotronFlashInferSelfSpecRunner])
 def test_runner_initialization_does_not_require_fa4_or_dllm(monkeypatch, cls):
-    from fluxserve.backend.execution.runners import nemotron_flashinfer as module
+    from fluxserve.backend.execution.runners.nemotron import flashinfer as module
 
-    def init(self, *args, runner_config, _allow_flashinfer, **kwargs):
-        assert _allow_flashinfer
+    def init(self, *args, runner_config, **kwargs):
+        assert runner_config.attention_backend == "flashinfer"
         self.runner_config = runner_config
         self.block_length = runner_config.block_length
         self.init_decoder()

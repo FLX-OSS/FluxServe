@@ -19,17 +19,17 @@
 # SOFTWARE.
 
 """
-    Decoder factory.
+    LLaDA decoder selection.
 """
 
 from fluxserve.backend.execution.forward_batch_info import RunnerConfig
 from fluxserve.backend.utils.server_args import ServerArgs
 
-from fluxserve.backend.execution.decoders.hierarchy import HierarchyDecoder
-from fluxserve.backend.execution.decoders.joint_threshold import JointThresholdDecoder
-from fluxserve.backend.execution.decoders.levenshtein import LevenshteinJointDecoder
-from fluxserve.backend.execution.decoders.threshold import CreditThresholdParallelDecoder, ThresholdParallelDecoder
-from fluxserve.backend.execution.decoders.utils import normalize_eos_ids
+from fluxserve.backend.execution.decoders.llada.hierarchy import HierarchyDecoder
+from fluxserve.backend.execution.decoders.llada.joint_threshold import JointThresholdDecoder
+from fluxserve.backend.execution.decoders.llada.levenshtein import LevenshteinJointDecoder
+from fluxserve.backend.execution.decoders.llada.threshold import CreditThresholdParallelDecoder, ThresholdParallelDecoder
+from fluxserve.backend.execution.decoders.common import normalize_eos_ids
 
 KNOWN_DECODERS = (
     "threshold",

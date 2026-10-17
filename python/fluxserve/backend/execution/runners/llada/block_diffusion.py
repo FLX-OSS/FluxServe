@@ -19,7 +19,7 @@
 # SOFTWARE.
 
 """
-    Block-diffusion runner.
+    LLaDA block-diffusion runner.
 """
 
 import logging
@@ -27,19 +27,17 @@ import logging
 import torch
 import torch.distributed as dist
 
-from fluxserve.backend.configs.model_config import ModelConfig
-from fluxserve.backend.execution.forward_batch_info import (
-    ForwardBatch,
-    ForwardMode,
-    RunnerConfig,
+from fluxserve.backend.execution.forward_batch_info import ForwardBatch, ForwardMode
+from fluxserve.backend.execution.runners.base import (
+    BlockDiffusionRunner as BaseBlockDiffusionRunner,
 )
-from fluxserve.backend.execution.runners.utils import (
+from fluxserve.backend.execution.runners.llada.utils import (
     DecodeEditBudget,
     align_exp2,
     gather_blocks,
     generated_eos_hit,
-    select_batch_sequences_by_order,
     select_batch_sequences_by_mask_number,
+    select_batch_sequences_by_order,
 )
 from fluxserve.backend.layers.dp_attention import (
     DpPaddingMode,
@@ -48,8 +46,6 @@ from fluxserve.backend.layers.dp_attention import (
     set_dp_buffer_len,
 )
 from fluxserve.backend.managers.kvcache import PagedKVCache, TokenArray
-from fluxserve.backend.execution.runners.base import ModelRunner
-from fluxserve.backend.utils.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
 
@@ -62,18 +58,11 @@ def block_causal_mask(block_length: int):
     return mask_mod
 
 
-class BlockDiffusionRunner(ModelRunner):
-    """Model runner for block diffusion generation."""
+class BlockDiffusionRunner(BaseBlockDiffusionRunner):
+    """LLaDA block generation and KV-cache handling."""
 
-    def __init__(
-        self,
-        model_config: ModelConfig,
-        server_args: ServerArgs,
-        runner_config: RunnerConfig | None = None,
-        device: str = "cuda",
-        _allow_flashinfer: bool = False,
-    ):
-        super().__init__(model_config, server_args, runner_config, device)
+    def __init__(self, *args, _allow_flashinfer: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
         if self.runner_config.attention_backend == "flashinfer" and not _allow_flashinfer:
             raise ValueError(
                 "BlockDiffusionRunner supports only attention_backend='sdpa' or "

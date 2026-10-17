@@ -16,7 +16,7 @@ from transformers import (
 
 from fluxserve.backend.distributed.launch import destroy_distributed, initialize_distributed
 from fluxserve.backend.execution.forward_batch_info import RunnerConfig
-from fluxserve.backend.execution.runners.diffusion_gemma import DiffusionGemmaRunner
+from fluxserve.backend.execution.runners.diffusion_gemma.block_diffusion import DiffusionGemmaRunner
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
 from fluxserve.backend.layers.moe import initialize_moe_config
 from fluxserve.backend.utils.server_args import ServerArgs

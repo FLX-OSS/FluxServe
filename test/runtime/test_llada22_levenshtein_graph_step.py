@@ -36,7 +36,7 @@ import random
 import pytest
 import torch
 
-from fluxserve.backend.execution.decoders.levenshtein import (
+from fluxserve.backend.execution.decoders.llada.levenshtein import (
     GRAPH_STATE_FIELDS,
     LevenshteinJointDecoder,
     apply_edit_operations,

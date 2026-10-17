@@ -1,4 +1,4 @@
-### Nemotron-Labs-Diffusion-14B (TP=EP=1)
+### Nemotron-Labs-Diffusion-14B (TP=1)
 
 ```bash
 fluxserve launch \
@@ -9,7 +9,7 @@ fluxserve launch \
   --dp-size 1 \
   --ep-size 1 \
   --gpu-memory-utilization 0.85 \
-  --max-num-seqs 8 \
+  --max-num-seqs 16 \
   --max-model-len 8192 \
   --block-length 32 \
   --page-size 32 \
@@ -20,11 +20,10 @@ fluxserve launch \
   --scheduler-policy paged \
   --use-decode-cuda-graph \
   --cuda-graph-decode-mode padded \
-  --cuda-graph-capture-bs 1 2 4 8 \
   --trust-remote-code
 ```
 
-### Nemotron-Labs-Diffusion-14B, self-speculation (TP=EP=1)
+### Nemotron-Labs-Diffusion-14B, self-speculation (TP=1)
 
 ```bash
 fluxserve launch \
@@ -47,7 +46,6 @@ fluxserve launch \
   --scheduler-policy paged \
   --use-decode-cuda-graph \
   --cuda-graph-decode-mode padded \
-  --cuda-graph-capture-bs 1 2 4 8 16 \
   --trust-remote-code
 ```
 

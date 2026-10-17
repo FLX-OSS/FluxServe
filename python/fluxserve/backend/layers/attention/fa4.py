@@ -68,7 +68,7 @@ def validate_fa4_runtime(device: str | torch.device) -> None:
     if device_index is None:
         device_index = torch.cuda.current_device()
     major, minor = torch.cuda.get_device_capability(device_index)
-    if major not in (9, 10, 11):
+    if major not in (9, 10, 11, 12):
         raise RuntimeError(
             "FA4 paged KV requires a supported Hopper or Blackwell GPU; got "
             f"compute capability {major}.{minor}"
@@ -160,16 +160,45 @@ class FA4PagedAttention:
         )
 
         kernel = self._kernel or load_fa4_varlen_func()
+        # FA4's SM120 kernel supports dense variable-length KV, but rejects
+        # page_table. Gather the visible pages on device and pass their actual
+        # lengths through seqused_k. This also works during CUDA graph replay:
+        # the page table and lengths change in place while tensor shapes stay
+        # fixed for the captured bucket.
+        sm120 = q.is_cuda and torch.cuda.get_device_capability(q.device)[0] == 12
+        if sm120:
+            page_slots = (
+                metadata.page_table.clamp_min(0).to(torch.long)[:, :, None]
+                * metadata.page_size
+                + torch.arange(metadata.page_size, device=q.device)[None, None, :]
+            ).reshape(metadata.num_tasks, -1)
+            flat_slots = page_slots.reshape(-1)
+            dense_shape = (
+                metadata.num_tasks,
+                page_slots.shape[1],
+                self.config.num_kv_heads,
+                self.config.head_dim,
+            )
+            flat_shape = (-1, self.config.num_kv_heads, self.config.head_dim)
+            kernel_k = (
+                k_cache.view(flat_shape).index_select(0, flat_slots).view(dense_shape)
+            )
+            kernel_v = (
+                v_cache.view(flat_shape).index_select(0, flat_slots).view(dense_shape)
+            )
+        else:
+            kernel_k, kernel_v = k_cache, v_cache
+
         result = kernel(
             packed_q,
-            k_cache,
-            v_cache,
+            kernel_k,
+            kernel_v,
             cu_seqlens_q=metadata.qo_indptr,
             cu_seqlens_k=None,
             seqused_k=metadata.kv_lens,
             max_seqlen_q=metadata.max_q_len,
             max_seqlen_k=metadata.max_kv_len,
-            page_table=metadata.page_table,
+            page_table=None if sm120 else metadata.page_table,
             softmax_scale=self.config.scale,
             causal=bool(getattr(metadata, "causal", False)),
             return_lse=False,

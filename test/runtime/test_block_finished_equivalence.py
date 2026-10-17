@@ -34,7 +34,7 @@ from fluxserve.backend.execution.decoders import (
     CreditThresholdParallelDecoder,
     ThresholdParallelDecoder,
 )
-from fluxserve.backend.execution.runners.utils import gather_blocks
+from fluxserve.backend.execution.runners.llada.utils import gather_blocks
 
 VOCAB = 32
 MASK_ID = 28

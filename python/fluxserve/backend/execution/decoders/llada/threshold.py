@@ -28,12 +28,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from fluxserve.backend.execution.decoders.base import ParallelDecoder
-from fluxserve.backend.execution.decoders.utils import (
-    add_gumbel_noise,
+from fluxserve.backend.execution.decoders.llada.base import ParallelDecoder
+from fluxserve.backend.execution.decoders.common import (
     broadcast_if_needed,
     normalize_eos_ids,
 )
+from fluxserve.backend.execution.decoders.llada.utils import add_gumbel_noise
 
 
 def get_transfer_index_threshold(

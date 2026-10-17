@@ -19,7 +19,7 @@
 # SOFTWARE.
 
 """
-    Flashinfer block-diffusion runner.
+    LLaDA Flashinfer block-diffusion runner.
 """
 
 import logging
@@ -28,22 +28,24 @@ import time
 
 import torch
 
-from fluxserve.backend.execution.decoders.utils import broadcast_if_needed
-from fluxserve.backend.execution.forward_batch_info import ForwardBatch, ForwardMode
 from fluxserve.backend.engine.request import RequestState
-from fluxserve.backend.execution.runners.block_diffusion import BlockDiffusionRunner
-from fluxserve.backend.execution.runners.utils import (
+from fluxserve.backend.execution.decoders.common import broadcast_if_needed
+from fluxserve.backend.execution.flashinfer_cuda_graph_runner import (
+    FlashInferCudaGraphRunner,
+)
+from fluxserve.backend.execution.forward_batch_info import ForwardBatch, ForwardMode
+from fluxserve.backend.execution.runners.llada.block_diffusion import (
+    BlockDiffusionRunner,
+)
+from fluxserve.backend.execution.runners.llada.utils import (
     align_exp2,
     gather_blocks,
     generated_eos_hit,
     select_batch_sequences_by_mask_number,
 )
+from fluxserve.backend.layers.attention.utils import _require_flashinfer_paged_prefill
 from fluxserve.backend.layers.dp_attention import get_attention_tp_size
 from fluxserve.backend.managers.kvcache import PagedKVCache
-from fluxserve.backend.execution.flashinfer_cuda_graph_runner import (
-    FlashInferCudaGraphRunner,
-)
-from fluxserve.backend.layers.attention.utils import _require_flashinfer_paged_prefill
 
 logger = logging.getLogger(__name__)
 

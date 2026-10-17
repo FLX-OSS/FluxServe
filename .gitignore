@@ -13,6 +13,7 @@
 *.out
 *.pytest_cache
 *.pt
+*.ruff_cache
 
 # diffusion-gemma
 diffusion_gemma_*.md
@@ -21,6 +22,7 @@ flashinfer_gemma.md
 
 # ci
 **/.ci-artifacts
+**/.ci-pyuser
 install.sh
 pr_pipeline.sh
 
@@ -68,6 +70,9 @@ code_reorg.md
 
 # B200 related
 **/b200/
+
+# blackwell rtx pro related
+**/sm120/
 
 
 # agent related

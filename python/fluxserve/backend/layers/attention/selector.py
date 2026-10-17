@@ -19,16 +19,17 @@
 # SOFTWARE.
 
 
-"""Batch-level attention backend selection for diffusion language models.
+"""
+    Batch-level attention backend selection for diffusion language models. (WIP)
 
-The selector is intentionally independent of CUDA and of any one attention
-implementation.  A scheduler or runner describes the work it intends to put
-in one model forward, advertises the backends that are actually available, and
-freezes the resulting :class:`AttentionExecutionPlan` on ``ForwardBatch``.
+    The selector is intentionally independent of CUDA and of any one attention
+    implementation.  A scheduler or runner describes the work it intends to put
+    in one model forward, advertises the backends that are actually available, and
+    freezes the resulting :class:`AttentionExecutionPlan` on ``ForwardBatch``.
 
-Keeping selection outside an individual transformer layer is important: every
-layer must use the same packing and scheduling decision, and POD is useful only
-when the scheduler has deliberately constructed a compatible mixed batch.
+    Keeping selection outside an individual transformer layer is important: every
+    layer must use the same packing and scheduling decision, and POD is useful only
+    when the scheduler has deliberately constructed a compatible mixed batch.
 """
 
 from __future__ import annotations

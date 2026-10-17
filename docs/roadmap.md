@@ -1,16 +1,17 @@
 # Development planning notes
-
+- 
 ### Model Support
-- [x] [Nemotron-Labs-Diffusion](https://huggingface.co/collections/nvidia/nemotron-labs-diffusion)
+- [ ] [Nemotron-Labs-Diffusion](https://huggingface.co/collections/nvidia/nemotron-labs-diffusion) (WIP)
 
 ### Kernel Support
 - [ ] FA4 for Diffusion-Gemma
 
 ### Quantization Support
-- [ ] FP8
+- [ ] FP8 (WIP)
 - [ ] NVFP4
 
 ### Hardware Support
+- [ ] NVIDIA Blackwell Support
 - [ ] AMD GPU ROCm
 
 ### Engine Support

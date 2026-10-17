@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from fluxserve.backend.execution.runners.nemotron_selfspec_paged import (
+from fluxserve.backend.execution.runners.nemotron.fa4 import (
     DONE,
     DRAFT,
     VERIFY,
@@ -27,7 +27,7 @@ _paged_runner_cls = NemotronSelfSpecPagedRunner
 
 @pytest.fixture(autouse=True, params=["fa4", "flashinfer"])
 def paged_backend(request, monkeypatch):
-    from fluxserve.backend.execution.runners.nemotron_flashinfer import (
+    from fluxserve.backend.execution.runners.nemotron.flashinfer import (
         NemotronFlashInferSelfSpecRunner,
     )
     monkeypatch.setattr(

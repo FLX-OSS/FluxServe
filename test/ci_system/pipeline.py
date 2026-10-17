@@ -10,6 +10,7 @@ import re
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -45,6 +46,15 @@ RUNNER_SM_PREFIXES = (
     (("h100", "gh200"), "sm90"),
     (("b200"), "sm100"),
 )
+# Self-hosted pools whose tasks run inside a preconfigured Apptainer image:
+# task label prefix -> (runs-on pool label, matrix runtime).
+APPTAINER_POOLS = {
+    "gh200-": ("fluxserve-gh200", "gh200-apptainer"),
+    "sm120-": ("fluxserve-sm120", "sm120-apptainer"),
+}
+# Runners on a node shared with interactive work. Never pkill by pattern there:
+# it would also kill the developer's own `fluxserve launch` processes.
+SHARED_NODE_RUNNER_PREFIXES = ("sm120-",)
 
 def load_yaml(path: Path) -> Dict[str, Any]:
     with path.open() as handle:
@@ -157,6 +167,13 @@ def resolve_runner_labels(labels: Iterable[str]) -> List[str]:
     return [resolve_runner_label(label) for label in labels]
 
 
+def get_apptainer_pool(label: str) -> tuple[str, str] | None:
+    for prefix, pool in APPTAINER_POOLS.items():
+        if label.startswith(prefix):
+            return pool
+    return None
+
+
 def find_task_files(root: Path) -> List[Path]:
     return sorted(root.rglob("*.yaml"))
 
@@ -190,14 +207,15 @@ def build_matrix(root: Path, repo_root: Path, trigger: str | None) -> Dict[str, 
             # `priority` keys are the labels as written in YAML, so look
             # up before `resolve_runner_label` rewrites b200 to b200v2.
             effective = resolve_priority_for_label(priority, label)
+            pool = get_apptainer_pool(label)
             include.append(
                 {
                     "name": task["name"],
                     "type": task["type"],
                     "config": task["_source_path"],
                     "runner": resolve_runner_label(label),
-                    "runs_on": ["self-hosted", "linux", "fluxserve-gh200"] if label.startswith("gh200-") else resolve_runner_label(label),
-                    "runtime": "gh200-apptainer" if label.startswith("gh200-") else "host",
+                    "runs_on": ["self-hosted", "linux", pool[0]] if pool else resolve_runner_label(label),
+                    "runtime": pool[1] if pool else "host",
                     "priority": effective,
                 }
             )
@@ -339,6 +357,27 @@ def kill_ready_port_listener(
     kill_port_listeners(port, env, cwd, dry_run)
 
 
+def ensure_ready_port_free(ready: Dict[str, Any], dry_run: bool) -> None:
+    """Fail fast if something still listens on the readiness port.
+
+    Otherwise the readiness probe and the eval/perf client would talk to that
+    leftover server instead of the one this task starts, e.g. on images
+    without lsof, where kill_ready_port_listener cannot find it.
+    """
+    port = get_ready_port(ready)
+    if port is None or dry_run:
+        return
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError as exc:
+            raise RuntimeError(
+                f"port {port} is still in use; refusing to start the server "
+                "because the readiness probe would reach the existing listener"
+            ) from exc
+
+
 def setup_runner(
     runner: str,
     env: Dict[str, str],
@@ -349,10 +388,10 @@ def setup_runner(
     local_env = dict(env)
     pgm: Optional[ProcessGroupManager] = None
 
-    # GH200 jobs run inside the preconfigured Apptainer environment supplied
-    # by test/ci_system/env/gh200.sh. Do not mutate the host or install CUDA 13
-    # dependencies from inside that container.
-    if runner.startswith("gh200-"):
+    # GH200 and SM120 jobs run inside the preconfigured Apptainer environment
+    # supplied by test/ci_system/env/{gh200,sm120}.sh. Do not mutate the host or
+    # install CUDA 13 dependencies from inside that container.
+    if get_apptainer_pool(runner):
         return local_env, pgm
 
     if runner.startswith("gb200"):
@@ -1080,7 +1119,11 @@ def write_result(path: str | None, payload: Dict[str, Any]) -> None:
     result_path.write_text(json.dumps(payload, indent=2) + "\n")
 
 
-def poll_readiness(ready: Dict[str, Any], dry_run: bool) -> None:
+def poll_readiness(
+    ready: Dict[str, Any],
+    dry_run: bool,
+    process: subprocess.Popen[str] | None = None,
+) -> None:
     url = str(ready["url"])
     timeout_seconds = int(ready.get("timeout", 600))
     interval_seconds = int(ready.get("interval", 10))
@@ -1092,6 +1135,13 @@ def poll_readiness(ready: Dict[str, Any], dry_run: bool) -> None:
 
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
+        # A server that dies during startup (e.g. an import error) would
+        # otherwise keep us polling until the full readiness timeout.
+        if process is not None and process.poll() is not None:
+            raise RuntimeError(
+                f"server exited (code {process.returncode}) before becoming "
+                f"ready: {url}; see .ci-artifacts/server.log"
+            )
         try:
             with urlopen(url, timeout=5) as response:
                 if response.status == expected_status:
@@ -1203,9 +1253,15 @@ def filter_stage_commands(
 
 
 def cleanup_runner(
-    env: Dict[str, str], cwd: Path, dry_run: bool, pgm: ProcessGroupManager = None
+    env: Dict[str, str],
+    cwd: Path,
+    dry_run: bool,
+    pgm: ProcessGroupManager = None,
+    runner: str = "",
 ) -> None:
-    if pgm is None:
+    # On shared nodes the task's own server is already stopped through its
+    # process group by stop_server(); skip the pattern-based sweep.
+    if pgm is None and not runner.startswith(SHARED_NODE_RUNNER_PREFIXES):
         kill_stale_processes(env, cwd, dry_run)
 
     venv_path = env.get("CI_VENV_PATH")
@@ -1288,6 +1344,7 @@ def execute_task(
                 kill_ready_port_listener(
                     stage_payload["ready"], runner_env, repo_root, dry_run
                 )
+                ensure_ready_port_free(stage_payload["ready"], dry_run)
                 if pgm is not None:
                     server_process = pgm.start(
                         wrap_command_with_log(
@@ -1308,7 +1365,7 @@ def execute_task(
                         repo_root,
                         dry_run,
                     )
-                poll_readiness(stage_payload["ready"], dry_run)
+                poll_readiness(stage_payload["ready"], dry_run, server_process)
                 continue
             for command in stage_payload:
                 if pgm is not None:
@@ -1393,7 +1450,7 @@ def execute_task(
         else:
             stop_server(server_process)
         if not keep_runner_state:
-            cleanup_runner(runner_env, repo_root, dry_run, pgm)
+            cleanup_runner(runner_env, repo_root, dry_run, pgm, runner)
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:

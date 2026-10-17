@@ -23,8 +23,9 @@
 """
 
 
-from fluxserve.backend.execution.decoders.base import ParallelDecoder
-from fluxserve.backend.execution.decoders.utils import broadcast_if_needed, get_num_transfer_tokens, get_transfer_index
+from fluxserve.backend.execution.decoders.llada.base import ParallelDecoder
+from fluxserve.backend.execution.decoders.common import broadcast_if_needed
+from fluxserve.backend.execution.decoders.llada.utils import get_num_transfer_tokens, get_transfer_index
 
 class StaticParallelDecoder(ParallelDecoder):
     """ 

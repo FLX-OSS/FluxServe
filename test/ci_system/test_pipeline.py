@@ -1,19 +1,31 @@
 import re
+import socket
+import subprocess
 import textwrap
+import time
 from pathlib import Path
 
+import pipeline
 import pytest
 from pipeline import (
+    B200_RUNNER_LABEL_ENV,
+    PERF_CSV_HEADER,
     STALE_PROCESS_PATTERNS,
     build_matrix,
     build_step_summary_lines,
     check_eval_score_threshold,
     check_perf_reference,
+    cleanup_runner,
+    ensure_ready_port_free,
     extract_evalscope_score,
     extract_perf_summary_rows,
     format_perf_reference_markdown_table,
     format_perf_reference_table,
+    get_ready_port,
+    load_yaml,
+    poll_readiness,
     resolve_score_threshold_for_runner,
+    setup_runner,
     validate_task,
 )
 
@@ -423,6 +435,98 @@ def test_build_matrix_sort_is_stable_within_priority(tmp_path):
         ("a", "b200-4gpu"),
         ("b", "gb200-4gpu"),
     ]
+
+
+def test_build_matrix_routes_apptainer_pools(tmp_path, monkeypatch):
+    monkeypatch.delenv(B200_RUNNER_LABEL_ENV, raising=False)
+    _write_task_yaml(
+        tmp_path,
+        "a.yaml",
+        _default_body("ut-a", ["gh200-1gpu", "sm120-1gpu", "b200-1gpu"]),
+    )
+    matrix = build_matrix(tmp_path, tmp_path, trigger="per-commit")
+    by_runner = {e["runner"]: e for e in matrix["include"]}
+    assert by_runner["gh200-1gpu"]["runs_on"] == [
+        "self-hosted",
+        "linux",
+        "fluxserve-gh200",
+    ]
+    assert by_runner["gh200-1gpu"]["runtime"] == "gh200-apptainer"
+    assert by_runner["sm120-1gpu"]["runs_on"] == [
+        "self-hosted",
+        "linux",
+        "fluxserve-sm120",
+    ]
+    assert by_runner["sm120-1gpu"]["runtime"] == "sm120-apptainer"
+    assert by_runner["b200-1gpu"]["runs_on"] == "b200-1gpu"
+    assert by_runner["b200-1gpu"]["runtime"] == "host"
+
+
+def test_setup_runner_leaves_sm120_container_untouched(tmp_path, monkeypatch):
+    def fail(*args, **kwargs):
+        raise AssertionError("setup_runner must not run commands for sm120")
+
+    monkeypatch.setattr(pipeline, "shell_run", fail)
+    monkeypatch.setattr(pipeline, "kill_stale_processes", fail)
+    env, pgm = setup_runner("sm120-1gpu", {"A": "1"}, tmp_path, dry_run=False)
+    assert env == {"A": "1"}
+    assert pgm is None
+
+
+def test_cleanup_runner_skips_pattern_kill_on_shared_node(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        pipeline, "kill_stale_processes", lambda *args, **kwargs: calls.append(args)
+    )
+    cleanup_runner({}, tmp_path, False, None, "sm120-1gpu")
+    assert calls == []
+    cleanup_runner({}, tmp_path, False, None, "gh200-1gpu")
+    assert len(calls) == 1
+
+
+def test_ensure_ready_port_free_rejects_existing_listener():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        ready = {"url": f"http://127.0.0.1:{port}/health"}
+        with pytest.raises(RuntimeError, match=f"port {port} is still in use"):
+            ensure_ready_port_free(ready, dry_run=False)
+        ensure_ready_port_free(ready, dry_run=True)
+    ensure_ready_port_free(ready, dry_run=False)
+
+
+def test_poll_readiness_fails_fast_when_server_exits():
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    ready = {"url": "http://127.0.0.1:9/health", "timeout": 600, "interval": 1}
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match=r"exited \(code 0\) before becoming ready"):
+        poll_readiness(ready, dry_run=False, process=proc)
+    assert time.monotonic() - start < 5
+
+
+def test_sm120_tasks_target_sm120_runner():
+    root = Path(__file__).resolve().parents[2]
+    matrix = build_matrix(root / "test/ci/1N1G-SM120", root, trigger="per-commit")
+    entries = matrix["include"]
+    assert sorted(e["name"] for e in entries) == [
+        "eval-diffusion-gemma-gsm8k",
+        "eval-nemotron-diffusion-14b-gsm8k",
+        "perf-diffusion-gemma-gsm8k",
+        "perf-nemotron-diffusion-14b-gsm8k",
+    ]
+    assert all(e["runner"] == "sm120-1gpu" for e in entries)
+    assert all(e["runtime"] == "sm120-apptainer" for e in entries)
+    for entry in entries:
+        task = load_yaml(root / entry["config"])
+        port = get_ready_port(task["server"]["ready"])
+        # Server, readiness probe and client must agree on the (non-8000) port.
+        assert port != 8000
+        assert f"--port {port}" in task["server"]["command"]
+        assert f"127.0.0.1:{port}/" in task[task["type"]]["command"]
+        if task["type"] == "perf":
+            assert PERF_CSV_HEADER in task["perf"]["command"]
 
 
 def _checks_fixture():

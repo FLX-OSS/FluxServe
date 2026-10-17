@@ -29,6 +29,37 @@ import os
 import torch
 from transformers import AutoConfig, AutoTokenizer
 
+from fluxserve.backend.distributed.launch import (
+    destroy_distributed,
+    initialize_distributed,
+    launch_local_workers,
+    reject_external_distributed_launch,
+    should_launch_local_workers,
+)
+from fluxserve.backend.engine import AsyncLLM
+from fluxserve.backend.engine.distributed_executor import DistributedGenerationExecutor
+from fluxserve.backend.engine.executor import BlockDiffusionExecutor
+from fluxserve.backend.engine.scheduler_adapter import PagedSchedulerAdapter
+from fluxserve.backend.entrypoints.http_server import run
+from fluxserve.backend.execution.decoders.common import resolve_checkpoint_eos_ids
+from fluxserve.backend.execution.forward_batch_info import RunnerConfig
+from fluxserve.backend.execution.runners import (
+    BlockDiffusionRunner,
+    DiffusionGemmaFlashInferRunner,
+    DiffusionGemmaRunner,
+    FA4DiffusionRunner,
+    FlashInferDiffusionRunner,
+    NemotronSelfSpecPagedRunner,
+    NemotronSelfSpecRunner,
+    get_nemotron_runner,
+)
+from fluxserve.backend.layers.dp_attention import initialize_dp_attention
+from fluxserve.backend.layers.moe.utils import initialize_moe_config
+from fluxserve.backend.utils.runtime_utils import (
+    profile_paged_kv_pages,
+    require_nvidia_cuda,
+)
+from fluxserve.backend.utils.server_args import ServerArgs
 from fluxserve.cli.bench import add_bench_subparser
 from fluxserve.cli.bench_offline import (
     add_bench_offline_subparser,
@@ -44,36 +75,12 @@ from fluxserve.cli.common import (
     reject_unsupported_quantization,
     set_process_title,
 )
-from fluxserve.cli.common import check_block_routing_alignment as _check_block_routing_alignment
-from fluxserve.cli.common import reject_unsupported_quantization as _reject_unsupported_quantization
-from fluxserve.backend.distributed.launch import (
-    destroy_distributed,
-    initialize_distributed,
-    launch_local_workers,
-    reject_external_distributed_launch,
-    should_launch_local_workers,
+from fluxserve.cli.common import (
+    check_block_routing_alignment as _check_block_routing_alignment,
 )
-from fluxserve.backend.engine import AsyncLLM
-from fluxserve.backend.engine.distributed_executor import DistributedGenerationExecutor
-from fluxserve.backend.engine.executor import BlockDiffusionExecutor
-from fluxserve.backend.engine.scheduler_adapter import PagedSchedulerAdapter
-from fluxserve.backend.entrypoints.http_server import run
-from fluxserve.backend.execution.decoders.utils import resolve_checkpoint_eos_ids
-from fluxserve.backend.execution.forward_batch_info import RunnerConfig
-from fluxserve.backend.execution.runners import (
-    BlockDiffusionRunner,
-    DiffusionGemmaRunner,
-    FA4DiffusionRunner,
-    FlashInferDiffusionRunner,
-    NemotronSelfSpecPagedRunner,
-    NemotronSelfSpecRunner,
-    get_nemotron_runner,
+from fluxserve.cli.common import (
+    reject_unsupported_quantization as _reject_unsupported_quantization,
 )
-from fluxserve.backend.layers.dp_attention import initialize_dp_attention
-from fluxserve.backend.layers.moe.utils import initialize_moe_config
-from fluxserve.backend.utils.runtime_utils import require_nvidia_cuda
-from fluxserve.backend.utils.runtime_utils import profile_paged_kv_pages
-from fluxserve.backend.utils.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
 
@@ -459,7 +466,11 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             )
             runner_cls = get_nemotron_runner(args.attention_backend, args.parallel_decoding)
         elif is_diffusion_gemma:
-            runner_cls = DiffusionGemmaRunner
+            runner_cls = (
+                DiffusionGemmaFlashInferRunner
+                if args.attention_backend == "flashinfer"
+                else DiffusionGemmaRunner
+            )
         else:
             if args.attention_backend == "flashinfer":
                 runner_cls = FlashInferDiffusionRunner

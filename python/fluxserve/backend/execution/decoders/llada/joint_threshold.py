@@ -27,8 +27,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from fluxserve.backend.execution.decoders.base import ParallelDecoder
-from fluxserve.backend.execution.decoders.utils import (
+from fluxserve.backend.execution.decoders.llada.base import ParallelDecoder
+from fluxserve.backend.execution.decoders.common import (
     broadcast_if_needed,
     normalize_eos_ids,
 )

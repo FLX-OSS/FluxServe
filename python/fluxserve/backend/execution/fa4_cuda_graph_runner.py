@@ -19,7 +19,7 @@
 # SOFTWARE.
 
 """
-    FA4 graph runner.
+    FA4 CUDA graph runner.
 """
 
 from __future__ import annotations
