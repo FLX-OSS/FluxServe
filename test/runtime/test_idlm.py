@@ -39,6 +39,12 @@ EOS_ID = 30
 MASK_ID = 31
 
 
+@pytest.fixture(autouse=True)
+def native_silu_on_cpu(monkeypatch):
+    """The tiny models run on CPU; the fused kernel only takes CUDA tensors."""
+    monkeypatch.setattr("fluxserve.backend.layers.activation._is_cuda", False)
+
+
 def peaked(tokens, vocab=VOCAB, high=12.0):
     out = torch.zeros(len(tokens), vocab)
     for row, token in enumerate(tokens):
