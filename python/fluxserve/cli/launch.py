@@ -51,6 +51,7 @@ from fluxserve.backend.execution.runners import (
     FlashInferDiffusionRunner,
     NemotronSelfSpecPagedRunner,
     NemotronSelfSpecRunner,
+    get_idlm_runner,
     get_nemotron_runner,
 )
 from fluxserve.backend.layers.dp_attention import initialize_dp_attention
@@ -63,7 +64,9 @@ from fluxserve.backend.utils.server_args import ServerArgs
 from fluxserve.cli.bench import add_bench_subparser
 from fluxserve.cli.bench_offline import (
     add_bench_offline_subparser,
+    apply_idlm_runner_config,
     apply_nemotron_runner_config,
+    normalize_idlm_args,
     normalize_nemotron_args,
 )
 from fluxserve.cli.common import (
@@ -162,11 +165,27 @@ def build_parser() -> argparse.ArgumentParser:
         default="paged",
     )
     launch.add_argument("--page-size", type=int, default=None)
-    launch.add_argument("--parallel-decoding", default="threshold")
+    launch.add_argument("--parallel-decoding", default="threshold", action=StoreExplicit)
+    launch.set_defaults(parallel_decoding_explicit=False)
     # Nemotron-Labs-Diffusion sampling and thinking budget.
     launch.add_argument("--max-thinking-tokens", type=int, default=None)
-    launch.add_argument("--temperature", type=float, default=0.0, help="Nemotron default sampling temperature")
-    launch.add_argument("--seed", type=int, default=None, help="Nemotron default request seed")
+    launch.add_argument("--temperature", type=float, default=0.0, help="Nemotron / I-DLM default sampling temperature")
+    launch.add_argument("--seed", type=int, default=None, help="Nemotron / I-DLM default request seed")
+    # I-DLM Introspective Strided Decoding.
+    launch.add_argument("--top-k", type=int, default=-1, help="I-DLM default top-k (-1 disables)")
+    launch.add_argument("--top-p", type=float, default=1.0, help="I-DLM default top-p")
+    launch.add_argument(
+        "--idlm-gen-block-size",
+        type=int,
+        default=None,
+        help="I-DLM ISD stride N: at most N tokens per forward of width 2N-1 (default 4).",
+    )
+    launch.add_argument(
+        "--idlm-lora",
+        default=None,
+        help="I-DLM gated LoRA adapter (R-ISD), e.g. yifanyu/I-DLM-8B-lora-r128 "
+        "on --model Qwen/Qwen3-8B. Output is lossless w.r.t. the base model.",
+    )
     launch.add_argument("--nemotron-prefill-chunk-size", type=int, default=1024)
     launch.add_argument("--end-think-token-id", type=int, default=None)
     launch.add_argument("--threshold", type=float, default=0.9)
@@ -304,8 +323,11 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
     )
     is_diffusion_gemma = normalize_diffusion_gemma_serve_args(args, model_config)
     is_nemotron = normalize_nemotron_args(args, model_config)
-    apply_template = bool(args.apply_template or is_diffusion_gemma or is_nemotron)
-    if (is_diffusion_gemma or is_nemotron) and not args.apply_template:
+    is_idlm = normalize_idlm_args(args, model_config)
+    apply_template = bool(
+        args.apply_template or is_diffusion_gemma or is_nemotron or is_idlm
+    )
+    if (is_diffusion_gemma or is_nemotron or is_idlm) and not args.apply_template:
         logger.info("Chat requests use the checkpoint chat template.")
     if is_diffusion_gemma and args.scheduler_policy == "paged":
         raise RuntimeError(
@@ -465,6 +487,20 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
                 args.block_length if args.parallel_decoding == "self_speculation" else 0
             )
             runner_cls = get_nemotron_runner(args.attention_backend, args.parallel_decoding)
+        elif is_idlm:
+            apply_idlm_runner_config(runner_config, model_config, args)
+            server_args.sampling_defaults = {
+                "temperature": args.temperature, "seed": args.seed,
+                "top_k": args.top_k, "top_p": args.top_p,
+            }
+            server_args.sampling_family = "idlm"
+            # Two pages past the prefix are reserved at every step (one from
+            # prefill, one from the first decode); keeping them inside
+            # max_model_len keeps the last reservation inside the page table.
+            server_args.speculative_context_margin = 2 * int(
+                args.page_size or args.block_length
+            )
+            runner_cls = get_idlm_runner(args.attention_backend)
         elif is_diffusion_gemma:
             runner_cls = (
                 DiffusionGemmaFlashInferRunner
@@ -488,6 +524,8 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             runner, (NemotronSelfSpecRunner, NemotronSelfSpecPagedRunner)
         ):
             runner.load_draft_adapter()
+        if is_idlm and args.idlm_lora:
+            runner.load_lora(args.idlm_lora)
         if args.scheduler_policy == "paged" and int(server_args.scheduler_num_device_pages) <= 0:
             server_args.scheduler_num_device_pages = profile_paged_kv_pages(
                 runner=runner, page_size=int(args.page_size or args.block_length),
@@ -506,7 +544,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
                     page_size=page_size,
                     num_device_pages=num_device_pages,
                     max_model_len=args.max_model_len,
-                    full_prompt_prefill=is_nemotron,
+                    full_prompt_prefill=is_nemotron or is_idlm,
                 )
             engine = AsyncLLM(
                 server_args=server_args,

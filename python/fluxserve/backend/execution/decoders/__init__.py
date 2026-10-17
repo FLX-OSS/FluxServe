@@ -26,6 +26,7 @@ from fluxserve.backend.execution.decoders.diffusion_gemma import (
     DiffusionGemmaDecoder,
     DiffusionGemmaSamplingConfig,
 )
+from fluxserve.backend.execution.decoders.idlm import ISDDecoder, ISDSampling
 from fluxserve.backend.execution.decoders.llada import load_decoder
 from fluxserve.backend.execution.decoders.llada.base import ParallelDecoder
 from fluxserve.backend.execution.decoders.llada.hierarchy import HierarchyDecoder
@@ -47,6 +48,8 @@ __all__ = [
     "DiffusionGemmaDecoder",
     "DiffusionGemmaSamplingConfig",
     "HierarchyDecoder",
+    "ISDDecoder",
+    "ISDSampling",
     "JointThresholdDecoder",
     "LevenshteinJointDecoder",
     "NemotronSampling",

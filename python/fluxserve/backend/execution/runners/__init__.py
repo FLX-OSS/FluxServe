@@ -25,6 +25,8 @@ from fluxserve.backend.execution.runners.diffusion_gemma.block_diffusion import 
 from fluxserve.backend.execution.runners.diffusion_gemma.flashinfer import (
     DiffusionGemmaFlashInferRunner,
 )
+from fluxserve.backend.execution.runners.idlm.fa4 import IDLMPagedRunner
+from fluxserve.backend.execution.runners.idlm.flashinfer import IDLMFlashInferRunner
 from fluxserve.backend.execution.runners.llada.fa4 import FA4DiffusionRunner
 from fluxserve.backend.execution.runners.llada.flashinfer import (
     FlashInferDiffusionRunner,
@@ -64,17 +66,30 @@ def get_nemotron_runner(backend: str, decoding: str):
         ) from exc
 
 
+def get_idlm_runner(backend: str):
+    runners = {"fa4": IDLMPagedRunner, "flashinfer": IDLMFlashInferRunner}
+    try:
+        return runners[backend]
+    except KeyError as exc:
+        raise ValueError(
+            f"I-DLM serves on paged 'fa4' or 'flashinfer'; got {backend!r}"
+        ) from exc
+
+
 __all__ = [
     "BlockDiffusionRunner",
     "DiffusionGemmaFlashInferRunner",
     "DiffusionGemmaRunner",
     "FA4DiffusionRunner",
     "FlashInferDiffusionRunner",
+    "IDLMFlashInferRunner",
+    "IDLMPagedRunner",
     "NemotronDiffusionRunner",
     "NemotronFA4DiffusionRunner",
     "NemotronFlashInferDiffusionRunner",
     "NemotronFlashInferSelfSpecRunner",
     "NemotronSelfSpecPagedRunner",
     "NemotronSelfSpecRunner",
+    "get_idlm_runner",
     "get_nemotron_runner",
 ]

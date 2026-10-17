@@ -236,6 +236,11 @@ class FA4CudaGraphRunner:
 # Self-speculation reuses these two forward shapes for draft and verify. Its
 # capture context selects draft-adapter versus base weights; variable acceptance
 # and rollback remain outside the graph and refresh positions on the next replay.
+#
+# I-DLM's ISD step is one causal forward of ``2N - 1`` tokens, narrower than a
+# page. A runner whose forward width is not its block length says so with
+# ``graph_input_length``, and captures only the variants it replays; slots are
+# always addressed by the cache's page size.
 
 NEMOTRON_DENOISE = False
 NEMOTRON_COMMIT = True
@@ -244,7 +249,8 @@ NEMOTRON_COMMIT = True
 class NemotronCudaGraphRunner:
     """Capture denoise and commit graphs per batch bucket, on FA4 or FlashInfer."""
 
-    def __init__(self, batch_sizes, backend: str = "fa4"):
+    def __init__(self, batch_sizes, backend: str = "fa4",
+                 variants=(NEMOTRON_DENOISE, NEMOTRON_COMMIT)):
         self.batch_sizes = tuple(sorted(set(map(int, batch_sizes))))
         if not self.batch_sizes or self.batch_sizes[0] < 1:
             raise ValueError("Nemotron decode graphs need positive batch buckets")
@@ -253,6 +259,9 @@ class NemotronCudaGraphRunner:
                 f"Nemotron decode graphs support 'fa4' or 'flashinfer', got {backend!r}"
             )
         self.backend = backend
+        self.variants = tuple(bool(causal) for causal in variants)
+        if not self.variants:
+            raise ValueError("Nemotron decode graphs need at least one variant")
         # Keyed by (batch_size, causal).
         self.entries: dict[tuple[int, bool], SimpleNamespace] = {}
         self.cache = None
@@ -284,7 +293,7 @@ class NemotronCudaGraphRunner:
         started = time.perf_counter()
         before = torch.cuda.memory_allocated(cache.device)
         for batch_size in reversed(self.batch_sizes):
-            for causal in (NEMOTRON_DENOISE, NEMOTRON_COMMIT):
+            for causal in self.variants:
                 key = (batch_size, causal)
                 if key not in self.entries:
                     # Self-speculation drafts with fused LoRA weights and
@@ -297,13 +306,20 @@ class NemotronCudaGraphRunner:
         self.capture_time_s += time.perf_counter() - started
         self.capture_memory_bytes = torch.cuda.memory_allocated(cache.device) - before
 
+    @staticmethod
+    def input_length(runner) -> int:
+        """Tokens per row in one captured forward."""
+        return int(getattr(runner, "graph_input_length", None) or runner.block_length)
+
     def _capture(self, runner, batch_size: int, causal: bool):
         cache = self.cache
-        length = int(runner.block_length)
-        if cache.num_dummy_pages < batch_size or cache.page_size != length:
+        length = self.input_length(runner)
+        page = int(cache.page_size)
+        if cache.num_dummy_pages < batch_size or length > page:
             raise ValueError(
-                "Nemotron decode graphs need one reserved block-sized page per "
-                "bucket row and page_size == block_length"
+                "Nemotron decode graphs need one reserved page per bucket row "
+                f"and a forward no wider than a page; got width {length}, "
+                f"page_size {page}"
             )
         device = cache.device
         ids = torch.full(
@@ -317,7 +333,7 @@ class NemotronCudaGraphRunner:
         )
         table = dummy_pages[:, None].expand(-1, cache.pages_per_sequence).contiguous()
         slots = (
-            dummy_pages.long()[:, None] * length
+            dummy_pages.long()[:, None] * page
             + torch.arange(length, device=device)
         ).flatten()
         metadata = PagedAttentionMetadata(
@@ -325,7 +341,7 @@ class NemotronCudaGraphRunner:
             batch_size=batch_size,
             max_input_len=length,
             block_length=length,
-            page_size=length,
+            page_size=page,
             q_lens_cpu=(length,) * batch_size,
             q_offsets_cpu=(0,) * batch_size,
             q_token_indices=torch.arange(batch_size * length, device=device),
@@ -429,7 +445,7 @@ class NemotronCudaGraphRunner:
                    causal: bool) -> bool:
         if not self.entries or self.cache is not runner.past_key_values:
             return False
-        if length != int(runner.block_length) or batch_size < 1:
+        if length != self.input_length(runner) or batch_size < 1:
             return False
         if batch_size > self.batch_sizes[-1]:
             return False
@@ -444,7 +460,8 @@ class NemotronCudaGraphRunner:
         actual = int(input_ids.shape[0])
         size = self.bucket_for(actual)
         entry = self.entries[(size, causal)]
-        length = int(runner.block_length)
+        length = self.input_length(runner)
+        page = int(self.cache.page_size)
         if input_ids.shape != (actual, length) or position_ids.shape != input_ids.shape:
             raise ValueError("Nemotron graphs expect one full block per row")
 
@@ -458,9 +475,9 @@ class NemotronCudaGraphRunner:
         # Absolute position over page_size gives the page even when a block
         # straddles two pages, which it does whenever the prompt length is not
         # a multiple of the block length.
-        pages = metadata.page_table[:actual].gather(1, position_ids // length)
+        pages = metadata.page_table[:actual].gather(1, position_ids // page)
         metadata.slot_mapping.view(size, length)[:actual].copy_(
-            pages.long() * length + position_ids % length
+            pages.long() * page + position_ids % page
         )
         if actual < size:
             # Padding rows must not alias a live request's pages: reset any row
@@ -471,7 +488,7 @@ class NemotronCudaGraphRunner:
             metadata.page_table[actual:].copy_(entry.dummy_pages[actual:, None])
             metadata.kv_lens[actual:].fill_(length)
             metadata.slot_mapping.view(size, length)[actual:].copy_(
-                entry.dummy_pages[actual:, None].long() * length
+                entry.dummy_pages[actual:, None].long() * page
                 + torch.arange(length, device=device)
             )
         if entry.state is not None:

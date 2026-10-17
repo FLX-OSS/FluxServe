@@ -86,7 +86,13 @@ class BlockDiffusionExecutor:
         # generated_tokens / num_forwards is the tokens-per-forward of a
         # diffusion decode, which is what a throughput comparison between two
         # diffusion models actually turns on.
-        return {"num_forwards": int(getattr(self.runner, "num_forwards", 0))}
+        stats = {"num_forwards": int(getattr(self.runner, "num_forwards", 0))}
+        # Runners whose steps commit a variable number of tokens add their own
+        # per-request accounting.
+        decode_stats = getattr(self.runner, "decode_stats", None)
+        if decode_stats is not None:
+            stats.update(decode_stats())
+        return stats
 
     async def execute_batch(self, requests: list[RequestState]) -> list[ExecutionResult]:
         if not requests:
