@@ -99,6 +99,10 @@ which conflict with torch's pins. pip's resolver can't express either, so the `s
 with `--no-deps`. Afterwards pip reports these conflicts, and `pip check` lists the same FlashInfer and torch
 conflicts it lists inside the image.
 
+CI lints the profiles on every pull request that changes them. The `ci:run-pypi` label builds both venvs on the GPU
+runners with `test/ci_system/pypi/verify_venv.sh`, which you can also run yourself in a GPU allocation, for example
+`bash test/ci_system/pypi/verify_venv.sh sm120 --smoke`.
+
 At runtime, mirror the image environment:
 
 ```bash
