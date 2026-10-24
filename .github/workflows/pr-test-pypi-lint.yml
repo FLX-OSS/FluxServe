@@ -1,0 +1,45 @@
+name: PyPI Profile Lint
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "pyproject_*.toml"
+      - "setup.py"
+      - "python/fluxserve/__init__.py"
+      - "docker/Dockerfile.flux-sm120"
+      - "test/ci_system/pypi/**"
+      - ".github/workflows/pr-test-pypi*.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint install profiles
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install check dependencies
+        run: python -m pip install "setuptools>=77,<82" "packaging==26.3" "pytest==9.1.1" "pyyaml==6.0.3"
+
+      - name: Unit tests
+        run: python -m pytest -q -p no:cacheprovider test/ci_system/pypi
+
+      # Exact pins, setuptools metadata, recipe ARGs, a cp312 manylinux_2_34 wheel for every pin, and every git
+      # commit fetchable. Checks against the images run in pr-test-pypi.yml on the GPU runners.
+      - name: Lint profiles
+        run: python test/ci_system/pypi/profile_checks.py lint --online pyproject_*.toml

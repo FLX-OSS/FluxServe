@@ -15,15 +15,15 @@ PARALLELS=(1 2 4 8 16)
 SELECTED_CONFIG=
 SELECTED_MODEL=
 TOKENIZER_PATH=
-SELECTED_DATASET=gsm8k.jsonl
-SELECTED_BENCHMARK=gsm8k
+SELECTED_DATASET=bigcodebench.jsonl
+SELECTED_BENCHMARK=bigcodebench
 while (( $# )); do
     case "$1" in
         --help|-h)
             echo "Usage: bash $0 [--config NAME --model MODEL] [--output-dir DIR]"
             echo 'Options: --dataset PATH_RELATIVE_TO_DATA --benchmark NAME --num 64,128,256,512,1024 --parallel 1,2,4,8,16'
             echo 'Tokenizer: --tokenizer-path LOCAL_DIR (default: resolve model from Hugging Face cache)'
-            echo 'Default: original experiment matrix. --config selects a single experiment (GSM8K by default).'
+            echo 'Default: original experiment matrix. --config selects a single experiment (bigcodebench by default).'
             exit 0 ;;
         --config|--model|--tokenizer-path|--output-dir|--dataset|--benchmark|--num|--parallel)
             (( $# >= 2 )) && [[ -n "$2" && "$2" != --* ]] || { echo "Missing value for $1" >&2; exit 2; }
@@ -50,7 +50,7 @@ if [[ -n "$SELECTED_CONFIG" || -n "$SELECTED_MODEL" ]]; then
     [[ "$SELECTED_BENCHMARK" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'Invalid benchmark name' >&2; exit 2; }
     [[ -f "$SCRIPT_DIR/configs/$SELECTED_CONFIG.sh" ]] || { echo 'Config not found' >&2; exit 2; }
     [[ -f "$REPO_ROOT/data/$SELECTED_DATASET" ]] || { echo 'Dataset not found' >&2; exit 2; }
-elif [[ "$SELECTED_DATASET" != gsm8k.jsonl || "$SELECTED_BENCHMARK" != gsm8k ]]; then
+elif [[ "$SELECTED_DATASET" != bigcodebench.jsonl || "$SELECTED_BENCHMARK" != bigcodebench ]]; then
     echo '--dataset and --benchmark require --config and --model' >&2; exit 2
 fi
 
@@ -186,9 +186,9 @@ if [[ -n "$SELECTED_CONFIG" ]]; then
 fi
 
 
-run_perf gsm8k tp1_nemotron_3b nvidia/Nemotron-Labs-Diffusion-3B gsm8k.jsonl
-run_perf gsm8k tp1_nemotron_8b nvidia/Nemotron-Labs-Diffusion-8B gsm8k.jsonl
-run_perf gsm8k tp1_nemotron_14b nvidia/Nemotron-Labs-Diffusion-14B gsm8k.jsonl
+# run_perf bigcodebench tp1_nemotron_3b_ss nvidia/Nemotron-Labs-Diffusion-3B bigcodebench.jsonl
+# run_perf bigcodebench tp1_nemotron_8b_ss nvidia/Nemotron-Labs-Diffusion-8B bigcodebench.jsonl
+run_perf bigcodebench tp1_nemotron_14b_ss nvidia/Nemotron-Labs-Diffusion-14B bigcodebench.jsonl
 
 
 exit 0

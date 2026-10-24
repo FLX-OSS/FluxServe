@@ -1,0 +1,137 @@
+name: PR Tests PyPI Install
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      profiles:
+        description: Install profiles to build
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - sm120
+          - sm100
+concurrency:
+  # Concurrency groups are repo-wide, so this needs its own prefix. `labeled`
+  # events for other labels get a unique group so they never cancel a running job.
+  group: pr-test-pypi-${{ github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:run-pypi' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  plan:
+    # The self-hosted runners run as an HPC account, and a label survives later
+    # pushes: only build pull requests from this repository.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       (
+         (github.event.action == 'labeled' && github.event.label.name == 'ci:run-pypi') ||
+         (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ci:run-pypi'))
+       ))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Lint profiles before taking a GPU runner
+        run: |
+          python -m pip install "setuptools>=77,<82" "packaging==26.3"
+          python test/ci_system/pypi/profile_checks.py lint pyproject_*.toml
+
+      - name: Build profile matrix
+        id: matrix
+        env:
+          PROFILES: ${{ inputs.profiles || 'all' }}
+          # JSON runs-on values; override with repository variables, e.g. for a b200v2 pool.
+          RUNS_ON_SM120: ${{ vars.FLUXSERVE_PYPI_RUNS_ON_SM120 || '["self-hosted", "linux", "fluxserve-sm120"]' }}
+          RUNS_ON_SM100: ${{ vars.FLUXSERVE_PYPI_RUNS_ON_SM100 || '"b200-1gpu"' }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+
+          runs_on = {
+              "sm120": json.loads(os.environ["RUNS_ON_SM120"]),
+              "sm100": json.loads(os.environ["RUNS_ON_SM100"]),
+          }
+          wanted = list(runs_on) if os.environ["PROFILES"] == "all" else [os.environ["PROFILES"]]
+          include = [{"profile": profile, "runs_on": runs_on[profile]} for profile in wanted]
+          print("matrix=" + json.dumps({"include": include}))
+          PY
+
+  venv:
+    needs: plan
+    if: needs.plan.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: ${{ matrix.profile }} venv
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 150
+    env:
+      RUN_DIR: ${{ github.workspace }}/pypi-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          path: pypi-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}/src
+
+      - name: Build the venv and check it against the image
+        run: |
+          # verify_venv.sh keeps the venv, logs and caches under WORK and runs
+          # the serving smoke test on port 18000.
+          WORK="$RUN_DIR/work" bash "$RUN_DIR/src/test/ci_system/pypi/verify_venv.sh" \
+            "${{ matrix.profile }}" --in-place --smoke
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-test-pypi-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RUN_DIR }}/work/artifacts/
+          if-no-files-found: warn
+
+      - name: Clean up
+        if: always()
+        run: |
+          # A cancelled smoke test can leave its server running; stop it by its
+          # process group, and only if it is still that server.
+          pgid_file="$RUN_DIR/work/artifacts/server.pgid"
+          if [[ -f "$pgid_file" ]]; then
+            pgid=$(cat "$pgid_file")
+            if tr '\0' ' ' < "/proc/$pgid/cmdline" 2>/dev/null | grep -q 'fluxserve launch'; then
+              kill -TERM -- "-$pgid" || true
+              sleep 10
+              kill -KILL -- "-$pgid" 2>/dev/null || true
+            fi
+          fi
+          rm -rf "$RUN_DIR"
+
+  finish:
+    if: always() && needs.plan.result != 'skipped'
+    needs:
+      - plan
+      - venv
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report aggregate status
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          VENV_RESULT: ${{ needs.venv.result }}
+        run: |
+          echo "plan=$PLAN_RESULT venv=$VENV_RESULT"
+          [[ "$PLAN_RESULT" == success && "$VENV_RESULT" == success ]]

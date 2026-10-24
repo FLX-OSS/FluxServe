@@ -71,8 +71,6 @@ from fluxserve.backend.distributed import (
     parallel_state,
     tensor_model_parallel_all_reduce,
 )
-from fluxserve.backend.eplb.expert_location import ModelConfigForExpertLocation
-from fluxserve.backend.eplb.expert_location_dispatch import ExpertLocationDispatchInfo
 from fluxserve.backend.layers.activation import SiluAndMul
 from fluxserve.backend.layers.communicator import (
     LayerCommunicator,
@@ -600,9 +598,6 @@ class LLaDA2SparseMoeBlock(nn.Module):
                 hidden_states,
                 router_logits,
                 num_token_non_padded=forward_batch.num_token_non_padded,
-                expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
-                    layer_id=self.layer_id,
-                ),
             )
         else:
             topk_idx = torch.full(
@@ -1011,7 +1006,6 @@ class LLaDA2Model(nn.Module):
 
         all_present_key_values = []
         for i in range(self.start_layer, self.end_layer):
-            # with get_global_expert_distribution_recorder().with_current_layer(i):
             layer = self.layers[i]
             hidden_states, residual, present_key_values = layer(
                 positions,
@@ -1316,15 +1310,6 @@ class LLaDA2LLM(nn.Module):
     def init_h2e_module(self):
         self.h2e = H2Embed(self.model.full_word_embeddings, tau=1.0)
 
-    @classmethod
-    def get_model_config_for_expert_location(cls, config):
-        num_groups = getattr(config, "n_group", 0)
-        return ModelConfigForExpertLocation(
-            num_layers=config.num_hidden_layers,
-            num_logical_experts=config.num_experts,
-            num_groups=None if num_groups == 0 else num_groups,
-        )
-        
     def after_loading(self):
         for name, module in self.named_modules():
             if hasattr(module, "quant_method") and module.quant_method is not None and hasattr(module.quant_method, "process_weights_after_loading"):
