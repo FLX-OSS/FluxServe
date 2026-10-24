@@ -32,7 +32,6 @@ from fluxserve.backend.distributed import (
     get_moe_tensor_parallel_world_size,
     tensor_model_parallel_all_reduce,
 )
-from fluxserve.backend.eplb.expert_location import get_global_expert_location_metadata
 from fluxserve.backend.layers.moe import (
     MoeRunnerConfig,
     get_moe_runner_backend,
@@ -434,36 +433,13 @@ class FusedMoE(torch.nn.Module):
         shard_id: str,
         expert_id: Optional[int],
     ) -> None:
-
-        global_expert_location_metadata = get_global_expert_location_metadata()
-        if global_expert_location_metadata is None:
-            self._weight_loader_impl(
-                param=param,
-                loaded_weight=loaded_weight,
-                weight_name=weight_name,
-                shard_id=shard_id,
-                expert_id=expert_id,
-            )
-            return
-
-        if expert_id >= self.num_experts - self.num_fused_shared_experts:
-            # This is a shared expert.
-            physical_expert_ids = [expert_id]
-        else:
-            physical_expert_ids = (
-                global_expert_location_metadata.logical_to_all_physical(
-                    self.layer_id, expert_id
-                )
-            )
-
-        for physical_expert_id in physical_expert_ids:
-            self._weight_loader_physical(
-                param=param,
-                loaded_weight=loaded_weight,
-                weight_name=weight_name,
-                shard_id=shard_id,
-                expert_id=physical_expert_id,
-            )
+        self._weight_loader_physical(
+            param=param,
+            loaded_weight=loaded_weight,
+            weight_name=weight_name,
+            shard_id=shard_id,
+            expert_id=expert_id,
+        )
 
     def _weight_loader_physical(
         self,

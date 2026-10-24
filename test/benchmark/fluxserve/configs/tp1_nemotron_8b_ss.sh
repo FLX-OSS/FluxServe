@@ -16,6 +16,7 @@ exec fluxserve launch \
     --block-length 32 \
     --page-size 32 \
     --parallel-decoding self_speculation \
+    --max-thinking-tokens 1024 \
     --threshold 0.9 \
     --attention-backend fa4 \
     --kv-cache-layout paged \
