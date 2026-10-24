@@ -13,6 +13,7 @@ import argparse
 import importlib
 import importlib.metadata as metadata
 import json
+import os
 import pkgutil
 import re
 import shutil
@@ -562,7 +563,16 @@ def import_problems() -> List[str]:
     return problems
 
 
+def annotation(title: str, message: str) -> str:
+    """A GitHub Actions error annotation, escaped per the workflow-command rules."""
+    title = title.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A").replace(":", "%3A").replace(",", "%2C")
+    message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return f"::error title={title}::{message}"
+
+
 def run_checks(checks: List[Tuple[str, Callable[[], List[str]]]]) -> int:
+    # In CI, failures also become annotations: the check page shows them, while the job log needs admin rights.
+    annotate = os.environ.get("GITHUB_ACTIONS") == "true"
     failed = 0
     for name, check in checks:
         print(f"== {name}", flush=True)
@@ -572,6 +582,8 @@ def run_checks(checks: List[Tuple[str, Callable[[], List[str]]]]) -> int:
             problems = [f"{type(exc).__name__}: {exc}"]
         for problem in problems:
             print(f"  {problem}")
+        if annotate and problems:
+            print(annotation(name, "\n".join(problems[:20])), flush=True)
         print(f"{'FAIL' if problems else 'PASS'}: {name}", flush=True)
         failed += bool(problems)
     return 1 if failed else 0

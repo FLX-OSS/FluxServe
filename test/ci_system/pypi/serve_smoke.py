@@ -26,6 +26,28 @@ def served_model(command: str) -> str:
     return argv[argv.index("--model") + 1]
 
 
+def completion_problem(status: int, payload: dict):
+    """Return (answer text, problem or None) for a /v1/chat/completions response."""
+    message = payload["choices"][0]["message"]
+    text = (message.get("content") or message.get("reasoning_content") or "").strip()
+    # fluxserve doesn't report `usage`; check it only when a server does.
+    tokens = (payload.get("usage") or {}).get("completion_tokens")
+    if status != 200:
+        return text, f"HTTP {status}"
+    if not text:
+        return text, "the completion is empty"
+    if tokens is not None and tokens <= 0:
+        return text, f"the server reported {tokens} completion tokens"
+    return text, None
+
+
+def annotate(message: str) -> None:
+    """Surface a failure on the GitHub check page, where the job log needs admin rights to download."""
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        data = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::error title=serving smoke test::{data}", flush=True)
+
+
 def tail(path: Path, lines: int = 80) -> str:
     if not path.exists():
         return "(no server log)"
@@ -66,16 +88,15 @@ def main(argv=None) -> int:
             status = response.status
             payload = json.load(response)
         (args.out_dir / "smoke-response.json").write_text(json.dumps(payload, indent=1))
-        message = payload["choices"][0]["message"]
-        text = (message.get("content") or message.get("reasoning_content") or "").strip()
-        tokens = payload.get("usage", {}).get("completion_tokens", 0)
-        print(f"HTTP {status}, {tokens} completion tokens: {text[:200]!r}")
-        if status != 200 or not text or tokens <= 0:
-            raise RuntimeError("the server returned an empty or failed completion")
+        text, problem = completion_problem(status, payload)
+        print(f"HTTP {status}: {text[:200]!r}")
+        if problem:
+            raise RuntimeError(problem)
         if "84" not in text:
             print("note: the answer does not contain 84; serving works, but check the output")
         return 0
     except Exception as exc:
+        annotate(f"{exc}")
         print(f"smoke test failed: {exc}\n--- last lines of {log}:\n{tail(log)}", file=sys.stderr)
         return 1
     finally:

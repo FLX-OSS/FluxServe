@@ -61,11 +61,23 @@ PIP_CACHE="${FLUXSERVE_PYPI_PIP_CACHE:-/tmp/${USER_NAME}-fluxserve-pypi/pip-cach
 EVAL_SPEC="${EVAL_SPEC:-test/ci/1N1G-SM120/eval/nemotron-diffusion-14b-evalscope-gsm8k.yaml}"
 PT_INDEX=https://download.pytorch.org/whl/cu130
 
-[[ ! -e "$WORK" ]] || { echo "$WORK already exists; remove it or set WORK." >&2; exit 1; }
+annotate() {  # in CI, also show the failure on the check page: the job log needs admin rights to download
+    if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+        echo "::error title=pip install profile $PROFILE::$*"
+    fi
+}
+
+die() {
+    echo "$*" >&2
+    annotate "$*"
+    exit 1
+}
+
+[[ ! -e "$WORK" ]] || die "$WORK already exists; remove it or set WORK."
 ARTIFACTS="$WORK/artifacts"
 mkdir -p "$WORK/home" "$WORK/tmp" "$WORK/cache" "$ARTIFACTS" "$PIP_CACHE"
 exec > >(tee "$ARTIFACTS/verify.log") 2>&1
-trap 'echo "Stopped at line $LINENO; log: $ARTIFACTS/verify.log" >&2' ERR
+trap 'echo "Stopped at line $LINENO; log: $ARTIFACTS/verify.log" >&2; annotate "verify_venv.sh stopped at line $LINENO"' ERR
 
 RESULTS=()
 check() {  # check NAME COMMAND...: run one check, record the result, keep going
@@ -79,6 +91,7 @@ check() {  # check NAME COMMAND...: run one check, record the result, keep going
     else
         echo "FAIL: $name"
         RESULTS+=("FAIL|$name")
+        annotate "$name failed"
     fi
 }
 
@@ -91,21 +104,20 @@ unset PYTHONPATH VIRTUAL_ENV
 
 echo "== Preflight ($PROFILE on $(hostname))"
 gpu=$(nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 || true)
-[[ "$gpu" == *"$GPU_NAME"* ]] || { echo "Expected a $GPU_NAME GPU, found: ${gpu:-none}" >&2; exit 1; }
+[[ "$gpu" == *"$GPU_NAME"* ]] || die "Expected a $GPU_NAME GPU, found: ${gpu:-none}"
 IFS=, read -r _ gpu_total gpu_free <<<"$gpu"
 gpu_total=${gpu_total// /}
 gpu_free=${gpu_free// /}
 echo "GPU: $gpu"
 if ((RUN_SMOKE || RUN_EVAL)); then
     # The smoke and eval servers take 85% of GPU memory; another user may hold some on a shared node.
-    ((gpu_free * 10 >= gpu_total * 9)) || { echo "Only $gpu_free of $gpu_total MiB GPU memory is free." >&2; exit 1; }
+    ((gpu_free * 10 >= gpu_total * 9)) || die "Only $gpu_free of $gpu_total MiB GPU memory is free."
     if (exec 3<>/dev/tcp/127.0.0.1/18000) 2>/dev/null; then
-        echo "Port 18000 is already in use." >&2
-        exit 1
+        die "Port 18000 is already in use."
     fi
 fi
 free_kb=$(df -Pk "$WORK" | awk 'NR == 2 {print $4}')
-((free_kb >= 60 * 1024 * 1024)) || { echo "Need 60 GB free under $WORK, have $((free_kb / 1048576)) GB." >&2; exit 1; }
+((free_kb >= 60 * 1024 * 1024)) || die "Need 60 GB free under $WORK, have $((free_kb / 1048576)) GB."
 
 if ((IN_PLACE)); then
     CHECKOUT="$SRC"
@@ -122,8 +134,8 @@ cd "$CHECKOUT"
 
 echo "== Check the profile against $IMAGE"
 # HOME now points into $WORK, so apptainer no longer binds the real home: bind the scripts' tree explicitly.
-apptainer exec --cleanenv --bind "$SRC" --bind "$WORK" "$IMAGE" "${IMAGE_PYTHON[@]}" \
-    "$SCRIPT_DIR/profile_checks.py" image "$CHECKOUT/pyproject_$PROFILE.toml" \
+apptainer exec --cleanenv --env "GITHUB_ACTIONS=${GITHUB_ACTIONS:-}" --bind "$SRC" --bind "$WORK" "$IMAGE" \
+    "${IMAGE_PYTHON[@]}" "$SCRIPT_DIR/profile_checks.py" image "$CHECKOUT/pyproject_$PROFILE.toml" \
     --snapshot "$ARTIFACTS/image-snapshot.json"
 
 echo "== Toolchain and venv"
@@ -136,7 +148,7 @@ python3.12 -m venv "$WORK/venv"
 source "$WORK/venv/bin/activate"  # also unsets PYTHONHOME, which the python module sets
 set -u
 unset PYTHONHOME
-[[ "$("$CUDA_HOME/bin/nvcc" --version)" == *"release 13.0"* ]] || { echo "CUDA_HOME=$CUDA_HOME is not CUDA 13.0" >&2; exit 1; }
+[[ "$("$CUDA_HOME/bin/nvcc" --version)" == *"release 13.0"* ]] || die "CUDA_HOME=$CUDA_HOME is not CUDA 13.0"
 export PIP_REQUIRE_VIRTUALENV=1
 export MAX_JOBS="${SLURM_CPUS_PER_TASK:-${SLURM_CPUS_ON_NODE:-16}}"
 export TORCH_CUDA_ARCH_LIST=$ARCH BUILD_NVEP=0 FLASHINFER_BUILD_NO_PIP=1
@@ -149,7 +161,7 @@ export TRANSFORMERS_TRUST_REMOTE_CODE=1 HF_DATASETS_TRUST_REMOTE_CODE=1 TOKENIZE
 echo "== Install (docs/guides/getting_started.md)"
 python -m pip install --upgrade pip
 python -c 'import pip, sys; sys.exit(tuple(map(int, pip.__version__.split(".")[:2])) < (25, 1))' \
-    || { echo "pip >= 25.1 is needed for --group" >&2; exit 1; }
+    || die "pip >= 25.1 is needed for --group"
 ln -sf "pyproject_$PROFILE.toml" pyproject.toml
 pip install -e ".[$PROFILE,dev]" --extra-index-url "$PT_INDEX"
 for group in "${NODEPS_GROUPS[@]}"; do

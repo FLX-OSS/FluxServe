@@ -8,6 +8,7 @@ from packaging.version import Version
 import profile_checks
 from profile_checks import (
     Profile,
+    annotation,
     commit_matches,
     cuda_from_local,
     dependency_conflicts,
@@ -101,6 +102,10 @@ def test_public_version_and_cuda_from_local():
     assert public_version("4.0.0b34.dev3+ge9515d5") == public_version("4.0.0b34.dev3+ge9515d5d")
     assert cuda_from_local("2.11.0+cu130") == "13.0"
     assert cuda_from_local("2.11.0") is None
+
+
+def test_annotation_escapes_workflow_command_characters():
+    assert annotation("lint a: b, c", "50% done\npin x==1") == "::error title=lint a%3A b%2C c::50%25 done%0Apin x==1"
 
 
 def test_parse_recipe_args():

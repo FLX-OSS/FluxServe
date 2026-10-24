@@ -34,7 +34,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install check dependencies
-        run: python -m pip install "setuptools>=77,<82" "packaging==26.3" "pytest==9.1.1"
+        run: python -m pip install "setuptools>=77,<82" "packaging==26.3" "pytest==9.1.1" "pyyaml==6.0.3"
 
       - name: Unit tests
         run: python -m pytest -q -p no:cacheprovider test/ci_system/pypi
