@@ -8,6 +8,7 @@ on:
       - "setup.py"
       - "python/fluxserve/__init__.py"
       - "docker/Dockerfile.flux-sm120"
+      - "docker/Dockerfile.flux-cu130-fa4"
       - "test/ci_system/pypi/**"
       - ".github/workflows/pr-test-pypi*.yml"
   workflow_dispatch:

@@ -69,6 +69,18 @@ RECIPE_ARGS = {
             "CUTLASS_DSL_VERSION": "nvidia-cutlass-dsl",
         },
     ),
+    "sm90": (
+        "docker/Dockerfile.flux-cu130-fa4",
+        {
+            "FLASHINFER_COMMIT": "flashinfer-python",
+            "FLASH_ATTN_COMMIT": "flash-attn-4",
+            "TORCH_VERSION": "torch",
+            "TORCHVISION_VERSION": "torchvision",
+            "TORCHAUDIO_VERSION": "torchaudio",
+            "TRANSFORMERS_VERSION": "transformers",
+            "CUTLASS_DSL_VERSION": "nvidia-cutlass-dsl",
+        },
+    ),
 }
 SETUPTOOLS_SNIPPET = r"""
 import json

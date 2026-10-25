@@ -176,7 +176,7 @@ def test_lint_flags_broken_profiles(tmp_path, monkeypatch):
     assert "numpy is listed more than once" in problems
 
 
-@pytest.mark.parametrize("name", ["sm120", "sm100"])
+@pytest.mark.parametrize("name", ["sm120", "sm100", "sm90"])
 def test_repo_profiles_have_no_static_problems(name, monkeypatch):
     # The setuptools config stage and the online checks run in the lint workflow itself.
     monkeypatch.setattr(profile_checks, "setuptools_problems", lambda profile: [])
