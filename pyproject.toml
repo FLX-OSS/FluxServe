@@ -1,0 +1,240 @@
+# FluxServe pip install profiles: one extra per GPU platform, each pinned to a FluxServe image, plus a shared `dev`.
+#
+#   Extra  GPU                         Image                                                   TORCH_CUDA_ARCH_LIST
+#   sm120  RTX PRO 6000 Blackwell      flux-sm120 (docker/Dockerfile.flux-sm120)               12.0
+#   sm100  B200                        flux-cu130-gemma (sglang v0.5.12.post1 cu130 base)      10.0a
+#   sm90   H100/H200                   flux-cu130-fa4 (docker/Dockerfile.flux-cu130-fa4)       9.0
+#
+#   BUILD_NVEP=0 FLASHINFER_BUILD_NO_PIP=1 pip install -e ".[sm120,dev]" \
+#       --extra-index-url https://download.pytorch.org/whl/cu130
+#   pip install --no-deps --group sm100-nodeps    # B200 only
+# Then install flux-kernel and flux-scheduler; see docs/guides/getting_started.md.
+# Base dependencies stay empty so `pip install -e .` inside the containers is unchanged.
+
+[build-system]
+requires = ["setuptools>=77,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fluxserve"
+# setup.py sets the version (python/fluxserve/__init__.py) and python_requires, which setuptools lets
+# override requires-python. The containers run Python 3.12, and the numpy 2.5 / scipy 1.18 pins need >=3.12.
+dynamic = ["version", "requires-python"]
+description = "A High-Performance Inference Serving Library for Diffusion Language Model"
+license = "MIT"
+dependencies = []
+
+[project.optional-dependencies]
+sm120 = [
+    # PyTorch cu130 builds (download.pytorch.org/whl/cu130).
+    "torch==2.11.0+cu130",
+    "torchvision==0.26.0+cu130",
+    "torchaudio==2.11.0+cu130",
+    "triton==3.6.0",
+    "cuda-python==13.2.0",
+    # Attention and kernel stack.
+    "flashinfer-python @ git+https://github.com/FLX-OSS/flashinfer-dllm.git@a7d243e0b25697b021cc9366f1326d7b5013287b",
+    "flash-attn-4[cu13] @ git+https://github.com/Dao-AILab/flash-attention.git@e9515d5dee6ade134a33d6020d38d01ef0596996#subdirectory=flash_attn/cute",
+    "nvidia-cutlass-dsl[cu13]==4.8.0",
+    "apache-tvm-ffi==0.1.14.post1",
+    "quack-kernels==0.6.5",
+    "torch-c-dlpack-ext==0.1.5",
+    "cuda-tile==1.6.0",
+    "nccl4py==0.6.0",
+    "nvidia-cudnn-frontend==1.30.0",
+    "ninja==1.13.2",
+    "requests==2.34.2",
+    # Models and serving.
+    "transformers==5.17.0",
+    "tokenizers==0.23.2",
+    "safetensors==0.8.0",
+    "huggingface-hub==1.33.0",
+    "numpy==2.5.2",
+    "pyyaml==6.0.3",
+    "fastapi==0.142.2",
+    "uvicorn==0.54.0",
+    "aiohttp==3.14.3",
+    "setproctitle==1.3.8",
+    "tqdm==4.70.1",
+    "packaging==26.3",
+    # Transitive packages pinned because newer releases drifted from the image, or because dev shares them.
+    "certifi==2026.7.22",
+    "charset-normalizer==3.5.2",
+    "cuda-core==1.2.1",
+    "cuda-pathfinder==1.8.3",
+    "filelock==3.32.3",
+    "fsspec==2026.7.0",
+    "hf-xet==1.6.0",
+    "idna==3.20",
+    "markupsafe==3.0.3",
+    "networkx==3.6.1",
+    "opentelemetry-api==1.45.0",
+    "pillow==12.3.0",
+    "pydantic==2.13.5",
+    "pygments==2.21.0",
+    "starlette==1.7.0",
+    "typer==0.27.2",
+    "urllib3==2.8.0",
+]
+sm100 = [
+    # PyTorch cu130 builds (download.pytorch.org/whl/cu130).
+    "torch==2.11.0+cu130",
+    "torchvision==0.26.0+cu130",
+    "torchaudio==2.11.0+cu130",
+    "torchao==0.17.0+cu130",
+    "triton==3.6.0",
+    "cuda-python==13.2.0",
+    # Attention and kernel stack.
+    "flash-attn-4[cu13]==4.0.0b14",
+    "nvidia-cutlass-dsl[cu13]==4.5.1",
+    "apache-tvm-ffi==0.1.9",
+    "quack-kernels==0.4.1",
+    "torch-c-dlpack-ext==0.1.5",
+    # Requirements of flashinfer-python, which the sm100-nodeps group installs without its dependencies.
+    "cuda-tile==1.3.0",
+    "nvidia-cudnn-frontend==1.24.0",
+    "nvidia-ml-py==13.595.45",
+    "ninja==1.13.0",
+    "click==8.4.1",
+    "einops==0.8.2",
+    "requests==2.34.2",
+    "tabulate==0.10.0",
+    # Models and serving.
+    "transformers==5.6.0",
+    "tokenizers==0.22.2",
+    "safetensors==0.7.0",
+    "huggingface-hub==1.16.1",
+    "numpy==2.3.5",
+    "pyyaml==6.0.1",
+    "fastapi==0.136.1",
+    "uvicorn==0.47.0",
+    "aiohttp==3.13.5",
+    "setproctitle==1.3.7",
+    "tqdm==4.67.3",
+    "packaging==26.2",
+    # Transitive packages pinned because newer releases drifted from the image.
+    "aiohappyeyeballs==2.6.2",
+    "annotated-doc==0.0.4",
+    "annotated-types==0.7.0",
+    "anyio==4.13.0",
+    "certifi==2026.5.20",
+    "charset-normalizer==3.4.7",
+    "cuda-pathfinder==1.5.4",
+    "filelock==3.29.0",
+    "fsspec==2026.2.0",
+    "hf-xet==1.5.0",
+    "idna==3.16",
+    "markupsafe==3.0.3",
+    "multidict==6.7.1",
+    "networkx==3.6.1",
+    "pillow==12.2.0",
+    "propcache==0.5.2",
+    "pydantic==2.13.4",
+    "pygments==2.20.0",
+    "regex==2026.5.9",
+    "starlette==1.0.1",
+    "typer==0.25.1",
+    "typing-extensions==4.15.0",
+    "typing-inspection==0.4.2",
+    "urllib3==2.7.0",
+    "yarl==1.24.2",
+]
+sm90 = [
+    # PyTorch cu130 builds (download.pytorch.org/whl/cu130).
+    "torch==2.11.0+cu130",
+    "torchvision==0.26.0+cu130",
+    "torchaudio==2.11.0+cu130",
+    "triton==3.6.0",
+    "cuda-python==13.2.0",
+    # Attention and kernel stack. The FA4 commit is the fa4-v4.0.0.beta29 release tag.
+    "flashinfer-python @ git+https://github.com/FLX-OSS/flashinfer-dllm.git@a7d243e0b25697b021cc9366f1326d7b5013287b",
+    "flash-attn-4[cu13] @ git+https://github.com/Dao-AILab/flash-attention.git@ce088ab9ce0fc0434dcd8afa0a791da9fcc3a820#subdirectory=flash_attn/cute",
+    "nvidia-cutlass-dsl[cu13]==4.6.2",
+    "apache-tvm-ffi==0.1.13.post3",
+    "quack-kernels==0.6.4",
+    "torch-c-dlpack-ext==0.1.5",
+    "cuda-tile==1.5.0",
+    "nccl4py==0.5.0",
+    "nvidia-cudnn-frontend==1.28.0",
+    "ninja==1.13.2",
+    "requests==2.34.2",
+    # Models and serving.
+    "transformers==5.6.0",
+    "tokenizers==0.22.2",
+    "safetensors==0.8.0",
+    "huggingface-hub==1.30.0",
+    "numpy==2.5.2",
+    "pyyaml==6.0.3",
+    "fastapi==0.141.1",
+    "uvicorn==0.52.4",
+    "aiohttp==3.14.3",
+    "setproctitle==1.3.7",
+    "tqdm==4.70.0",
+    "packaging==26.3",
+    # Transitive packages pinned because newer releases drifted from the image, or because dev shares them.
+    "certifi==2026.7.22",
+    "charset-normalizer==3.5.1",
+    "cuda-core==1.2.0",
+    "cuda-pathfinder==1.8.1",
+    "filelock==3.32.3",
+    "fsspec==2026.7.0",
+    "hf-xet==1.6.0",
+    "idna==3.19",
+    "markupsafe==3.0.3",
+    "multidict==6.7.1",
+    "networkx==3.6.1",
+    "nvidia-cuda-nvdisasm==13.3.73",
+    "nvidia-ml-py==13.610.43",
+    "pillow==12.3.0",
+    "propcache==0.5.2",
+    "pydantic==2.13.5",
+    "pygments==2.21.0",
+    "regex==2026.9.3",
+    "starlette==1.6.0",
+    "typer==0.27.2",
+    "urllib3==2.7.0",
+    "yarl==1.24.5",
+]
+# Test, CI and build tools, shared by every platform and pinned to the flux-sm120 image's versions (the images
+# install them unpinned). Their full closure is pinned here or in each platform extra; lint --online checks it.
+dev = [
+    "pytest==9.1.1",
+    "pytest-xdist==3.8.0",
+    "ruff==0.16.10",
+    "scipy==1.18.1",
+    "pandas==3.0.6",
+    "matplotlib==3.11.2",
+    "scikit-build-core==1.1.1",
+    "nanobind==3.1.0",
+    "wheel==0.48.0",
+    # Their dependencies.
+    "contourpy==1.4.0",
+    "cycler==0.12.1",
+    "execnet==2.1.2",
+    "fonttools==4.66.1",
+    "iniconfig==2.3.0",
+    "kiwisolver==1.5.1",
+    "pathspec==1.1.1",
+    "pluggy==1.6.0",
+    "pyparsing==3.3.3",
+    "python-dateutil==2.9.0.post0",
+    "six==1.17.0",
+]
+
+[project.scripts]
+fluxserve = "fluxserve.cli.app:main"
+
+[dependency-groups]
+# Install with `pip install --no-deps --group sm100-nodeps`, as the image does. flashinfer-dllm declares
+# newer cutlass-dsl, cuda-tile and cudnn-frontend than this stack runs, and the image's NCCL and nvJitLink
+# conflict with torch's pins. The nvcc, crt, tileiras and nvvm wheels came from FlashInfer's cuda-tile
+# build hook in the image.
+sm100-nodeps = [
+    "flashinfer-python @ git+https://github.com/FLX-OSS/flashinfer-dllm.git@a7d243e0b25697b021cc9366f1326d7b5013287b",
+    "nvidia-nccl-cu13==2.31.2",
+    "nvidia-nvjitlink==13.3.33",
+    "nvidia-cuda-nvcc==13.3.73",
+    "nvidia-cuda-crt==13.3.73",
+    "nvidia-cuda-tileiras==13.3.36",
+    "nvidia-nvvm==13.3.73",
+]

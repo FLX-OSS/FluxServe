@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Checks for the pip install profiles (pyproject_<profile>.toml).
+"""Checks for the pip install profiles in pyproject.toml.
 
-lint   Static checks. With --online, also checks that every pin is downloadable for the hosts and that every
-       git commit can be fetched.
-image  Runs inside the profile's reference image: pins and git commits match the image, the pinned closure has
-       no conflicts beyond the --no-deps overrides, and no unpinned package in it would drift on PyPI. Writes a
-       snapshot of the image for `venv`.
+A profile is one platform extra (sm120, sm100, sm90), pinned to that platform's image, plus the shared `dev`
+extra and the platform's `<platform>-nodeps` dependency group, if it has one.
+
+lint   Static checks. With --online, also checks that every pin is downloadable for the hosts, that every git
+       commit can be fetched, and that everything the dev pins pull in is pinned compatibly in each profile.
+image  Runs inside the profile's reference image: the runtime pins and git commits match the image, the pinned
+       closure has no conflicts beyond the --no-deps overrides, and no unpinned package in it would drift on
+       PyPI. Writes a snapshot of the image for `venv`.
 venv   Runs with the venv's python after installing: the venv matches the profile and the image snapshot.
 """
 
 import argparse
+import functools
 import importlib
 import importlib.metadata as metadata
 import json
@@ -36,6 +40,8 @@ from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel
 from packaging.version import InvalidVersion, Version
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+PYPROJECT = REPO_ROOT / "pyproject.toml"
+PLATFORMS = ("sm120", "sm100", "sm90")
 PYPI = "https://pypi.org/pypi"
 TORCH_INDEX = "https://download.pytorch.org/whl/cu130"
 GIT_URL = re.compile(r"^git\+(?P<repo>https://[^@\s]+)@(?P<sha>[0-9a-f]{40})(?:#subdirectory=[\w./-]+)?$")
@@ -55,10 +61,32 @@ HOST_PLATFORMS = [f"manylinux_2_{minor}_x86_64" for minor in range(34, 16, -1)] 
 HOST_TAGS = set(cpython_tags((3, 12), platforms=HOST_PLATFORMS)) | set(
     compatible_tags((3, 12), "cp312", HOST_PLATFORMS)
 )
+HOST_MARKERS = {
+    "implementation_name": "cpython",
+    "os_name": "posix",
+    "platform_machine": "x86_64",
+    "platform_python_implementation": "CPython",
+    "platform_system": "Linux",
+    "python_full_version": "3.12.0",
+    "python_version": "3.12",
+    "sys_platform": "linux",
+}
 # Image recipes in this repo whose ARGs must match the profile: profile -> (recipe, {ARG: package}).
 RECIPE_ARGS = {
     "sm120": (
         "docker/Dockerfile.flux-sm120",
+        {
+            "FLASHINFER_COMMIT": "flashinfer-python",
+            "FLASH_ATTN_COMMIT": "flash-attn-4",
+            "TORCH_VERSION": "torch",
+            "TORCHVISION_VERSION": "torchvision",
+            "TORCHAUDIO_VERSION": "torchaudio",
+            "TRANSFORMERS_VERSION": "transformers",
+            "CUTLASS_DSL_VERSION": "nvidia-cutlass-dsl",
+        },
+    ),
+    "sm90": (
+        "docker/Dockerfile.flux-cu130-fa4",
         {
             "FLASHINFER_COMMIT": "flashinfer-python",
             "FLASH_ATTN_COMMIT": "flash-attn-4",
@@ -89,29 +117,38 @@ print(json.dumps({
 """
 
 
+def read_pyproject(path: Path) -> Dict[str, Any]:
+    return tomllib.loads(path.read_text())
+
+
 class Profile:
-    def __init__(self, path: Path):
+    """One platform of pyproject.toml: its extra, the shared dev extra and its `<name>-nodeps` group, if any."""
+
+    def __init__(self, path: Path, name: str):
         self.path = path
-        self.name = path.stem.removeprefix("pyproject_")
-        self.data = tomllib.loads(path.read_text())
+        self.name = name
+        self.data = read_pyproject(path)
         self.project = self.data.get("project", {})
         self.extras: Dict[str, List[str]] = self.project.get("optional-dependencies", {})
         self.groups: Dict[str, List[Any]] = self.data.get("dependency-groups", {})
+        self.group = f"{name}-nodeps"
 
-    def group_requirements(self) -> Dict[str, List[Requirement]]:
-        resolver = DependencyGroupResolver(self.groups)
-        return {group: list(resolver.resolve(group)) for group in self.groups}
+    def group_requirements(self) -> List[Requirement]:
+        if self.group not in self.groups:
+            return []
+        return list(DependencyGroupResolver(self.groups).resolve(self.group))
 
-    def requirements(self) -> List[Tuple[str, Requirement]]:
-        found = [(f"extra {extra}", Requirement(raw)) for extra, reqs in self.extras.items() for raw in reqs]
-        for group, reqs in self.group_requirements().items():
-            found.extend((f"group {group}", req) for req in reqs)
+    def requirements(self, dev: bool = True) -> List[Tuple[str, Requirement]]:
+        extras = [self.name, "dev"] if dev else [self.name]
+        found = [(f"extra {extra}", Requirement(raw)) for extra in extras for raw in self.extras.get(extra, [])]
+        found.extend((f"group {self.group}", req) for req in self.group_requirements())
         return found
 
-    def pins(self) -> Dict[str, str]:
+    def pins(self, dev: bool = True) -> Dict[str, str]:
+        """Exact pins; with dev=False only the runtime ones, which must match the image."""
         return {
             canonicalize_name(req.name): version
-            for _, req in self.requirements()
+            for _, req in self.requirements(dev)
             if (version := exact_version(req)) is not None
         }
 
@@ -124,16 +161,23 @@ class Profile:
         return refs
 
     def nodeps_names(self) -> Set[str]:
-        return {canonicalize_name(req.name) for reqs in self.group_requirements().values() for req in reqs}
+        return {canonicalize_name(req.name) for req in self.group_requirements()}
+
+    def dev_names(self) -> Set[str]:
+        return {canonicalize_name(Requirement(raw).name) for raw in self.extras.get("dev", [])}
+
+    def roots_of(self, extra: str) -> Dict[str, Set[str]]:
+        """Packages an extra installs, with their requested extras."""
+        roots: Dict[str, Set[str]] = {}
+        for raw in self.extras.get(extra, []):
+            req = Requirement(raw)
+            roots.setdefault(canonicalize_name(req.name), set()).update(req.extras)
+        return roots
 
     def roots(self) -> Dict[str, Set[str]]:
-        """Packages the extras install, with their requested extras (the groups install with --no-deps)."""
-        roots: Dict[str, Set[str]] = {}
-        for reqs in self.extras.values():
-            for raw in reqs:
-                req = Requirement(raw)
-                roots.setdefault(canonicalize_name(req.name), set()).update(req.extras)
-        return roots
+        """The runtime packages, whose closure must match the image (the group installs with --no-deps, and the
+        dev closure is checked against PyPI instead)."""
+        return self.roots_of(self.name)
 
 
 def exact_version(req: Requirement) -> Optional[str]:
@@ -272,11 +316,11 @@ def fetch_problem(repo: str, sha: str) -> Optional[str]:
     return None
 
 
-def setuptools_problems(profile: Profile) -> List[str]:
-    """Run setup.py's config stage with the profile as pyproject.toml, in a scratch copy of the tree."""
+def setuptools_problems(path: Path) -> List[str]:
+    """Run setup.py's config stage with this pyproject.toml, in a scratch copy of the tree."""
     with tempfile.TemporaryDirectory() as tmp:
         shutil.copy(REPO_ROOT / "setup.py", tmp)
-        shutil.copy(profile.path, Path(tmp) / "pyproject.toml")
+        shutil.copy(path, Path(tmp) / "pyproject.toml")
         (Path(tmp) / "python").symlink_to(REPO_ROOT / "python")
         result = subprocess.run([sys.executable, "-c", SETUPTOOLS_SNIPPET], cwd=tmp, capture_output=True, text=True)
     if result.returncode != 0:
@@ -293,27 +337,41 @@ def setuptools_problems(profile: Profile) -> List[str]:
         problems.append(f"version {info['version']} does not come from setup.py ({init_version})")
     if "fluxserve = fluxserve.cli.app:main" not in info["console_scripts"]:
         problems.append(f"missing the fluxserve console script: {info['console_scripts']}")
-    if set(info["extras"]) != {profile.name, "dev"}:
-        problems.append(f"built extras {info['extras']} are not [{profile.name}, dev]")
+    expected = sorted({*PLATFORMS, "dev"})
+    if sorted(info["extras"]) != expected:
+        problems.append(f"built extras {info['extras']} are not {expected}")
     return problems
 
 
-def lint_problems(profile: Profile, online: bool) -> List[str]:
+def file_problems(path: Path) -> List[str]:
+    """Checks on the file as a whole; profile_problems checks each platform."""
+    data = read_pyproject(path)
+    project = data.get("project", {})
     problems = []
-    if profile.project.get("dependencies") != []:
+    if project.get("dependencies") != []:
         problems.append("[project] dependencies must stay empty; put pins in the extras")
-    missing_dynamic = {"version", "requires-python"} - set(profile.project.get("dynamic", []))
+    missing_dynamic = {"version", "requires-python"} - set(project.get("dynamic", []))
     if missing_dynamic:
         problems.append(f"[project] dynamic must include {sorted(missing_dynamic)} (setup.py sets them)")
-    if set(profile.extras) != {profile.name, "dev"}:
-        problems.append(f"extras {sorted(profile.extras)} must be exactly [{profile.name}, dev]")
+    extras = sorted(project.get("optional-dependencies", {}))
+    expected = sorted({*PLATFORMS, "dev"})
+    if extras != expected:
+        problems.append(f"extras {extras} must be exactly {expected}")
+    unknown = sorted(set(data.get("dependency-groups", {})) - {f"{platform}-nodeps" for platform in PLATFORMS})
+    if unknown:
+        problems.append(f"dependency groups {unknown} must be named <platform>-nodeps")
+    problems += setuptools_problems(path)
+    return problems
+
+
+def profile_problems(profile: Profile, online: bool) -> List[str]:
     try:
         reqs = profile.requirements()
     except Exception as exc:  # malformed requirement or dependency group
-        return problems + [f"cannot parse requirements: {exc}"]
-    problems += [problem for _, req in reqs if (problem := requirement_problem(req))]
-    problems += [f"{name} is listed more than once" for name in duplicate_names(req for _, req in reqs)]
-    problems += setuptools_problems(profile)
+        return [f"cannot parse requirements: {exc}"]
+    problems = [problem for _, req in reqs if (problem := requirement_problem(req))]
+    sources = f"extras {profile.name} and dev" + (f" and group {profile.group}" if profile.group in profile.groups else "")
+    problems += [f"{name} is listed more than once in {sources}" for name in duplicate_names(req for _, req in reqs)]
     if profile.name in RECIPE_ARGS:
         recipe, arg_packages = RECIPE_ARGS[profile.name]
         args = parse_recipe_args((REPO_ROOT / recipe).read_text())
@@ -328,11 +386,57 @@ def lint_problems(profile: Profile, online: bool) -> List[str]:
                 ok = value is not None and package in pins and public_version(value) == public_version(expected)
             if not ok:
                 problems.append(f"{recipe} {arg}={value} does not match the profile's {package} ({expected})")
-    if online:
-        with ThreadPoolExecutor(16) as pool:
-            problems += [p for p in pool.map(lambda item: availability_problem(*item), profile.pins().items()) if p]
-            problems += [p for p in pool.map(lambda ref: fetch_problem(*ref), profile.git_refs().values()) if p]
+    if online and not problems:  # the closure walk needs well-formed pins
+        problems += dev_closure_problems(profile)
     return problems
+
+
+def download_problems(profiles: List[Profile]) -> List[str]:
+    """Each distinct pin and git commit of all profiles, checked once."""
+    pins = sorted({item for profile in profiles for item in profile.pins().items()})
+    refs = sorted({ref for profile in profiles for ref in profile.git_refs().values()})
+    with ThreadPoolExecutor(16) as pool:
+        problems = [p for p in pool.map(lambda item: availability_problem(*item), pins) if p]
+        problems += [p for p in pool.map(lambda ref: fetch_problem(*ref), refs) if p]
+    return problems
+
+
+@functools.cache
+def pypi_requires(name: str, version: str) -> Tuple[str, ...]:
+    raw = _open(f"{PYPI}/{name}/{version}/json")
+    if raw is None:
+        raise LookupError(f"{name}=={version} is not on PyPI")
+    return tuple(json.loads(raw)["info"].get("requires_dist") or ())
+
+
+def dev_closure_problems(profile: Profile) -> List[str]:
+    """Everything the dev pins pull in on the hosts (PyPI metadata) must be pinned in this profile, at a version
+    the requirement allows. The images don't pin their dev tools, so the image check doesn't cover them."""
+    pins, refs, dev = profile.pins(), profile.git_refs(), profile.dev_names()
+    problems: Set[str] = set()
+    seen: Set[Tuple[str, frozenset]] = set()
+    queue = [(name, frozenset(extras)) for name, extras in sorted(profile.roots_of("dev").items())]
+    while queue:
+        name, extras = queue.pop()
+        if (name, extras) in seen:
+            continue
+        seen.add((name, extras))
+        for raw in pypi_requires(name, pins[name]):
+            req = Requirement(raw)
+            if req.marker is not None and not any(
+                req.marker.evaluate(dict(HOST_MARKERS, extra=extra)) for extra in {"", *extras}
+            ):
+                continue
+            dep = canonicalize_name(req.name)
+            if dep in refs:
+                continue
+            if dep not in pins:
+                problems.add(f"{dep}{req.specifier} (needed by {name}=={pins[name]}) is not pinned")
+            elif not req.specifier.contains(pins[dep], prereleases=True):
+                problems.add(f"{name}=={pins[name]} requires {req.name}{req.specifier}, but {dep} is pinned to {pins[dep]}")
+            elif dep in dev:
+                queue.append((dep, frozenset(req.extras)))
+    return sorted(problems)
 
 
 def installed_commit(dist: metadata.Distribution) -> Optional[str]:
@@ -389,9 +493,6 @@ def image_problems(profile: Profile, snapshot: Optional[Path]) -> List[str]:
     dists = installed_dists()
     versions = {name: dist.version for name, dist in dists.items()}
     problems = []
-    for name, version in profile.pins().items():
-        if versions.get(name) != version:
-            problems.append(f"{name}=={version}: the image has {versions.get(name, 'nothing')}")
     commits = {}
     for name, (_, sha) in profile.git_refs().items():
         if name not in dists:
@@ -401,7 +502,7 @@ def image_problems(profile: Profile, snapshot: Optional[Path]) -> List[str]:
         if not commit_matches(sha, commits[name]):
             problems.append(f"{name} @ {sha}: the image has commit {commits[name]}")
 
-    # Closure of what the extras install, using the image's metadata.
+    # Closure of what the platform extra installs, using the image's metadata.
     specs: Dict[str, List[str]] = {}
     seen: Dict[str, Set[str]] = {}
     queue = list(profile.roots().items())
@@ -417,6 +518,12 @@ def image_problems(profile: Profile, snapshot: Optional[Path]) -> List[str]:
             dep = canonicalize_name(req.name)
             specs.setdefault(dep, []).append(str(req.specifier))
             queue.append((dep, set(req.extras)))
+    # The runtime pins must match the image, and so must a dev pin of a package in the runtime closure. Other dev
+    # pins are free: the images install their dev tools unpinned.
+    runtime_pins = profile.pins(dev=False)
+    for name, version in profile.pins().items():
+        if (name in runtime_pins or name in seen) and versions.get(name) != version:
+            problems.append(f"{name}=={version}: the image has {versions.get(name, 'nothing')}")
     overridden = profile.nodeps_names()
     for name in sorted(seen):
         if name not in versions:
@@ -495,13 +602,18 @@ def torch_problems(profile: Profile, capability: str) -> List[str]:
 def venv_vs_image_problems(profile: Profile, snapshot: Dict[str, Any]) -> List[str]:
     dists = installed_dists()
     refs = profile.git_refs()
+    runtime_pins = profile.pins(dev=False)
+    dev_pins = {name: pin for name, pin in profile.pins().items() if name not in runtime_pins}
     problems = []
     for name, dist in sorted(dists.items()):
         info = direct_url(dist)
         if name == "pip" or info.get("dir_info", {}).get("editable"):
             continue
         image_version = snapshot["versions"].get(name)
-        if name in refs:
+        if name in dev_pins:  # shared dev tools follow their pins, not the image
+            if Version(dist.version) != Version(dev_pins[name]):
+                problems.append(f"{name}=={dist.version}: dev pins {dev_pins[name]}")
+        elif name in refs:
             commit = info.get("vcs_info", {}).get("commit_id")
             if commit != refs[name][1]:
                 problems.append(f"{name}: installed from commit {commit}, pinned {refs[name][1]}")
@@ -593,13 +705,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     lint = sub.add_parser("lint", help="Static checks")
-    lint.add_argument("profiles", nargs="+", type=Path)
-    lint.add_argument("--online", action="store_true", help="Also check index availability and git commits")
+    lint.add_argument("pyproject", nargs="?", type=Path, default=PYPROJECT)
+    lint.add_argument("--online", action="store_true", help="Also check downloads, git commits and the dev closure")
     image = sub.add_parser("image", help="Compare a profile with the image this python runs in")
-    image.add_argument("profile", type=Path)
+    image.add_argument("profile", choices=PLATFORMS)
+    image.add_argument("--pyproject", type=Path, default=PYPROJECT)
     image.add_argument("--snapshot", type=Path, help="Write the image snapshot for `venv` here")
     venv = sub.add_parser("venv", help="Compare the venv this python runs in with the profile and image")
-    venv.add_argument("profile", type=Path)
+    venv.add_argument("profile", choices=PLATFORMS)
+    venv.add_argument("--pyproject", type=Path, default=PYPROJECT)
     venv.add_argument("--snapshot", type=Path, required=True)
     venv.add_argument("--checkout", type=Path, required=True, help="Repo checkout the venv was installed from")
     venv.add_argument("--stamp-arch", required=True, help="Expected flux-kernel build arch, e.g. 120 or 100a")
@@ -607,12 +721,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "lint":
-        return run_checks(
-            [(f"lint {path.name}", lambda path=path: lint_problems(Profile(path), args.online)) for path in args.profiles]
-        )
-    profile = Profile(args.profile)
+        profiles = [Profile(args.pyproject, name) for name in PLATFORMS]
+        checks = [(f"lint {args.pyproject.name}", lambda: file_problems(args.pyproject))]
+        checks += [(f"lint profile {p.name}", lambda p=p: profile_problems(p, args.online)) for p in profiles]
+        if args.online:
+            checks.append(("every pin and commit downloads", lambda: download_problems(profiles)))
+        return run_checks(checks)
+    profile = Profile(args.pyproject, args.profile)
     if args.command == "image":
-        return run_checks([(f"{profile.path.name} matches the image", lambda: image_problems(profile, args.snapshot))])
+        return run_checks([(f"profile {profile.name} matches the image", lambda: image_problems(profile, args.snapshot))])
     snapshot = json.loads(args.snapshot.read_text())
     return run_checks(
         [

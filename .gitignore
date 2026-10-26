@@ -74,9 +74,6 @@ code_reorg.md
 # blackwell rtx pro related
 **/sm120/
 
-# pip install profile, symlinked from pyproject_<platform>.toml
-/pyproject.toml
-
 
 # agent related
 **/skills/

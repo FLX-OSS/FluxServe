@@ -4,10 +4,11 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "pyproject_*.toml"
+      - "pyproject.toml"
       - "setup.py"
       - "python/fluxserve/__init__.py"
       - "docker/Dockerfile.flux-sm120"
+      - "docker/Dockerfile.flux-cu130-fa4"
       - "test/ci_system/pypi/**"
       - ".github/workflows/pr-test-pypi*.yml"
   workflow_dispatch:
@@ -39,7 +40,8 @@ jobs:
       - name: Unit tests
         run: python -m pytest -q -p no:cacheprovider test/ci_system/pypi
 
-      # Exact pins, setuptools metadata, recipe ARGs, a cp312 manylinux_2_34 wheel for every pin, and every git
-      # commit fetchable. Checks against the images run in pr-test-pypi.yml on the GPU runners.
+      # Exact pins, setuptools metadata, recipe ARGs, a cp312 manylinux_2_34 wheel for every pin, every git commit
+      # fetchable, and the shared dev closure pinned in every profile. Checks against the images run in
+      # pr-test-pypi.yml on the GPU runners.
       - name: Lint profiles
-        run: python test/ci_system/pypi/profile_checks.py lint --online pyproject_*.toml
+        run: python test/ci_system/pypi/profile_checks.py lint --online
