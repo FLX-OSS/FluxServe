@@ -46,19 +46,11 @@ class DiffusionGemmaFlashInferRunner(DiffusionGemmaRunner):
     """Diffusion-Gemma with paged FlashInfer attention."""
 
     _supports_flashinfer = True
+    # Backend of the sliding-window layers (DiffusionGemmaPagedKVCache.sliding_backend).
+    sliding_backend = "flashinfer"
 
     def __init__(self, model_config, server_args, runner_config=None, device="cuda"):
-        if runner_config is None or runner_config.attention_backend != "flashinfer":
-            raise ValueError("DiffusionGemmaFlashInferRunner requires FlashInfer")
-        if not (
-            runner_config.flashinfer_prefill_mode == "paged"
-            and runner_config.flashinfer_cache_mode == "paged"
-            and runner_config.kv_cache_layout == "paged"
-        ):
-            raise ValueError(
-                "Diffusion-Gemma FlashInfer requires paged prefill, paged "
-                "cache mode, and paged KV layout"
-            )
+        self._validate_paged_runner_config(runner_config)
         require_diffusion_gemma_flashinfer()
         super().__init__(model_config, server_args, runner_config, device)
         geometries = [
@@ -68,8 +60,11 @@ class DiffusionGemmaFlashInferRunner(DiffusionGemmaRunner):
                 layer.self_attn.head_dim,
             )
             for layer in self.model.model.layers
+            if self._flashinfer_serves(layer.self_attn)
         ]
-        probe_diffusion_gemma_flashinfer(geometries, self.device)
+        if geometries:
+            probe_diffusion_gemma_flashinfer(geometries, self.device)
+        self._probe_sliding_backend()
         self._persistent_gemma_paged_cache = None
         self.flashinfer_graph_runner = (
             FlashInferCudaGraphRunner(
@@ -85,6 +80,38 @@ class DiffusionGemmaFlashInferRunner(DiffusionGemmaRunner):
             if runner_config.enable_decode_cuda_graph
             else None
         )
+
+    def _validate_paged_runner_config(self, runner_config) -> None:
+        if runner_config is None or runner_config.attention_backend != "flashinfer":
+            raise ValueError("DiffusionGemmaFlashInferRunner requires FlashInfer")
+        if not (
+            runner_config.flashinfer_prefill_mode == "paged"
+            and runner_config.flashinfer_cache_mode == "paged"
+            and runner_config.kv_cache_layout == "paged"
+        ):
+            raise ValueError(
+                "Diffusion-Gemma FlashInfer requires paged prefill, paged "
+                "cache mode, and paged KV layout"
+            )
+        if (
+            getattr(runner_config, "sliding_window_mode", "per_query") != "per_query"
+            and runner_config.enable_decode_cuda_graph
+        ):
+            raise ValueError(
+                "FlashInfer decode CUDA graphs implement sliding_window_mode="
+                "'per_query' only (window_left); use --attention-backend fa4 or "
+                "eager FlashInfer for 'per_row'"
+            )
+
+    # Hooks for runners that move the sliding-window layers to another backend.
+    def _flashinfer_serves(self, attention) -> bool:
+        return True
+
+    def _probe_sliding_backend(self) -> None:
+        pass
+
+    def _gemma_page_size(self) -> int:
+        return int(self.runner_config.page_size or self.block_length)
 
     def shutdown_cuda_graphs(self, *, log: bool = True) -> None:
         if self.flashinfer_graph_runner is not None:
@@ -137,18 +164,22 @@ class DiffusionGemmaFlashInferRunner(DiffusionGemmaRunner):
             existing is not None
             and existing.max_length >= int(max_length)
             and existing.batch_size >= int(batch_size)
-            and existing.page_size
-            == int(self.runner_config.page_size or self.block_length)
+            and existing.page_size == self._gemma_page_size()
             and existing.layer_geometries == tuple(geometries)
         ):
             return existing
         cache = DiffusionGemmaPagedKVCache(
             layer_geometries=geometries,
             max_length=max_length,
-            page_size=int(self.runner_config.page_size or self.block_length),
+            page_size=self._gemma_page_size(),
             dtype=torch.bfloat16,
             device=self.device,
             batch_size=batch_size,
+            sliding_backend=self.sliding_backend,
+            sliding_window_mode=getattr(
+                self.runner_config, "sliding_window_mode", "per_query"
+            ),
+            sliding_window_left=getattr(self.runner_config, "sliding_window_left", None),
         )
         self._persistent_gemma_paged_cache = cache
         graph_runner = getattr(self, "flashinfer_graph_runner", None)

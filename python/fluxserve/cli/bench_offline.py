@@ -46,6 +46,7 @@ from fluxserve.backend.execution.forward_batch_info import (
 )
 from fluxserve.backend.execution.runners import (
     BlockDiffusionRunner,
+    DiffusionGemmaFA4Runner,
     DiffusionGemmaFlashInferRunner,
     DiffusionGemmaRunner,
     FA4DiffusionRunner,
@@ -70,9 +71,11 @@ from fluxserve.backend.utils.runtime_utils import require_nvidia_cuda
 from fluxserve.backend.utils.server_args import ServerArgs
 from fluxserve.cli.common import (
     StoreExplicit,
+    add_sliding_window_args,
     check_block_routing_alignment,
     configure_logging,
     normalize_attention_backend_args,
+    normalize_diffusion_gemma_fa4_args,
     reject_unsupported_quantization,
     set_process_title,
 )
@@ -323,6 +326,8 @@ def build_runner_config(args, batch_info, model_config=None):
         page_size=getattr(args, "page_size", None),
         canvas_length=getattr(args, "canvas_length", None),
         max_denoising_steps=getattr(args, "max_denoising_steps", None),
+        sliding_window_mode=getattr(args, "sliding_window_mode", "per_query"),
+        sliding_window_left=getattr(args, "sliding_window_left", None),
     )
 
 
@@ -345,8 +350,8 @@ def normalize_diffusion_gemma_args(args, model_config) -> bool:
         args.attention_backend = "sdpa"
         normalize_attention_backend_args(args)
     if args.attention_backend == "fa4":
-        raise ValueError("attention_backend='fa4' currently supports LLaDA 2.x only")
-    if args.attention_backend != "flashinfer":
+        normalize_diffusion_gemma_fa4_args(args)
+    elif args.attention_backend != "flashinfer":
         args.kv_cache_layout = "dense"
         args.flashinfer_cache_mode = "dense"
         args.flashinfer_prefill_mode = "dense"
@@ -765,11 +770,10 @@ def run_worker(args, *, init_method: str = "env://"):
             apply_nemotron_runner_config(runner_config, model_config, args)
             runner_cls = get_nemotron_runner(args.attention_backend, args.parallel_decoding)
         elif is_diffusion_gemma:
-            runner_cls = (
-                DiffusionGemmaFlashInferRunner
-                if args.attention_backend == "flashinfer"
-                else DiffusionGemmaRunner
-            )
+            runner_cls = {
+                "flashinfer": DiffusionGemmaFlashInferRunner,
+                "fa4": DiffusionGemmaFA4Runner,
+            }.get(args.attention_backend, DiffusionGemmaRunner)
         else:
             if args.attention_backend == "flashinfer":
                 runner_cls = FlashInferDiffusionRunner
@@ -1019,7 +1023,9 @@ def add_bench_offline_subparser(subparsers) -> None:
     parser.add_argument("--flashinfer-prefill-mode", "--flashinfer_prefill_mode", dest="flashinfer_prefill_mode", choices=("dense", "ragged", "paged"), default="paged")
     parser.add_argument("--flashinfer-cache-mode", "--flashinfer_cache_mode", dest="flashinfer_cache_mode", choices=("dense", "paged"), default="paged")
     parser.add_argument("--kv-cache-layout", "--kv_cache_layout", dest="kv_cache_layout", choices=("dense", "paged"), default="paged")
-    parser.add_argument("--page-size", "--page_size", dest="page_size", type=int)
+    parser.add_argument("--page-size", "--page_size", dest="page_size", type=int, action=StoreExplicit)
+    parser.set_defaults(page_size_explicit=False)
+    add_sliding_window_args(parser)
     parser.add_argument("--gen-len", "--gen_len", dest="gen_len", type=int, default=1024)
     parser.add_argument("--block-length", "--block_length", dest="block_length", type=int, default=64)
     parser.add_argument("--temperature", type=float, default=0.0, help="Nemotron sampling temperature")

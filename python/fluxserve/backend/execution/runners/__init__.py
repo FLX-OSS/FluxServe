@@ -22,6 +22,9 @@ from fluxserve.backend.execution.runners.llada.block_diffusion import BlockDiffu
 from fluxserve.backend.execution.runners.diffusion_gemma.block_diffusion import (
     DiffusionGemmaRunner,
 )
+from fluxserve.backend.execution.runners.diffusion_gemma.fa4 import (
+    DiffusionGemmaFA4Runner,
+)
 from fluxserve.backend.execution.runners.diffusion_gemma.flashinfer import (
     DiffusionGemmaFlashInferRunner,
 )
@@ -66,6 +69,7 @@ def get_nemotron_runner(backend: str, decoding: str):
 
 __all__ = [
     "BlockDiffusionRunner",
+    "DiffusionGemmaFA4Runner",
     "DiffusionGemmaFlashInferRunner",
     "DiffusionGemmaRunner",
     "FA4DiffusionRunner",

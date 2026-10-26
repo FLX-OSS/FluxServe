@@ -167,8 +167,18 @@ class RunnerConfig:
     entropy_bound: float | None = None
     confidence_threshold: float | None = None
     stability_threshold: int | None = None
+    # Diffusion-Gemma denoise sliding window: "per_query" (|q - k| < W) or
+    # "per_row" (every canvas row reads the last sliding_window_left cache keys,
+    # default W - 1, like the HF reference decoder).
+    sliding_window_mode: str = "per_query"
+    sliding_window_left: int | None = None
 
     def __post_init__(self):
+        from fluxserve.backend.layers.attention.diffusion_gemma_window import (
+            validate_sliding_window_mode,
+        )
+
+        validate_sliding_window_mode(self.sliding_window_mode, self.sliding_window_left)
         if self.enable_cuda_graph:
             self.enable_prefill_cuda_graph = True
             self.enable_decode_cuda_graph = True

@@ -20,6 +20,10 @@
 
 """
     FlashInfer paged attention for Diffusion-Gemma.
+
+With ``sliding_backend="fa4"`` the sliding-window layers (head_dim 256) run on
+FA4's SM100 hd256 kernel instead; the full-attention layers (head_dim 512,
+K != V) stay on FlashInfer.
 """
 
 from __future__ import annotations
@@ -27,9 +31,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import lru_cache
 import math
-from typing import Any
+from typing import Any, Callable
 
 import torch
+
+from fluxserve.backend.layers.attention.diffusion_gemma_window import (
+    fa4_window_kwargs,
+    sliding_window_mask,
+    validate_sliding_window_mode,
+)
+
+# FA4's SM100 head_dim-256 kernel loads paged KV with TMA, one 128-token page per tile.
+FA4_SLIDING_PAGE_SIZE = 128
 
 
 @lru_cache(maxsize=1)
@@ -56,6 +69,21 @@ class DiffusionGemmaLayerGeometry:
 
 
 @dataclass
+class DiffusionGemmaFA4Metadata:
+    """Paged varlen view of a Diffusion-Gemma batch for FA4.
+
+    Shapes stay fixed for a batch bucket, so CUDA graphs update them in place:
+    ``kv_lens`` (batch,) int32 visible keys per sequence (``seqused_k``),
+    ``page_table`` (batch, pages_per_sequence) int32 cache rows, and
+    ``max_kv_len`` the per-sequence capacity, not the batch maximum.
+    """
+
+    kv_lens: torch.Tensor
+    page_table: torch.Tensor
+    max_kv_len: int
+
+
+@dataclass
 class DiffusionGemmaAttentionMetadata:
     phase: str
     seq_ids: tuple[int, ...]
@@ -73,6 +101,9 @@ class DiffusionGemmaAttentionMetadata:
     kv_indices: torch.Tensor
     last_page_len: torch.Tensor
     _masks: dict[int | None, torch.Tensor] = field(default_factory=dict)
+    sliding_window_mode: str = "per_query"
+    sliding_window_left: int | None = None
+    fa4: DiffusionGemmaFA4Metadata | None = None
 
     @property
     def batch_size(self) -> int:
@@ -88,6 +119,8 @@ class DiffusionGemmaAttentionMetadata:
             self.kv_lens,
             self.kv_indices_signature,
             self.page_size,
+            self.sliding_window_mode,
+            self.sliding_window_left,
         )
 
     def mask(self, sliding_window: int | None) -> torch.Tensor:
@@ -108,9 +141,15 @@ class DiffusionGemmaAttentionMetadata:
             else:
                 raise ValueError(f"unknown Diffusion-Gemma phase {self.phase!r}")
             if sliding_window is not None:
-                mask &= (
-                    q_pos.unsqueeze(1) - k_pos.unsqueeze(0)
-                ).abs() < int(sliding_window)
+                mask &= sliding_window_mask(
+                    q_pos,
+                    k_pos,
+                    phase=self.phase,
+                    sliding_window=int(sliding_window),
+                    mode=self.sliding_window_mode,
+                    window_left=self.sliding_window_left,
+                    q_start=q_offset,
+                )
             parts.append(mask.reshape(-1))
         result = (
             torch.cat(parts)
@@ -135,9 +174,27 @@ class DiffusionGemmaPagedKVCache:
         dtype: torch.dtype,
         device: str | torch.device,
         batch_size: int = 1,
+        sliding_backend: str = "flashinfer",
+        sliding_window_mode: str = "per_query",
+        sliding_window_left: int | None = None,
     ):
         if max_length <= 0 or page_size <= 0 or batch_size <= 0:
             raise ValueError("max_length, page_size, and batch_size must be positive")
+        if sliding_backend not in ("flashinfer", "fa4"):
+            raise ValueError(
+                f"sliding_backend must be 'flashinfer' or 'fa4', got {sliding_backend!r}"
+            )
+        if sliding_backend == "fa4" and int(page_size) != FA4_SLIDING_PAGE_SIZE:
+            raise ValueError(
+                "Diffusion-Gemma FA4 sliding layers require page_size="
+                f"{FA4_SLIDING_PAGE_SIZE} (the SM100 hd256 TMA page), got {page_size}"
+            )
+        validate_sliding_window_mode(sliding_window_mode, sliding_window_left)
+        self.sliding_backend = sliding_backend
+        self.sliding_window_mode = sliding_window_mode
+        self.sliding_window_left = (
+            None if sliding_window_left is None else int(sliding_window_left)
+        )
         self.layer_geometries = tuple(layer_geometries)
         self.max_length = int(max_length)
         self.page_size = int(page_size)
@@ -230,6 +287,14 @@ class DiffusionGemmaPagedKVCache:
             append_positions.extend(range(offset, offset + q_len))
 
         device = self.device
+        fa4 = None
+        if self.sliding_backend == "fa4":
+            seq_index = torch.tensor(seq_ids, dtype=torch.long, device=device)
+            fa4 = DiffusionGemmaFA4Metadata(
+                kv_lens=torch.tensor(kv_lens, dtype=torch.int32, device=device),
+                page_table=self.page_table.index_select(0, seq_index).contiguous(),
+                max_kv_len=self.pages_per_sequence * self.page_size,
+            )
         return DiffusionGemmaAttentionMetadata(
             phase=phase,
             seq_ids=seq_ids,
@@ -252,6 +317,9 @@ class DiffusionGemmaPagedKVCache:
             last_page_len=torch.tensor(
                 last_page_lens, dtype=torch.int32, device=device
             ),
+            sliding_window_mode=self.sliding_window_mode,
+            sliding_window_left=self.sliding_window_left,
+            fa4=fa4,
         )
 
     def reset(self) -> None:
@@ -284,6 +352,7 @@ class DiffusionGemmaPagedAttention:
         scale: float,
         sliding_window: int | None,
         backend: str = "auto",
+        fa4_kernel: Callable | None = None,
     ):
         self.layer_id = int(layer_id)
         self.num_heads = int(num_heads)
@@ -292,6 +361,7 @@ class DiffusionGemmaPagedAttention:
         self.scale = float(scale)
         self.sliding_window = sliding_window
         self.backend = backend
+        self.fa4_kernel = fa4_kernel
 
     def _state(self, device: torch.device) -> _WrapperState:
         index = device.index if device.index is not None else torch.cuda.current_device()
@@ -310,7 +380,14 @@ class DiffusionGemmaPagedAttention:
             _STATES[key] = state
         return state
 
-    def _mask(self, positions: torch.Tensor, kv_len: int, phase: str) -> torch.Tensor:
+    def _mask(
+        self,
+        positions: torch.Tensor,
+        kv_len: int,
+        phase: str,
+        sliding_window_mode: str = "per_query",
+        sliding_window_left: int | None = None,
+    ) -> torch.Tensor:
         q_pos = positions.reshape(-1).long()
         k_pos = torch.arange(kv_len, device=positions.device, dtype=torch.long)
         mask = (
@@ -320,10 +397,55 @@ class DiffusionGemmaPagedAttention:
         )
         sliding_window = self.sliding_window
         if sliding_window is not None:
-            mask &= (q_pos.unsqueeze(1) - k_pos.unsqueeze(0)).abs() < int(
-                sliding_window
+            mask &= sliding_window_mask(
+                q_pos,
+                k_pos,
+                phase=phase,
+                sliding_window=int(sliding_window),
+                mode=sliding_window_mode,
+                window_left=sliding_window_left,
+                q_start=int(positions.reshape(-1)[0]) if q_pos.numel() else 0,
             )
         return mask
+
+    def _fa4_forward(
+        self,
+        packed_q: torch.Tensor,
+        k_cache: torch.Tensor,
+        v_cache: torch.Tensor,
+        metadata: DiffusionGemmaAttentionMetadata,
+    ) -> torch.Tensor:
+        """Sliding-window layer on FA4: paged varlen, seqused_k, bottom-right windows."""
+        fa4 = metadata.fa4
+        window = fa4_window_kwargs(
+            phase=metadata.phase,
+            sliding_window=int(self.sliding_window),
+            mode=metadata.sliding_window_mode,
+            window_left=metadata.sliding_window_left,
+        )
+        if window["window_left_anchor"] == "query":
+            # The default; keeps FA4 builds without per-row windows working.
+            del window["window_left_anchor"]
+        kernel = self.fa4_kernel
+        if kernel is None:
+            from fluxserve.backend.layers.attention.fa4 import load_fa4_varlen_func
+
+            kernel = load_fa4_varlen_func()
+        result = kernel(
+            packed_q,
+            k_cache,
+            v_cache,
+            cu_seqlens_q=metadata.qo_indptr,
+            cu_seqlens_k=None,
+            seqused_k=fa4.kv_lens,
+            max_seqlen_q=metadata.max_q_len,
+            max_seqlen_k=fa4.max_kv_len,
+            page_table=fa4.page_table,
+            softmax_scale=self.scale,
+            return_lse=False,
+            **window,
+        )
+        return result[0] if isinstance(result, tuple) else result
 
     def forward(
         self,
@@ -363,7 +485,11 @@ class DiffusionGemmaPagedAttention:
             kv_layout="NHD",
         )
 
-        if graph_runner is not None:
+        if self.sliding_window is not None and metadata.fa4 is not None:
+            # Also inside the denoise CUDA graph: the FA4 metadata tensors are
+            # the graph's static buffers, updated in place before each replay.
+            packed_output = self._fa4_forward(packed_q, k_cache, v_cache, metadata)
+        elif graph_runner is not None:
             packed_output = graph_runner.run_gemma_attention(
                 q=packed_q,
                 paged_kv_cache=(k_cache, v_cache),
@@ -448,11 +574,61 @@ def probe_diffusion_gemma_flashinfer(
         attention.forward(q, k, k, cache=cache, metadata=metadata)
 
 
+def probe_diffusion_gemma_fa4(
+    geometries: list[tuple[int, int, int, int]],
+    device: str | torch.device,
+    *,
+    sliding_window_mode: str = "per_query",
+    sliding_window_left: int | None = None,
+) -> None:
+    """Compile the FA4 sliding-layer kernels before serving.
+
+    ``geometries`` holds ``(num_heads, num_kv_heads, head_dim, sliding_window)``.
+    One causal call (prefill and commit share it) and one denoise call per
+    geometry; FA4 compiles per variant, not per length.
+    """
+    device = torch.device(device)
+    for num_heads, num_kv_heads, head_dim, sliding_window in sorted(set(geometries)):
+        cache = DiffusionGemmaPagedKVCache(
+            layer_geometries=[DiffusionGemmaLayerGeometry(num_kv_heads, head_dim)],
+            max_length=FA4_SLIDING_PAGE_SIZE,
+            page_size=FA4_SLIDING_PAGE_SIZE,
+            dtype=torch.bfloat16,
+            device=device,
+            sliding_backend="fa4",
+            sliding_window_mode=sliding_window_mode,
+            sliding_window_left=sliding_window_left,
+        )
+        attention = DiffusionGemmaPagedAttention(
+            layer_id=0,
+            num_heads=num_heads,
+            num_kv_heads=num_kv_heads,
+            head_dim=head_dim,
+            scale=1.0,
+            sliding_window=sliding_window,
+        )
+        q = torch.zeros(1, num_heads, 1, head_dim, dtype=torch.bfloat16, device=device)
+        k = torch.zeros(1, num_kv_heads, 1, head_dim, dtype=torch.bfloat16, device=device)
+        for phase in ("prefill", "denoise"):
+            metadata = cache.build_metadata(
+                phase=phase,
+                seq_ids=(0,),
+                q_offsets=(0,),
+                q_lens=(1,),
+                kv_lens=(1,),
+                max_q_len=1,
+            )
+            attention.forward(q, k, k, cache=cache, metadata=metadata)
+
+
 __all__ = [
+    "FA4_SLIDING_PAGE_SIZE",
     "DiffusionGemmaAttentionMetadata",
+    "DiffusionGemmaFA4Metadata",
     "DiffusionGemmaLayerGeometry",
     "DiffusionGemmaPagedAttention",
     "DiffusionGemmaPagedKVCache",
+    "probe_diffusion_gemma_fa4",
     "probe_diffusion_gemma_flashinfer",
     "require_diffusion_gemma_flashinfer",
 ]

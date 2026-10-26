@@ -45,6 +45,7 @@ from fluxserve.backend.execution.decoders.common import resolve_checkpoint_eos_i
 from fluxserve.backend.execution.forward_batch_info import RunnerConfig
 from fluxserve.backend.execution.runners import (
     BlockDiffusionRunner,
+    DiffusionGemmaFA4Runner,
     DiffusionGemmaFlashInferRunner,
     DiffusionGemmaRunner,
     FA4DiffusionRunner,
@@ -68,10 +69,12 @@ from fluxserve.cli.bench_offline import (
 )
 from fluxserve.cli.common import (
     StoreExplicit,
+    add_sliding_window_args,
     check_block_routing_alignment,
     configure_logging,
     default_cuda_graph_capture_batch_sizes,
     normalize_attention_backend_args,
+    normalize_diffusion_gemma_fa4_args,
     reject_unsupported_quantization,
     set_process_title,
 )
@@ -161,7 +164,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("dense", "paged"),
         default="paged",
     )
-    launch.add_argument("--page-size", type=int, default=None)
+    launch.add_argument("--page-size", type=int, default=None, action=StoreExplicit)
+    launch.set_defaults(page_size_explicit=False)
+    add_sliding_window_args(launch)
     launch.add_argument("--parallel-decoding", default="threshold")
     # Nemotron-Labs-Diffusion sampling and thinking budget.
     launch.add_argument("--max-thinking-tokens", type=int, default=None)
@@ -248,7 +253,7 @@ def normalize_diffusion_gemma_serve_args(args, model_config) -> bool:
     if not is_diffusion_gemma:
         return False
     if args.attention_backend == "fa4":
-        raise ValueError("attention_backend='fa4' currently supports LLaDA 2.x only")
+        normalize_diffusion_gemma_fa4_args(args)
     if args.canvas_length is not None and int(args.canvas_length) <= 0:
         raise ValueError("--canvas-length must be positive")
     if args.use_cuda_graph or args.use_prefill_cuda_graph:
@@ -259,15 +264,18 @@ def normalize_diffusion_gemma_serve_args(args, model_config) -> bool:
     if args.use_decode_cuda_graph:
         if not getattr(args, "attention_backend_explicit", False):
             args.attention_backend = "flashinfer"
-        if not (
+        flashinfer_paged = (
             args.attention_backend == "flashinfer"
             and args.flashinfer_prefill_mode == "paged"
             and args.flashinfer_cache_mode == "paged"
             and args.kv_cache_layout == "paged"
-        ):
+        )
+        fa4_paged = args.attention_backend == "fa4" and args.kv_cache_layout == "paged"
+        if not (flashinfer_paged or fa4_paged):
             raise ValueError(
                 "Diffusion-Gemma decode CUDA graphs require FlashInfer paged "
-                "prefill, paged cache mode, and paged KV layout."
+                "prefill, paged cache mode, and paged KV layout, or FA4 with "
+                "the paged KV layout."
             )
     elif not getattr(args, "attention_backend_explicit", False):
         args.attention_backend = "sdpa"
@@ -445,6 +453,8 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             page_size=args.page_size,
             canvas_length=args.canvas_length,
             max_denoising_steps=args.max_denoising_steps,
+            sliding_window_mode=args.sliding_window_mode,
+            sliding_window_left=args.sliding_window_left,
             parallel_decoding=args.parallel_decoding,
             threshold=args.threshold,
             low_threshold=args.low_threshold,
@@ -466,11 +476,10 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             )
             runner_cls = get_nemotron_runner(args.attention_backend, args.parallel_decoding)
         elif is_diffusion_gemma:
-            runner_cls = (
-                DiffusionGemmaFlashInferRunner
-                if args.attention_backend == "flashinfer"
-                else DiffusionGemmaRunner
-            )
+            runner_cls = {
+                "flashinfer": DiffusionGemmaFlashInferRunner,
+                "fa4": DiffusionGemmaFA4Runner,
+            }.get(args.attention_backend, DiffusionGemmaRunner)
         else:
             if args.attention_backend == "flashinfer":
                 runner_cls = FlashInferDiffusionRunner

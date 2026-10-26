@@ -99,6 +99,54 @@ def check_block_routing_alignment(model_config, block_length: int) -> None:
         )
 
 
+# FA4 serves Diffusion-Gemma's head_dim-256 sliding layers with its SM100 kernel,
+# which loads paged KV with TMA in 128-token pages.
+DIFFUSION_GEMMA_FA4_PAGE_SIZE = 128
+
+
+def normalize_diffusion_gemma_fa4_args(args) -> None:
+    """Diffusion-Gemma on FA4: paged KV in 128-token pages."""
+    if getattr(args, "kv_cache_layout", "paged") != "paged":
+        raise ValueError("attention_backend='fa4' requires --kv-cache-layout paged")
+    args.kv_cache_layout = "paged"
+    args.flashinfer_prefill_mode = "dense"
+    args.flashinfer_cache_mode = "dense"
+    page_size = getattr(args, "page_size", None)
+    if (
+        getattr(args, "page_size_explicit", False)
+        and int(page_size) != DIFFUSION_GEMMA_FA4_PAGE_SIZE
+    ):
+        raise ValueError(
+            "Diffusion-Gemma FA4 requires --page-size "
+            f"{DIFFUSION_GEMMA_FA4_PAGE_SIZE} (FA4's SM100 head_dim-256 TMA page), "
+            f"got {page_size}"
+        )
+    args.page_size = DIFFUSION_GEMMA_FA4_PAGE_SIZE
+
+
+def add_sliding_window_args(parser) -> None:
+    parser.add_argument(
+        "--sliding-window-mode",
+        "--sliding_window_mode",
+        dest="sliding_window_mode",
+        choices=("per_query", "per_row"),
+        default="per_query",
+        help=(
+            "Diffusion-Gemma denoise sliding window: 'per_query' (|q - k| < W) or "
+            "'per_row' (every canvas row reads the last --sliding-window-left "
+            "cache tokens, like the HF reference decoder)."
+        ),
+    )
+    parser.add_argument(
+        "--sliding-window-left",
+        "--sliding_window_left",
+        dest="sliding_window_left",
+        type=int,
+        default=None,
+        help="Cache tokens a 'per_row' canvas reads (default: sliding_window - 1).",
+    )
+
+
 def normalize_attention_backend_args(args) -> None:
     """Normalize cache and page settings for the selected attention backend."""
     if args.attention_backend == "flashinfer":

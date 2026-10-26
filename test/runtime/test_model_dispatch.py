@@ -24,6 +24,7 @@ from test_nemotron_model import checkpoint_config as nemotron_config
 
 RUNNER_NAMES = (
     "BlockDiffusionRunner",
+    "DiffusionGemmaFA4Runner",
     "DiffusionGemmaFlashInferRunner",
     "DiffusionGemmaRunner",
     "FA4DiffusionRunner",
@@ -300,6 +301,28 @@ def test_launch_gemma_uses_canvas_length_and_chat_template(wiring):
     assert runner.runner_config.kv_cache_layout == "dense"
 
 
+@pytest.mark.parametrize("graph", [False, True])
+def test_launch_gemma_fa4_uses_hybrid_runner_and_128_pages(wiring, graph):
+    flags = ["--attention-backend", "fa4"] + (["--use-decode-cuda-graph"] if graph else [])
+    runner = _launch(wiring, "gemma", *flags)
+    config = runner.runner_config
+    assert type(runner).__name__ == "DiffusionGemmaFA4Runner"
+    assert config.attention_backend == "fa4"
+    assert config.kv_cache_layout == "paged"
+    assert config.page_size == 128
+    assert config.enable_decode_cuda_graph is graph
+    assert config.sliding_window_mode == "per_query"
+
+
+def test_launch_gemma_fa4_per_row_window(wiring):
+    runner = _launch(
+        wiring, "gemma", "--attention-backend", "fa4", "--page-size", "128",
+        "--sliding-window-mode", "per_row", "--sliding-window-left", "1024",
+    )
+    assert runner.runner_config.sliding_window_mode == "per_row"
+    assert runner.runner_config.sliding_window_left == 1024
+
+
 def test_launch_nemotron_sets_ids_sampling_defaults_and_template(wiring):
     runner = _launch(wiring, "nemotron", "--temperature", "0.7", "--seed", "3")
     config = runner.runner_config
@@ -328,7 +351,8 @@ def test_launch_nemotron_self_speculation_paged(wiring):
     [
         ("gemma", ["--scheduler-policy", "paged", "--attention-backend", "flashinfer"],
          RuntimeError, "does not support scheduler_policy='paged'"),
-        ("gemma", ["--attention-backend", "fa4"], ValueError, "supports LLaDA 2.x only"),
+        ("gemma", ["--attention-backend", "fa4", "--page-size", "256"],
+         ValueError, "requires --page-size 128"),
         ("gemma", ["--use-cuda-graph"], ValueError, "decode CUDA graphs only"),
         ("nemotron", ["--scheduler-policy", "paged", "--page-size", "32"],
          ValueError, "page_size == block_length"),
@@ -352,6 +376,13 @@ def test_bench_gemma_forces_block_length_to_canvas_length(wiring):
     assert runner.runner_config.block_length == 32
     assert runner.runner_config.canvas_length == 32
     assert runner.runner_config.kv_cache_layout == "dense"
+
+
+def test_bench_gemma_fa4_uses_hybrid_runner(wiring):
+    runner = _bench(wiring, "gemma", "--attention-backend", "fa4", "--block-length", "64")
+    config = runner.runner_config
+    assert type(runner).__name__ == "DiffusionGemmaFA4Runner"
+    assert (config.block_length, config.kv_cache_layout, config.page_size) == (32, "paged", 128)
 
 
 def test_launch_gemma_keeps_block_length(wiring):

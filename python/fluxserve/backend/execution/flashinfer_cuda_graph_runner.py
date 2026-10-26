@@ -579,6 +579,25 @@ class FlashInferCudaGraphRunner:
         target.kv_indices.fill_(0)
         target.kv_indices[: source.kv_indices.numel()].copy_(source.kv_indices)
         target.last_page_len.copy_(source.last_page_len)
+        target_fa4 = getattr(target, "fa4", None)
+        source_fa4 = getattr(source, "fa4", None)
+        if target_fa4 is not None or source_fa4 is not None:
+            # FA4 sliding layers read these inside the graph; everything else
+            # FA4 sees (window, causality, capacity) is baked in at capture.
+            if (
+                target_fa4 is None
+                or source_fa4 is None
+                or target_fa4.max_kv_len != source_fa4.max_kv_len
+                or target.phase != source.phase
+                or target.max_q_len != source.max_q_len
+                or target.sliding_window_mode != source.sliding_window_mode
+                or target.sliding_window_left != source.sliding_window_left
+            ):
+                raise RuntimeError(
+                    "Diffusion-Gemma FA4 metadata does not match the captured graph"
+                )
+            target_fa4.kv_lens.copy_(source_fa4.kv_lens)
+            target_fa4.page_table.copy_(source_fa4.page_table)
 
     @staticmethod
     def _make_gemma_graph_metadata(metadata, cache):
@@ -588,11 +607,21 @@ class FlashInferCudaGraphRunner:
         kv_indices = torch.zeros(
             capacity, dtype=torch.int32, device=cache.device
         )
+        fa4 = getattr(metadata, "fa4", None)
         result = replace(
             metadata,
             kv_indices=kv_indices,
             kv_indices_signature=(),
             _masks={},
+            fa4=(
+                None
+                if fa4 is None
+                else replace(
+                    fa4,
+                    kv_lens=fa4.kv_lens.clone(),
+                    page_table=fa4.page_table.clone(),
+                )
+            ),
         )
         FlashInferCudaGraphRunner._copy_gemma_metadata(result, metadata)
         return result

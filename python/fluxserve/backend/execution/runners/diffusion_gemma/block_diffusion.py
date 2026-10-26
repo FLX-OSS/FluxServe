@@ -43,16 +43,24 @@ class DiffusionGemmaRunner(BlockDiffusionRunner):
     """Correctness-first text runner for Diffusion-Gemma."""
 
     _supports_flashinfer = False
+    _supports_fa4 = False
 
     requires_prompt_lengths = True
 
     def __init__(self, model_config, server_args, runner_config=None, device="cuda"):
-        use_flashinfer = bool(
-            runner_config is not None
-            and runner_config.attention_backend == "flashinfer"
-        )
-        if use_flashinfer and not self._supports_flashinfer:
+        backend = getattr(runner_config, "attention_backend", None)
+        if backend == "flashinfer" and not self._supports_flashinfer:
             raise ValueError("Use DiffusionGemmaFlashInferRunner for FlashInfer")
+        if backend == "fa4" and not self._supports_fa4:
+            raise ValueError("Use DiffusionGemmaFA4Runner for FA4")
+        if (
+            getattr(runner_config, "sliding_window_mode", "per_query") != "per_query"
+            and not (self._supports_flashinfer or self._supports_fa4)
+        ):
+            raise ValueError(
+                "sliding_window_mode='per_row' requires the paged FlashInfer or FA4 "
+                "Diffusion-Gemma runner"
+            )
         if runner_config is not None and runner_config.enable_prefill_cuda_graph:
             raise ValueError(
                 "Diffusion-Gemma supports decode CUDA graphs only; disable "
@@ -73,7 +81,10 @@ class DiffusionGemmaRunner(BlockDiffusionRunner):
             runner_config,
             device,
         )
-        self.use_flashinfer_paged = use_flashinfer
+        # FA4 runs on the same paged cache and batch loop as FlashInfer.
+        self.use_flashinfer_paged = backend in ("flashinfer", "fa4") and (
+            self._supports_flashinfer or self._supports_fa4
+        )
         self.last_denoising_steps = []
 
     def init_decoder(self):
