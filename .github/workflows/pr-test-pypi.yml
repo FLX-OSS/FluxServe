@@ -50,7 +50,7 @@ jobs:
       - name: Lint profiles before taking a GPU runner
         run: |
           python -m pip install "setuptools>=77,<82" "packaging==26.3"
-          python test/ci_system/pypi/profile_checks.py lint pyproject_*.toml
+          python test/ci_system/pypi/profile_checks.py lint
 
       - name: Build profile matrix
         id: matrix

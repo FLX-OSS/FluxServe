@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a venv from a pip install profile (pyproject_<profile>.toml) on its GPU host and check it against the
+# Build a venv from a pip install profile (an extra of pyproject.toml) on its GPU host and check it against the
 # profile's reference image. .github/workflows/pr-test-pypi.yml runs it; locally, run it in a GPU allocation:
 #   srun -p hpg-rtx6000 --gres=gpu:1 --cpus-per-task=16 --mem=64G --time=02:00:00 --pty bash -l
 #   bash test/ci_system/pypi/verify_venv.sh sm120 --smoke
@@ -128,15 +128,14 @@ else
     if ! git -C "$SRC" diff --quiet HEAD; then
         git -C "$SRC" diff --binary HEAD | git -C "$CHECKOUT" apply
     fi
-    cp "$SRC"/pyproject_*.toml "$CHECKOUT/"
 fi
 cd "$CHECKOUT"
 
 echo "== Check the profile against $IMAGE"
 # HOME now points into $WORK, so apptainer no longer binds the real home: bind the scripts' tree explicitly.
 apptainer exec --cleanenv --env "GITHUB_ACTIONS=${GITHUB_ACTIONS:-}" --bind "$SRC" --bind "$WORK" "$IMAGE" \
-    "${IMAGE_PYTHON[@]}" "$SCRIPT_DIR/profile_checks.py" image "$CHECKOUT/pyproject_$PROFILE.toml" \
-    --snapshot "$ARTIFACTS/image-snapshot.json"
+    "${IMAGE_PYTHON[@]}" "$SCRIPT_DIR/profile_checks.py" image "$PROFILE" \
+    --pyproject "$CHECKOUT/pyproject.toml" --snapshot "$ARTIFACTS/image-snapshot.json"
 
 echo "== Toolchain and venv"
 set +u  # Lmod and venv activation reference unset variables
@@ -162,7 +161,6 @@ echo "== Install (docs/guides/getting_started.md)"
 python -m pip install --upgrade pip
 python -c 'import pip, sys; sys.exit(tuple(map(int, pip.__version__.split(".")[:2])) < (25, 1))' \
     || die "pip >= 25.1 is needed for --group"
-ln -sf "pyproject_$PROFILE.toml" pyproject.toml
 pip install -e ".[$PROFILE,dev]" --extra-index-url "$PT_INDEX"
 for group in "${NODEPS_GROUPS[@]}"; do
     pip install --no-deps --group "$group"
@@ -171,8 +169,8 @@ pip install --no-build-isolation -e flux-kernel/python/
 pip install -e flux-scheduler
 pip list --format=freeze >"$ARTIFACTS/venv-freeze.txt"
 
-check "venv matches the profile and the image" python "$SCRIPT_DIR/profile_checks.py" venv \
-    "pyproject_$PROFILE.toml" --snapshot "$ARTIFACTS/image-snapshot.json" --checkout "$CHECKOUT" \
+check "venv matches the profile and the image" python "$SCRIPT_DIR/profile_checks.py" venv "$PROFILE" \
+    --pyproject "$CHECKOUT/pyproject.toml" --snapshot "$ARTIFACTS/image-snapshot.json" --checkout "$CHECKOUT" \
     --stamp-arch "$STAMP_ARCH" --capability "$CAPABILITY"
 check "fluxserve env" fluxserve env
 

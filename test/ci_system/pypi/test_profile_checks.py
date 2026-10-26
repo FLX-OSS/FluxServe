@@ -1,5 +1,4 @@
 import textwrap
-from pathlib import Path
 
 import pytest
 from packaging.requirements import Requirement
@@ -12,17 +11,17 @@ from profile_checks import (
     commit_matches,
     cuda_from_local,
     dependency_conflicts,
+    dev_closure_problems,
     duplicate_names,
     exact_version,
     first_wins,
-    lint_problems,
     parse_recipe_args,
+    profile_problems,
     public_version,
     requirement_problem,
 )
 
 SHA = "a7d243e0b25697b021cc9366f1326d7b5013287b"
-REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.mark.parametrize(
@@ -113,51 +112,57 @@ def test_parse_recipe_args():
     assert parse_recipe_args(text) == {"CUDA_VERSION": "13.0.1", "TORCH_VERSION": "2.11.0"}
 
 
-def write_profile(tmp_path, name, body):
-    path = tmp_path / f"pyproject_{name}.toml"
+def write_pyproject(tmp_path, body):
+    path = tmp_path / "pyproject.toml"
     path.write_text(textwrap.dedent(body))
     return path
 
 
-def test_profile_collects_pins_git_refs_and_nodeps_groups(tmp_path):
-    path = write_profile(
-        tmp_path,
-        "demo",
-        f"""
-        [project]
-        name = "fluxserve"
-        dynamic = ["version", "requires-python"]
-        dependencies = []
+DEMO = f"""
+    [project]
+    name = "fluxserve"
+    dynamic = ["version", "requires-python"]
+    dependencies = []
 
-        [project.optional-dependencies]
-        demo = ["torch==2.11.0+cu130", "nvidia-cutlass-dsl[cu13]==4.5.1"]
-        dev = ["pytest==9.0.3"]
+    [project.optional-dependencies]
+    sm120 = ["torch==2.11.0+cu130", "nvidia-cutlass-dsl[cu13]==4.8.0", "numpy==2.5.2"]
+    sm100 = ["torch==2.11.0+cu130", "nvidia-cutlass-dsl[cu13]==4.5.1", "numpy==2.3.5"]
+    sm90 = ["torch==2.11.0+cu130", "numpy==2.5.2"]
+    dev = ["scipy==1.18.1", "pytest==9.1.1", "pluggy==1.6.0"]
 
-        [dependency-groups]
-        demo-nodeps = [
-            "flashinfer-python @ git+https://github.com/FLX-OSS/flashinfer-dllm.git@{SHA}",
-            "nvidia-nccl-cu13==2.31.2",
-        ]
-        """,
-    )
-    profile = Profile(path)
-    assert profile.name == "demo"
-    assert profile.pins() == {
+    [dependency-groups]
+    sm100-nodeps = [
+        "flashinfer-python @ git+https://github.com/FLX-OSS/flashinfer-dllm.git@{SHA}",
+        "nvidia-nccl-cu13==2.31.2",
+    ]
+    """
+
+
+def test_profile_collects_its_extra_dev_and_nodeps_group(tmp_path):
+    path = write_pyproject(tmp_path, DEMO)
+    sm100 = Profile(path, "sm100")
+    assert sm100.pins() == {
         "torch": "2.11.0+cu130",
         "nvidia-cutlass-dsl": "4.5.1",
-        "pytest": "9.0.3",
+        "numpy": "2.3.5",
+        "scipy": "1.18.1",
+        "pytest": "9.1.1",
+        "pluggy": "1.6.0",
         "nvidia-nccl-cu13": "2.31.2",
     }
-    assert profile.git_refs() == {"flashinfer-python": ("https://github.com/FLX-OSS/flashinfer-dllm.git", SHA)}
-    assert profile.nodeps_names() == {"flashinfer-python", "nvidia-nccl-cu13"}
-    assert profile.roots() == {"torch": set(), "nvidia-cutlass-dsl": {"cu13"}, "pytest": set()}
+    assert sm100.git_refs() == {"flashinfer-python": ("https://github.com/FLX-OSS/flashinfer-dllm.git", SHA)}
+    assert sm100.nodeps_names() == {"flashinfer-python", "nvidia-nccl-cu13"}
+    assert sm100.roots() == {"torch": set(), "nvidia-cutlass-dsl": {"cu13"}, "numpy": set()}
+
+    sm120 = Profile(path, "sm120")
+    assert sm120.pins(dev=False) == {"torch": "2.11.0+cu130", "nvidia-cutlass-dsl": "4.8.0", "numpy": "2.5.2"}
+    assert sm120.git_refs() == {} and sm120.nodeps_names() == set()
 
 
-def test_lint_flags_broken_profiles(tmp_path, monkeypatch):
-    monkeypatch.setattr(profile_checks, "setuptools_problems", lambda profile: [])
-    path = write_profile(
+def test_lint_flags_broken_files_and_profiles(tmp_path, monkeypatch):
+    monkeypatch.setattr(profile_checks, "setuptools_problems", lambda path: [])
+    path = write_pyproject(
         tmp_path,
-        "demo",
         """
         [project]
         name = "fluxserve"
@@ -165,19 +170,46 @@ def test_lint_flags_broken_profiles(tmp_path, monkeypatch):
         dependencies = ["torch==2.11.0"]
 
         [project.optional-dependencies]
-        demo = ["torch>=2.11", "numpy==2.3.5", "numpy==2.3.5"]
+        sm120 = ["torch>=2.11", "numpy==2.3.5", "numpy==2.3.5"]
+        sm100 = ["pyyaml==6.0.1"]
+        dev = ["pyyaml==6.0.3"]
+
+        [dependency-groups]
+        sm80-nodeps = ["numpy==2.3.5"]
         """,
     )
-    problems = "\n".join(lint_problems(Profile(path), online=False))
+    problems = "\n".join(profile_checks.file_problems(path))
     assert "dependencies must stay empty" in problems
     assert "requires-python" in problems
-    assert "must be exactly [demo, dev]" in problems
-    assert "torch>=2.11: must be an exact == pin" in problems
-    assert "numpy is listed more than once" in problems
+    assert "must be exactly ['dev', 'sm100', 'sm120', 'sm90']" in problems
+    assert "['sm80-nodeps'] must be named <platform>-nodeps" in problems
+    sm120 = "\n".join(profile_problems(Profile(path, "sm120"), online=False))
+    assert "torch>=2.11: must be an exact == pin" in sm120
+    assert "numpy is listed more than once" in sm120
+    assert "pyyaml is listed more than once" in "\n".join(profile_problems(Profile(path, "sm100"), online=False))
 
 
-@pytest.mark.parametrize("name", ["sm120", "sm100", "sm90"])
-def test_repo_profiles_have_no_static_problems(name, monkeypatch):
+def test_dev_closure_must_be_pinned_compatibly(tmp_path, monkeypatch):
+    requires = {
+        ("scipy", "1.18.1"): ["numpy<2.8,>=2.4"],
+        ("pytest", "9.1.1"): ["pluggy<2,>=1.5", "iniconfig>=1.0.1", 'colorama>=0.4; sys_platform == "win32"'],
+        ("pluggy", "1.6.0"): ['pytest; extra == "testing"'],
+    }
+    monkeypatch.setattr(profile_checks, "pypi_requires", lambda name, version: tuple(requires[name, version]))
+    path = write_pyproject(tmp_path, DEMO)
+    assert dev_closure_problems(Profile(path, "sm120")) == ["iniconfig>=1.0.1 (needed by pytest==9.1.1) is not pinned"]
+    assert dev_closure_problems(Profile(path, "sm100")) == [
+        "iniconfig>=1.0.1 (needed by pytest==9.1.1) is not pinned",
+        "scipy==1.18.1 requires numpy<2.8,>=2.4, but numpy is pinned to 2.3.5",
+    ]
+
+
+@pytest.mark.parametrize("name", profile_checks.PLATFORMS)
+def test_repo_profiles_have_no_static_problems(name):
     # The setuptools config stage and the online checks run in the lint workflow itself.
-    monkeypatch.setattr(profile_checks, "setuptools_problems", lambda profile: [])
-    assert lint_problems(Profile(REPO_ROOT / f"pyproject_{name}.toml"), online=False) == []
+    assert profile_problems(Profile(profile_checks.PYPROJECT, name), online=False) == []
+
+
+def test_repo_pyproject_has_no_static_problems(monkeypatch):
+    monkeypatch.setattr(profile_checks, "setuptools_problems", lambda path: [])
+    assert profile_checks.file_problems(profile_checks.PYPROJECT) == []
