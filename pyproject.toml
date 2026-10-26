@@ -188,6 +188,7 @@ sm90 = [
     "pillow==12.3.0",
     "propcache==0.5.2",
     "pydantic==2.13.5",
+    "pygments==2.21.0",
     "regex==2026.9.3",
     "starlette==1.6.0",
     "typer==0.27.2",
