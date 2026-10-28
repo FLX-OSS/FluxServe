@@ -75,12 +75,13 @@ class ReferenceFA4:
 
     def __call__(self, q, k_cache, v_cache, *, cu_seqlens_q, cu_seqlens_k, seqused_k,
                  max_seqlen_q, max_seqlen_k, page_table, softmax_scale, return_lse,
-                 causal=False, window_size=(None, None), **kwargs):
+                 causal=False, window_size=(None, None), qv=None, **kwargs):
         anchor = kwargs.pop("window_left_anchor", "query")
         assert not kwargs and cu_seqlens_k is None and not return_lse
         self.calls.append(dict(causal=causal, window_size=window_size, anchor=anchor,
                                anchor_passed=anchor != "query", max_seqlen_k=max_seqlen_k,
-                               kv_lens=seqused_k.tolist(), page_table=page_table.clone()))
+                               kv_lens=seqused_k.tolist(), page_table=page_table.clone(),
+                               mla=qv is not None, softmax_scale=softmax_scale))
         left, right = window_size
         if causal:
             right = 0
@@ -91,8 +92,9 @@ class ReferenceFA4:
             sq, sk = q1 - q0, int(seqused_k[b])
             assert sq <= max_seqlen_q and sk <= max_seqlen_k
             pages = page_table[b, : math.ceil(sk / page)].long()
-            k = k_cache[pages].reshape(-1, HKV, D)[:sk].float().repeat_interleave(H // HKV, 1)
-            v = v_cache[pages].reshape(-1, HKV, D)[:sk].float().repeat_interleave(H // HKV, 1)
+            hkv, hq = k_cache.shape[2], q.shape[1]
+            k = k_cache[pages].reshape(-1, hkv, k_cache.shape[-1])[:sk].float().repeat_interleave(hq // hkv, 1)
+            v = v_cache[pages].reshape(-1, hkv, v_cache.shape[-1])[:sk].float().repeat_interleave(hq // hkv, 1)
             rows, cols = torch.arange(sq)[:, None], torch.arange(sk)[None, :]
             offset = sk - sq  # bottom-right alignment
             visible = torch.ones(sq, sk, dtype=torch.bool)
@@ -101,9 +103,18 @@ class ReferenceFA4:
                 visible &= cols >= first + offset - left
             if right is not None:
                 visible &= cols <= rows + offset + right
-            scores = torch.einsum("qhd,khd->hqk", q[q0:q1].float(), k) * softmax_scale
+            scores = torch.einsum("qhd,khd->hqk", q[q0:q1].float(), k)
+            if qv is not None:  # MLA: S = q . k + qv . v
+                scores = scores + torch.einsum("qhd,khd->hqk", qv[q0:q1].float(), v)
+            scores = scores * softmax_scale
             probs = scores.masked_fill(~visible, float("-inf")).softmax(-1)
-            out[q0:q1] = torch.einsum("hqk,khd->qhd", probs, v).to(q.dtype)
+            o = torch.einsum("hqk,khd->qhd", probs, v)
+            if qv is None:
+                out[q0:q1] = o.to(q.dtype)
+            else:
+                out = out if out.shape[-1] == v.shape[-1] else torch.zeros(
+                    q.shape[0], q.shape[1], v.shape[-1], dtype=q.dtype)
+                out[q0:q1] = o.to(q.dtype)
         return out
 
 
@@ -269,18 +280,19 @@ def test_graph_metadata_updates_fa4_tensors_in_place():
         FlashInferCudaGraphRunner._copy_gemma_metadata(graph, build("commit", (2, 3), (200, 0)))
 
 
-def _fa4_runner(monkeypatch, page_size=128, capability=(10, 0)):
+def _fa4_runner(monkeypatch, page_size=128, capability=(10, 0), full=None, full_backend="auto",
+                device="cuda:0"):
     def init_block(self, model_config, server_args, runner_config, device, **kwargs):
         self.runner_config = runner_config
         self.device = device
         sliding = SimpleNamespace(num_heads=16, num_kv_heads=8, head_dim=256,
                                   sliding_window=1024, layer_id=0)
-        full = SimpleNamespace(num_heads=16, num_kv_heads=2, head_dim=512, sliding_window=None,
-                               layer_id=5)
+        full_layer = full or SimpleNamespace(num_heads=16, num_kv_heads=2, head_dim=512,
+                                             sliding_window=None, layer_id=5)
         self.model = SimpleNamespace(model=SimpleNamespace(
-            layers=[SimpleNamespace(self_attn=sliding), SimpleNamespace(self_attn=full)]))
+            layers=[SimpleNamespace(self_attn=sliding), SimpleNamespace(self_attn=full_layer)]))
 
-    probes = SimpleNamespace(flashinfer=[], fa4=[])
+    probes = SimpleNamespace(flashinfer=[], fa4=[], mla=[])
     monkeypatch.setattr("fluxserve.backend.execution.runners.base.BlockDiffusionRunner.__init__",
                         init_block)
     flashinfer_runner = "fluxserve.backend.execution.runners.diffusion_gemma.flashinfer"
@@ -291,12 +303,16 @@ def _fa4_runner(monkeypatch, page_size=128, capability=(10, 0)):
     monkeypatch.setattr(f"{fa4_runner}.validate_fa4_runtime", lambda device: None)
     monkeypatch.setattr(f"{fa4_runner}.probe_diffusion_gemma_fa4",
                         lambda geometries, device, **kw: probes.fa4.append((geometries, kw)))
+    monkeypatch.setattr(f"{fa4_runner}.probe_diffusion_gemma_fa4_mla",
+                        lambda geometries, device: probes.mla.append(geometries))
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *args: capability)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
     config = SimpleNamespace(attention_backend="fa4", kv_cache_layout="paged", page_size=page_size,
                              enable_prefill_cuda_graph=False, enable_decode_cuda_graph=False,
-                             sliding_window_mode="per_row", sliding_window_left=None)
+                             sliding_window_mode="per_row", sliding_window_left=None,
+                             full_attention_backend=full_backend)
     args = SimpleNamespace(tp_size=1, ep_size=1, dp_size=1, pp_size=1, enable_dp_attention=False)
-    return DiffusionGemmaFA4Runner(SimpleNamespace(), args, config, device="cuda:0"), probes
+    return DiffusionGemmaFA4Runner(SimpleNamespace(), args, config, device=device), probes
 
 
 def test_fa4_runner_splits_layers_between_backends(monkeypatch):
@@ -313,3 +329,110 @@ def test_fa4_runner_validation(monkeypatch):
         _fa4_runner(monkeypatch, page_size=64)
     with pytest.raises(RuntimeError, match="SM100/SM110"):
         _fa4_runner(monkeypatch, capability=(12, 0))
+
+
+def test_fa4_mla_full_layer_matches_dense_attention(monkeypatch):
+    """Full layer as FA4 MLA: K = c * k_rot, where k_rot is V with only the rope dims changed (what
+    RoPE(V) is), against dense attention written the original way, S = q . K with scale 1."""
+    monkeypatch.setattr(gemma_attention, "require_diffusion_gemma_flashinfer",
+                        lambda: (None, None, None, torch_append))
+    c, rope_dims = 0.0623, torch.tensor([0, 1, 8, 9])  # 16-wide head: pairs (j, j + 8), j < 2
+    prompts, seq_ids = (3, 20, 140), (2, 0, 1)
+    totals = tuple(p + CANVAS for p in prompts)
+    gen = torch.Generator().manual_seed(0)
+    Q = [torch.randn(t, H, D, generator=gen) for t in totals]
+    V = [torch.randn(t, HKV, D, generator=gen) for t in totals]
+    K_rot = [v.clone() for v in V]
+    for k in K_rot:
+        k[..., rope_dims] = torch.randn(k.shape[0], HKV, len(rope_dims), generator=gen)
+    cache = DiffusionGemmaPagedKVCache(
+        layer_geometries=[DiffusionGemmaLayerGeometry(HKV, D, key_head_dim=len(rope_dims))],
+        max_length=2 * PAGE, page_size=PAGE, dtype=torch.float32, device="cpu", batch_size=3,
+        sliding_backend="fa4")
+    assert cache.layer_paged_kv(0)[0].shape[-1] == len(rope_dims)
+    assert cache.layer_paged_kv(0)[1].shape[-1] == D
+    kernel = ReferenceFA4()
+    attention = DiffusionGemmaPagedAttention(layer_id=0, num_heads=H, num_kv_heads=HKV,
+                                             head_dim=D, scale=1.0, sliding_window=None,
+                                             fa4_kernel=kernel)
+    attention.enable_fa4_mla(scale=c, rope_dims=rope_dims)
+
+    def run(phase, q_offsets, q_lens, max_q_len):
+        metadata = cache.build_metadata(
+            phase=phase, seq_ids=seq_ids, q_offsets=q_offsets, q_lens=q_lens,
+            kv_lens=tuple(o + n for o, n in zip(q_offsets, q_lens)), max_q_len=max_q_len)
+        parts = [slice(o, o + n) for o, n in zip(q_offsets, q_lens)]
+        out = attention.forward(
+            _padded([x[s] for x, s in zip(Q, parts)], H, max_q_len),
+            _padded([x[s] for x, s in zip(K_rot, parts)], HKV, max_q_len),
+            _padded([x[s] for x, s in zip(V, parts)], HKV, max_q_len),
+            cache=cache, metadata=metadata)
+        for row, (offset, n) in enumerate(zip(q_offsets, q_lens)):
+            q, k, v = Q[row][offset:offset + n], c * K_rot[row][:offset + n], V[row][:offset + n]
+            s = torch.einsum("qhd,khd->hqk", q, k.repeat_interleave(H // HKV, 1))
+            if phase != "denoise":
+                qpos = torch.arange(offset, offset + n)[:, None]
+                s = s.masked_fill(torch.arange(offset + n)[None] > qpos, float("-inf"))
+            expected = torch.einsum("hqk,khd->qhd", s.softmax(-1), v.repeat_interleave(H // HKV, 1))
+            torch.testing.assert_close(out[row, :, :n].transpose(0, 1), expected, atol=1e-5, rtol=1e-5)
+        return kernel.calls[-1]
+
+    prefill = run("prefill", (0,) * 3, prompts, max(prompts))
+    denoise = run("denoise", prompts, (CANVAS,) * 3, CANVAS)
+    commit = run("commit", prompts, (CANVAS,) * 3, CANVAS)
+    assert prefill["mla"] and prefill["causal"] and not denoise["causal"] and commit["causal"]
+    assert denoise["softmax_scale"] == pytest.approx(c)
+
+
+def test_fa4_metadata_slot_mapping_follows_static_page_table():
+    cache = DiffusionGemmaPagedKVCache(
+        layer_geometries=[DiffusionGemmaLayerGeometry(HKV, D)], max_length=2 * PAGE,
+        page_size=PAGE, dtype=torch.float32, device="cpu", batch_size=3, sliding_backend="fa4")
+    metadata = cache.build_metadata(phase="denoise", seq_ids=(2, 0), q_offsets=(130, 5),
+                                    q_lens=(2, 3), kv_lens=(132, 8), max_q_len=3)
+    pps = cache.pages_per_sequence
+    expected = [2 * pps * PAGE + 130, 2 * pps * PAGE + 131, 5, 6, 7]
+    assert metadata.fa4.slot_mapping.tolist() == expected
+    flat_pages = cache.page_table.reshape(-1)
+    assert [int(flat_pages[s // PAGE]) * PAGE + s % PAGE for s in expected] == expected
+
+
+def _mla_attention(weight_value, rope_angles=64, head_dim=512):
+    paged = SimpleNamespace(scale=1.0, mla_scale=None, mla_rope_dims=None)
+
+    def enable(scale, rope_dims):
+        paged.mla_scale, paged.mla_rope_dims = scale, rope_dims
+
+    paged.enable_fa4_mla = enable
+    return SimpleNamespace(
+        num_heads=16, num_kv_heads=2, head_dim=head_dim, sliding_window=None, layer_id=5,
+        k_norm=SimpleNamespace(weight=weight_value),
+        rotary_emb=SimpleNamespace(rope_angles=rope_angles), paged_attention=paged)
+
+
+def test_full_layer_mla_plan():
+    from fluxserve.backend.execution.runners.diffusion_gemma.fa4 import full_layer_mla_plan
+
+    scale, rope_dims = full_layer_mla_plan(_mla_attention(torch.full((512,), 0.0623)))
+    assert scale == pytest.approx(0.0623)
+    assert rope_dims.tolist() == list(range(64)) + list(range(256, 320))
+    per_dim = torch.full((512,), 0.0623)
+    per_dim[3] = 0.5
+    assert "single scalar" in full_layer_mla_plan(_mla_attention(per_dim))
+    assert "rotary" in full_layer_mla_plan(_mla_attention(torch.ones(512), rope_angles=None))
+
+
+def test_fa4_runner_runs_full_layers_as_mla(monkeypatch):
+    full = _mla_attention(torch.full((512,), 0.0623))
+    runner, probes = _fa4_runner(monkeypatch, full=full, device="cpu")
+    assert runner.full_layer_mla and full.paged_attention.mla_scale == pytest.approx(0.0623)
+    assert probes.flashinfer == []  # no layer left on FlashInfer
+    assert probes.mla == [[(16, 2, 512, tuple(range(64)) + tuple(range(256, 320)))]]
+    assert runner._cache_geometry(full).key_head_dim == 128
+    flashinfer_runner, _ = _fa4_runner(monkeypatch, full=_mla_attention(torch.full((512,), 0.0623)),
+                                       full_backend="flashinfer", device="cpu")
+    assert not flashinfer_runner.full_layer_mla
+    per_dim = torch.full((512,), 0.0623)
+    per_dim[0] = 1.0
+    with pytest.raises(ValueError, match="single scalar"):
+        _fa4_runner(monkeypatch, full=_mla_attention(per_dim), full_backend="fa4", device="cpu")

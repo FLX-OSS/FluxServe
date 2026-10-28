@@ -69,7 +69,7 @@ from fluxserve.cli.bench_offline import (
 )
 from fluxserve.cli.common import (
     StoreExplicit,
-    add_sliding_window_args,
+    add_diffusion_gemma_attention_args,
     check_block_routing_alignment,
     configure_logging,
     default_cuda_graph_capture_batch_sizes,
@@ -166,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     launch.add_argument("--page-size", type=int, default=None, action=StoreExplicit)
     launch.set_defaults(page_size_explicit=False)
-    add_sliding_window_args(launch)
+    add_diffusion_gemma_attention_args(launch)
     launch.add_argument("--parallel-decoding", default="threshold")
     # Nemotron-Labs-Diffusion sampling and thinking budget.
     launch.add_argument("--max-thinking-tokens", type=int, default=None)
@@ -455,6 +455,7 @@ def _serve_worker(args, *, init_method: str = "env://") -> None:
             max_denoising_steps=args.max_denoising_steps,
             sliding_window_mode=args.sliding_window_mode,
             sliding_window_left=args.sliding_window_left,
+            full_attention_backend=args.full_attention_backend,
             parallel_decoding=args.parallel_decoding,
             threshold=args.threshold,
             low_threshold=args.low_threshold,

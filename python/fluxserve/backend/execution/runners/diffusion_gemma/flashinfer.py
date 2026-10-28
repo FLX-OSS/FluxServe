@@ -53,6 +53,7 @@ class DiffusionGemmaFlashInferRunner(DiffusionGemmaRunner):
         self._validate_paged_runner_config(runner_config)
         require_diffusion_gemma_flashinfer()
         super().__init__(model_config, server_args, runner_config, device)
+        self._configure_attention_backends()
         geometries = [
             (
                 layer.self_attn.num_heads,
@@ -103,9 +104,15 @@ class DiffusionGemmaFlashInferRunner(DiffusionGemmaRunner):
                 "eager FlashInfer for 'per_row'"
             )
 
-    # Hooks for runners that move the sliding-window layers to another backend.
+    # Hooks for runners that move layers to another backend.
+    def _configure_attention_backends(self) -> None:
+        pass
+
     def _flashinfer_serves(self, attention) -> bool:
         return True
+
+    def _cache_geometry(self, attention) -> DiffusionGemmaLayerGeometry:
+        return DiffusionGemmaLayerGeometry(attention.num_kv_heads, attention.head_dim)
 
     def _probe_sliding_backend(self) -> None:
         pass
@@ -154,10 +161,7 @@ class DiffusionGemmaFlashInferRunner(DiffusionGemmaRunner):
         self, max_length: int, batch_size: int = 1
     ) -> DiffusionGemmaPagedKVCache:
         geometries = [
-            DiffusionGemmaLayerGeometry(
-                layer.self_attn.num_kv_heads, layer.self_attn.head_dim
-            )
-            for layer in self.model.model.layers
+            self._cache_geometry(layer.self_attn) for layer in self.model.model.layers
         ]
         existing = getattr(self, "_persistent_gemma_paged_cache", None)
         if (

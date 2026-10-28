@@ -71,7 +71,7 @@ from fluxserve.backend.utils.runtime_utils import require_nvidia_cuda
 from fluxserve.backend.utils.server_args import ServerArgs
 from fluxserve.cli.common import (
     StoreExplicit,
-    add_sliding_window_args,
+    add_diffusion_gemma_attention_args,
     check_block_routing_alignment,
     configure_logging,
     normalize_attention_backend_args,
@@ -328,6 +328,7 @@ def build_runner_config(args, batch_info, model_config=None):
         max_denoising_steps=getattr(args, "max_denoising_steps", None),
         sliding_window_mode=getattr(args, "sliding_window_mode", "per_query"),
         sliding_window_left=getattr(args, "sliding_window_left", None),
+        full_attention_backend=getattr(args, "full_attention_backend", "auto"),
     )
 
 
@@ -1025,7 +1026,7 @@ def add_bench_offline_subparser(subparsers) -> None:
     parser.add_argument("--kv-cache-layout", "--kv_cache_layout", dest="kv_cache_layout", choices=("dense", "paged"), default="paged")
     parser.add_argument("--page-size", "--page_size", dest="page_size", type=int, action=StoreExplicit)
     parser.set_defaults(page_size_explicit=False)
-    add_sliding_window_args(parser)
+    add_diffusion_gemma_attention_args(parser)
     parser.add_argument("--gen-len", "--gen_len", dest="gen_len", type=int, default=1024)
     parser.add_argument("--block-length", "--block_length", dest="block_length", type=int, default=64)
     parser.add_argument("--temperature", type=float, default=0.0, help="Nemotron sampling temperature")

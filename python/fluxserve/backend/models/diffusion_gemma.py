@@ -309,15 +309,25 @@ class DiffusionGemmaAttention(nn.Module):
             # The official full-attention layers have no v_proj; V is the raw
             # key projection before K normalization and rotary embedding.
             v = k
-        q, k = apply_qk_norm(
-            q,
-            k,
-            query_layernorm=self.q_norm,
-            key_layernorm=self.k_norm,
-            head_dim=self.head_dim,
-            alt_stream=None,
-        )
-        v = self.v_norm(v.view(bsz, q_len, self.num_kv_heads, self.head_dim)).flatten(-2)
+        if self.paged_attention.mla_scale is not None and getattr(
+            past_key_values, "is_diffusion_gemma_paged_cache", False
+        ):
+            # FA4 MLA (full layers): k_norm's weight is one scalar c, so
+            # K = RoPE(k_norm(u)) = c * RoPE(v_norm(u)); c is the softmax scale and the
+            # kernel needs only V and RoPE(V) (paged_attention.enable_fa4_mla).
+            q = self.q_norm(q.view(bsz, q_len, self.num_heads, self.head_dim)).flatten(-2)
+            v = self.v_norm(v.view(bsz, q_len, self.num_kv_heads, self.head_dim)).flatten(-2)
+            k = v.clone()  # the rotary may write in place
+        else:
+            q, k = apply_qk_norm(
+                q,
+                k,
+                query_layernorm=self.q_norm,
+                key_layernorm=self.k_norm,
+                head_dim=self.head_dim,
+                alt_stream=None,
+            )
+            v = self.v_norm(v.view(bsz, q_len, self.num_kv_heads, self.head_dim)).flatten(-2)
         q, k = self.rotary_emb(
             positions.flatten(), q.flatten(0, 1), k.flatten(0, 1), fused_set_kv_buffer_arg=None
         )

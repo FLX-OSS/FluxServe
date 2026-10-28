@@ -172,6 +172,9 @@ class RunnerConfig:
     # default W - 1, like the HF reference decoder).
     sliding_window_mode: str = "per_query"
     sliding_window_left: int | None = None
+    # Diffusion-Gemma FA4 runner: full-attention layers as FA4 MLA ("fa4"), on FlashInfer
+    # ("flashinfer"), or FA4 MLA when the checkpoint allows it ("auto").
+    full_attention_backend: str = "auto"
 
     def __post_init__(self):
         from fluxserve.backend.layers.attention.diffusion_gemma_window import (
@@ -179,6 +182,11 @@ class RunnerConfig:
         )
 
         validate_sliding_window_mode(self.sliding_window_mode, self.sliding_window_left)
+        if self.full_attention_backend not in ("auto", "flashinfer", "fa4"):
+            raise ValueError(
+                "full_attention_backend must be 'auto', 'flashinfer' or 'fa4', "
+                f"got {self.full_attention_backend!r}"
+            )
         if self.enable_cuda_graph:
             self.enable_prefill_cuda_graph = True
             self.enable_decode_cuda_graph = True

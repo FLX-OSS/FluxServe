@@ -124,7 +124,7 @@ def normalize_diffusion_gemma_fa4_args(args) -> None:
     args.page_size = DIFFUSION_GEMMA_FA4_PAGE_SIZE
 
 
-def add_sliding_window_args(parser) -> None:
+def add_diffusion_gemma_attention_args(parser) -> None:
     parser.add_argument(
         "--sliding-window-mode",
         "--sliding_window_mode",
@@ -144,6 +144,18 @@ def add_sliding_window_args(parser) -> None:
         type=int,
         default=None,
         help="Cache tokens a 'per_row' canvas reads (default: sliding_window - 1).",
+    )
+    parser.add_argument(
+        "--full-attention-backend",
+        "--full_attention_backend",
+        dest="full_attention_backend",
+        choices=("auto", "flashinfer", "fa4"),
+        default="auto",
+        help=(
+            "Diffusion-Gemma with --attention-backend fa4: full-attention layers as FA4 MLA "
+            "('fa4'), on FlashInfer ('flashinfer'), or FA4 MLA when the checkpoint allows it "
+            "('auto')."
+        ),
     )
 
 

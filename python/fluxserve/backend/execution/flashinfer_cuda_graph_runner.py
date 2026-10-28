@@ -598,6 +598,7 @@ class FlashInferCudaGraphRunner:
                 )
             target_fa4.kv_lens.copy_(source_fa4.kv_lens)
             target_fa4.page_table.copy_(source_fa4.page_table)
+            target_fa4.slot_mapping.copy_(source_fa4.slot_mapping)
 
     @staticmethod
     def _make_gemma_graph_metadata(metadata, cache):
@@ -620,6 +621,7 @@ class FlashInferCudaGraphRunner:
                     fa4,
                     kv_lens=fa4.kv_lens.clone(),
                     page_table=fa4.page_table.clone(),
+                    slot_mapping=fa4.slot_mapping.clone(),
                 )
             ),
         )

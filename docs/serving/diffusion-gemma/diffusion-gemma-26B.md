@@ -46,9 +46,13 @@ fluxserve launch \
 
 - `--attention-backend flashinfer` runs every layer on FlashInfer (SM90, SM100, SM120).
 - `--attention-backend fa4` (SM100/SM110 only) runs the sliding-window layers
-  (head_dim 256) on FA4's head_dim-256 kernel and keeps the full-attention
-  layers (head_dim 512, K != V) on FlashInfer, so FlashInfer must be installed
-  too. It needs the flash-attn-dllm FA4 build (local windows for head_dim 256)
+  (head_dim 256) on FA4's head_dim-256 kernel and, by default, the
+  full-attention layers (head_dim 512) as FA4 MLA: their K is the rotary of
+  `k_norm`'s scalar times V on 128 of the 512 dims, so they cache those 128
+  dims of K next to V (640 instead of 1024 values per token and KV head) and
+  run 4-7x faster than FlashInfer at long context. `--full-attention-backend`
+  picks `auto` (MLA when the checkpoint's `k_norm` weights are scalars),
+  `fa4` (required), or `flashinfer`. It needs the flash-attn-dllm FA4 build
   and 128-token pages; `--page-size` defaults to 128 and other values are
   rejected. Set `FLASH_ATTENTION_CUTE_DSL_CACHE_ENABLED=1` to keep the compiled
   kernels across restarts.
