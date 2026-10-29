@@ -25,6 +25,7 @@
 
 import json
 import logging
+import math
 import re
 from pathlib import Path
 from typing import Iterator
@@ -48,7 +49,16 @@ from fluxserve.backend.model_loader.weight_utils import (
 )
 from fluxserve.backend.models import (
     DiffusionGemmaForConditionalGeneration,
+    IDLMForCausalLM,
     LLaDA2LLM,
+)
+from fluxserve.backend.models.idlm import (
+    IDLMGatedLoRA,
+    check_idlm_architecture,
+    idlm_head_dim,
+    idlm_weight_plan,
+    is_idlm_config,
+    is_qwen3_config,
 )
 from fluxserve.backend.models.nemotron_diffusion import (
     NemotronLabsDiffusionLLM,
@@ -934,3 +944,230 @@ class NemotronModelLoader:
             nemotron_head_dim(model_config),
         )
         return model.eval()
+
+
+class IDLMModelLoader:
+    """Load a sharded I-DLM checkpoint into the dense causal model.
+
+    Shards are read one at a time, as for Diffusion-Gemma, and every tensor is
+    checked against :func:`idlm_weight_plan`, as for Nemotron.
+    """
+
+    def load_model(self, *, model_config, device: str, quant_config=None) -> nn.Module:
+        if quant_config is not None:
+            raise ValueError("I-DLM quantization is not supported yet")
+        # A Qwen3 checkpoint arrives here only as the base of an R-ISD adapter;
+        # the CLI refuses it otherwise.
+        if not (is_idlm_config(model_config) or is_qwen3_config(model_config)):
+            raise ValueError(
+                "IDLMModelLoader received a non-I-DLM config: "
+                f"architectures={getattr(model_config, 'architectures', None)!r}"
+            )
+        check_idlm_architecture(model_config)
+        old_dtype = torch.get_default_dtype()
+        try:
+            torch.set_default_dtype(torch.bfloat16)
+            with torch.device(device):
+                model = IDLMForCausalLM(model_config).eval()
+        finally:
+            torch.set_default_dtype(old_dtype)
+
+        model_dir = resolve_model_snapshot(model_config)
+        shard_files = get_safetensors_shard_files(model_dir)
+        plan = idlm_weight_plan(model_config)
+        consumed: set[str] = set()
+        unexpected: set[str] = set()
+        with torch.inference_mode():
+            for _, shard in tqdm.tqdm(
+                iter_safetensors_shards(model_dir, shard_files), total=len(shard_files)
+            ):
+                shard_consumed, shard_unexpected = model.load_weights(shard.items())
+                consumed.update(shard_consumed)
+                unexpected.update(shard_unexpected)
+                del shard
+
+        if unexpected:
+            preview = ", ".join(sorted(unexpected)[:20])
+            raise ValueError(
+                f"I-DLM checkpoint contains {len(unexpected)} unmapped "
+                f"tensors: {preview}"
+            )
+        missing = sorted(set(plan) - consumed)
+        if missing:
+            preview = ", ".join(missing[:20])
+            raise ValueError(
+                f"I-DLM checkpoint is missing {len(missing)} required "
+                f"tensors: {preview}"
+            )
+        logger.info(
+            "I-DLM loaded: %d checkpoint tensors from %d shards, %d layers, "
+            "0 unmatched keys",
+            len(consumed),
+            len(shard_files),
+            int(model_config.num_hidden_layers),
+        )
+        return model.eval()
+
+
+# R-ISD: the gated LoRA adapter (PEFT layout) that drafts at MASK positions.
+IDLM_LORA_WEIGHT_FILE = "adapter_model.safetensors"
+IDLM_LORA_CONFIG_FILE = "adapter_config.json"
+IDLM_MASK_TOKEN = "<|MASK|>"
+_IDLM_LORA_KEY = re.compile(
+    r"^base_model\.model\.model\.layers\.(\d+)\.(?:self_attn|mlp)\.(\w+)\.lora_([AB])\.weight$"
+)
+
+
+def resolve_idlm_lora_dir(path) -> Path:
+    """A local adapter directory, or a Hugging Face repo id to fetch."""
+    local = Path(str(path)).expanduser()
+    if (local / IDLM_LORA_CONFIG_FILE).is_file():
+        return local
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise RuntimeError("huggingface_hub is required to resolve the I-DLM adapter") from exc
+    snapshot = Path(snapshot_download(
+        repo_id=str(path),
+        allow_patterns=[IDLM_LORA_WEIGHT_FILE, "*.json"],
+    ))
+    for name in (IDLM_LORA_CONFIG_FILE, IDLM_LORA_WEIGHT_FILE):
+        if not (snapshot / name).is_file():
+            raise FileNotFoundError(f"I-DLM adapter '{path}' does not provide {name}")
+    return snapshot
+
+
+def idlm_lora_mask_id(path) -> int | None:
+    """The ``<|MASK|>`` id the adapter's tokenizer declares, if any."""
+    directory = resolve_idlm_lora_dir(path)
+    added = directory / "added_tokens.json"
+    if added.is_file():
+        with open(added) as handle:
+            value = json.load(handle).get(IDLM_MASK_TOKEN)
+        if value is not None:
+            return int(value)
+    config = directory / "tokenizer_config.json"
+    if config.is_file():
+        with open(config) as handle:
+            decoder = json.load(handle).get("added_tokens_decoder") or {}
+        for token_id, entry in decoder.items():
+            if isinstance(entry, dict) and entry.get("content") == IDLM_MASK_TOKEN:
+                return int(token_id)
+    return None
+
+
+def read_idlm_lora_config(directory: Path) -> dict:
+    with open(directory / IDLM_LORA_CONFIG_FILE) as handle:
+        config = json.load(handle)
+    unsupported = {
+        "use_dora": bool(config.get("use_dora")),
+        "fan_in_fan_out": bool(config.get("fan_in_fan_out")),
+        "modules_to_save": bool(config.get("modules_to_save")),
+        "layers_to_transform": config.get("layers_to_transform") is not None,
+        "rank_pattern": bool(config.get("rank_pattern")),
+        "alpha_pattern": bool(config.get("alpha_pattern")),
+        "trainable_token_indices": bool(config.get("trainable_token_indices")),
+        "lora_bias": bool(config.get("lora_bias")),
+    }
+    if config.get("peft_type", "LORA") != "LORA" or config.get("bias", "none") != "none":
+        raise ValueError("the I-DLM adapter must be a bias-free PEFT LoRA")
+    rejected = sorted(name for name, used in unsupported.items() if used)
+    if rejected:
+        raise ValueError(f"the I-DLM adapter uses unsupported PEFT options: {rejected}")
+    targets = set(config.get("target_modules") or ())
+    unknown = sorted(targets - set(IDLMGatedLoRA.TARGETS))
+    if not targets or unknown:
+        raise ValueError(
+            "the I-DLM adapter must target a subset of "
+            f"{IDLMGatedLoRA.TARGETS}; got {sorted(targets)}"
+        )
+    return config
+
+
+def load_idlm_lora(model, path, *, mask_id: int) -> IDLMGatedLoRA:
+    """Load a gated R-ISD adapter onto ``model`` and attach it, inactive.
+
+    Tensor parallelism is refused: the residual is computed on whole
+    activations, which a sharded projection does not have.
+    """
+    from safetensors import safe_open
+
+    from fluxserve.backend.distributed import get_tensor_model_parallel_world_size
+
+    try:
+        tp_size = int(get_tensor_model_parallel_world_size())
+    except AssertionError:
+        tp_size = 1
+    if tp_size != 1:
+        raise ValueError("the I-DLM gated LoRA supports TP=1 only")
+
+    directory = resolve_idlm_lora_dir(path)
+    config = read_idlm_lora_config(directory)
+    rank = int(config["r"])
+    alpha = float(config.get("lora_alpha", rank))
+    scaling = alpha / math.sqrt(rank) if config.get("use_rslora") else alpha / rank
+    targets = set(config["target_modules"])
+
+    model_config = model.config
+    hidden = int(model_config.hidden_size)
+    intermediate = int(model_config.intermediate_size)
+    head_dim = idlm_head_dim(model_config)
+    q_dim = int(model_config.num_attention_heads) * head_dim
+    kv_dim = int(model_config.num_key_value_heads) * head_dim
+    shapes = {
+        "q_proj": (hidden, q_dim), "k_proj": (hidden, kv_dim), "v_proj": (hidden, kv_dim),
+        "o_proj": (q_dim, hidden), "gate_proj": (hidden, intermediate),
+        "up_proj": (hidden, intermediate), "down_proj": (intermediate, hidden),
+    }
+    num_layers = int(model_config.num_hidden_layers)
+    weight = model.lm_head.weight
+    found: dict[tuple[int, str, str], torch.Tensor] = {}
+    unexpected = []
+    with safe_open(str(directory / IDLM_LORA_WEIGHT_FILE), framework="pt") as handle:
+        for name in handle.keys():
+            match = _IDLM_LORA_KEY.match(name)
+            if match is None or match.group(2) not in targets:
+                unexpected.append(name)
+                continue
+            layer, target, kind = int(match.group(1)), match.group(2), match.group(3)
+            if not 0 <= layer < num_layers:
+                unexpected.append(name)
+                continue
+            tensor = handle.get_tensor(name)
+            in_dim, out_dim = shapes[target]
+            expected = (rank, in_dim) if kind == "A" else (out_dim, rank)
+            if tuple(tensor.shape) != expected:
+                raise ValueError(
+                    f"I-DLM adapter shape mismatch for {name}: "
+                    f"{tuple(tensor.shape)} != {expected}"
+                )
+            found[(layer, target, kind)] = tensor.to(device=weight.device, dtype=weight.dtype)
+    if unexpected:
+        raise ValueError(
+            f"I-DLM adapter has {len(unexpected)} unmapped tensors: "
+            + ", ".join(sorted(unexpected)[:10])
+        )
+    missing = [
+        f"layers.{layer}.{target}.lora_{kind}"
+        for layer in range(num_layers) for target in sorted(targets) for kind in "AB"
+        if (layer, target, kind) not in found
+    ]
+    if missing:
+        raise ValueError(
+            f"I-DLM adapter is missing {len(missing)} tensors: " + ", ".join(missing[:10])
+        )
+    lora = IDLMGatedLoRA(
+        mask_id=mask_id,
+        scaling=scaling,
+        layers=[
+            {target: (found[(layer, target, "A")], found[(layer, target, "B")])
+             for target in targets}
+            for layer in range(num_layers)
+        ],
+    )
+    model.attach_lora(lora)
+    logger.info(
+        "I-DLM gated LoRA loaded: r=%d, scaling=%.3f, %d layers x %s, mask_id=%d",
+        rank, scaling, num_layers, sorted(targets), mask_id,
+    )
+    return lora

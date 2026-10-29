@@ -62,6 +62,9 @@ class ServerArgs:
     max_model_len: int = 2048
     generation_block_size: int = 1
     sampling_defaults: dict | None = None
+    # Which model's rules validate request sampling once sampling_defaults is
+    # set: "idlm", or None for Nemotron's.
+    sampling_family: str | None = None
     speculative_context_margin: int = 0
     stream_interval: int = 1
     enable_prefix_caching: bool = False

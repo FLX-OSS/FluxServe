@@ -20,10 +20,12 @@
 
 from fluxserve.backend.models.llada2 import LLaDA2LLM
 from fluxserve.backend.models.diffusion_gemma import DiffusionGemmaForConditionalGeneration
+from fluxserve.backend.models.idlm import IDLMForCausalLM
 from fluxserve.backend.models.nemotron_diffusion import NemotronLabsDiffusionLLM
 
 __all__ = [
     "DiffusionGemmaForConditionalGeneration",
+    "IDLMForCausalLM",
     "LLaDA2LLM",
     "NemotronLabsDiffusionLLM",
 ]

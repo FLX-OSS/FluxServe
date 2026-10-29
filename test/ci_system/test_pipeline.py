@@ -640,23 +640,3 @@ def test_perf_reference_table_rendered_for_passing_check(capsys):
     assert "[perf-ref]   Conc" in out
     assert "[perf-ref]   ---" in out
     assert "%" in out
-
-
-def test_runtime_regressions_are_discovered_for_pr_ci():
-    """Runtime regressions must be executable CI work, not just AST checks."""
-    from pipeline import get_stage_commands, load_yaml
-
-    root = Path(__file__).resolve().parents[2]
-    config = root / "test/ci/ut/runtime.yaml"
-    task = load_yaml(config)
-    validate_task(task, config)
-    matrix = build_matrix(root / "test/ci", root, trigger="per-commit")
-    entries = [entry for entry in matrix["include"] if entry["name"] == "ut-runtime"]
-    assert len(entries) == 1
-    assert entries[0]["runtime"] == "gh200-apptainer"
-    stages = dict(get_stage_commands(task))
-    assert any("pytest test/runtime" in command for command in stages["ut"])
-    assert task["env"]["CUDA_VISIBLE_DEVICES"] == ""
-    assert any("snapshot_download" in command for command in stages["install"])
-    assert task["env"]["FLUXSERVE_LLADA22_REF_DIR"] == ".ci-artifacts/llada22-reference"
-

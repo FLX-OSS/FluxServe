@@ -272,6 +272,10 @@ class AsyncLLM:
                 continue
 
             plan = self.scheduler.next_plan()
+            # The scheduler drops a request without a word when the KV pool
+            # runs out (see PagedSchedulerAdapter.take_dropped). Fail those
+            # before running this plan: it may already reuse their slots.
+            await self._fail_dropped()
             cache_ops = list(plan.cache)
             if cache_ops:
                 await self._fail_all_active(
@@ -280,7 +284,8 @@ class AsyncLLM:
                 )
                 continue
 
-            forward_ops = list(plan.forward)
+            # An idle scheduler still returns one forward op, with no requests.
+            forward_ops = [op for op in plan.forward if list(op.request_ids)]
             if not forward_ops:
                 self._new_request_event.clear()
                 with contextlib.suppress(asyncio.TimeoutError):
@@ -354,6 +359,19 @@ class AsyncLLM:
             finished_ids=finished_ids,
         )
         await self._release_executor_requests(finished_ids)
+
+    async def _fail_dropped(self) -> None:
+        take_dropped = getattr(self.scheduler, "take_dropped", None)
+        if take_dropped is None:
+            return
+        dropped = [self._states[rid] for rid in take_dropped() if rid in self._states]
+        if dropped:
+            logger.warning("KV cache exhausted: the scheduler dropped %d request(s)", len(dropped))
+            await self._fail_states(
+                dropped,
+                "KV cache exhausted: the scheduler dropped this request. "
+                "Lower --max-num-seqs or the request's max_tokens.",
+            )
 
     async def _fail_states(self, states, error: str) -> None:
         failed_ids = []
